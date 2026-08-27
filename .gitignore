@@ -1,0 +1,44 @@
+# Operating system and editor state
+.DS_Store
+.vscode/
+.idea/
+*.iml
+
+# JavaScript dependencies and generated output
+node_modules/
+dist/
+coverage/
+.nyc_output/
+.cache/
+.turbo/
+.pnpm-store/
+*.tsbuildinfo
+*.log
+
+# iOS local output
+Pods/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Android local output
+.gradle/
+**/build/
+local.properties
+.externalNativeBuild/
+.cxx/
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.p8
+*.mobileprovision
+
+# Optional repository-local agent tooling is not an SDK input.
+/.agents/
+/.claude/skills/
+/skills-lock.json
