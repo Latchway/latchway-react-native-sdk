@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 
 const expected = {
   contract: "0.1.0",
-  commit: "5c98dc4d656d8140e0b4af90f42ea6d884f0d60a",
-  bundle: "1228820f87744334ec8091b9ebbe737500016daa844175bd1ad64fd0095d1afd",
+  commit: "0a03d9369c0ebcf793f00bac6b002d1caaea6b8e",
+  bundle: "74fc7ada8d835d46b25f763a703b79003cdc8243d6f4b2509645e5a82367ab12",
   protocol: 1,
 };
 const fixtureHashes = new Map([

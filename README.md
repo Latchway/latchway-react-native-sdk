@@ -65,7 +65,7 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-This release consumes contract `0.1.0`, wire protocol `1`, core commit `5c98dc4d656d8140e0b4af90f42ea6d884f0d60a`, and bundle SHA-256 `1228820f87744334ec8091b9ebbe737500016daa844175bd1ad64fd0095d1afd`. `pnpm verify:contracts` checks the lock and vendored canonical fixtures byte-for-byte.
+This release consumes contract `0.1.0`, wire protocol `1`, core commit `0a03d9369c0ebcf793f00bac6b002d1caaea6b8e`, and bundle SHA-256 `74fc7ada8d835d46b25f763a703b79003cdc8243d6f4b2509645e5a82367ab12`. `pnpm verify:contracts` checks the lock and vendored canonical fixtures byte-for-byte.
 
 ## License
 
