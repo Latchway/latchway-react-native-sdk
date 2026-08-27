@@ -1,0 +1,77 @@
+name: Published native consumer
+
+on:
+  workflow_dispatch:
+    inputs:
+      android:
+        description: Resolve and compile against the published Android 0.1.0 artifacts
+        required: true
+        type: boolean
+        default: false
+      ios:
+        description: Resolve and lint against the published CocoaPods 0.1.0 release
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    if: inputs.android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: latchway-react-native-sdk
+          persist-credentials: false
+      - name: Check out JavaScript SDK development dependency
+        uses: actions/checkout@v4
+        with:
+          repository: Latchway/latchway-js
+          ref: 273925d73a5a959f95664b1b1d838505dcce5f6c
+          path: latchway-js
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: pnpm install --frozen-lockfile
+        working-directory: latchway-react-native-sdk
+      - name: Compile against released Maven coordinates
+        run: ./android/gradlew -p android check --no-daemon
+        working-directory: latchway-react-native-sdk
+
+  ios:
+    if: inputs.ios
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: latchway-react-native-sdk
+          persist-credentials: false
+      - name: Check out JavaScript SDK development dependency
+        uses: actions/checkout@v4
+        with:
+          repository: Latchway/latchway-js
+          ref: 273925d73a5a959f95664b1b1d838505dcce5f6c
+          path: latchway-js
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: pnpm install --frozen-lockfile
+        working-directory: latchway-react-native-sdk
+      - name: Resolve released CocoaPods dependency and lint consumer
+        run: pod lib lint LatchwayReactNative.podspec --allow-warnings --skip-tests
+        working-directory: latchway-react-native-sdk

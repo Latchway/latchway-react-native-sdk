@@ -1,0 +1,2 @@
+-keep class dev.latchway.reactnative.NativeLatchwayModule { *; }
+-keep class dev.latchway.reactnative.LatchwayReactNativePackage { *; }

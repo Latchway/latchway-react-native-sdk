@@ -1,9 +1,9 @@
 # Contributing to Latchway React Native SDK
 
-Thank you for helping build Latchway. This repository is currently establishing
-its governance and dependency boundary. It intentionally has no npm or native
-package manifests and no contract lock until the core repository publishes the
-first authoritative contract bundle.
+Thank you for helping build Latchway. This repository implements the React
+Native client against the contract recorded in `contract.lock`. Protocol or
+native-security changes must begin in their owning repository and update this
+package only after a compatible native release exists.
 
 ## Before making a change
 
@@ -25,8 +25,8 @@ first authoritative contract bundle.
   attestation, secure refresh storage, and installation state.
 - Do not reimplement App Attest, Play Integrity, Secure Enclave, or Android
   Keystore behavior in TypeScript, C++, or bridge glue.
-- Do not create a local wire format or contract.lock without a published core
-  contract bundle.
+- Do not create a local wire format or change `contract.lock` without a
+  reviewed core contract bundle.
 - Do not leave production-path placeholders or hard-coded success behavior.
 
 ## Tests
@@ -37,8 +37,11 @@ integration, example-app, and released-package conformance coverage.
 Cancellation, streaming, redaction, version mismatch, and bridge data exposure
 must be tested explicitly.
 
-Canonical package and native commands will be documented when manifests and CI
-are introduced. A contribution is not ready while its documented checks fail.
+Use Node 24.19.0 and pnpm 10.15.0. Run `pnpm check`, `pnpm pack:check`, and
+`pnpm verify:reproducible` before review. Native bridge changes also require
+`pnpm ios:spec`, an iOS consumer compile, and an Android consumer compile
+against released native artifacts. Record honest device, credential, artifact,
+or toolchain blockers; never replace them with a stubbed security result.
 
 ## Pull requests
 

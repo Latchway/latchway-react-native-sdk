@@ -8,12 +8,11 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-This repository currently contains governance and architecture foundations
-only. Do not add npm, CocoaPods, Gradle, code-generation, or production source
-manifests and do not add contract.lock until the core repository has published
-the corresponding contract bundle and the active implementation phase
-authorizes that work. Never invent a temporary wire contract or fake production
-behavior.
+Phase 13 implementation is active against the locked Latchway 0.1.0 contract
+and wire protocol 1. Production npm, CocoaPods, Gradle, TurboModule, source,
+fixture, example, and CI changes are authorized when they preserve that lock.
+Never invent a wire contract, publish an unreleased package, fake production
+behavior, or weaken the native security boundary.
 
 ## Authority and dependency boundaries
 

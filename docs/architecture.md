@@ -1,112 +1,71 @@
-# React Native SDK Architecture
+# React Native SDK architecture
 
-## Status
+## Dependency and trust boundary
 
-This document fixes the ownership and dependency boundaries for the planned
-React Native SDK. It does not describe an existing implementation. npm, native,
-and code-generation manifests, production modules, generated models, and
-contract.lock will be introduced only after the core repository publishes an
-authoritative contract bundle.
+```text
+React Native application
+  └─ @latchway/react-native
+       ├─ @latchway/client 0.1.0-dev.0 (errors and shared transport concepts)
+       ├─ Latchway/AppAttest 0.1.0 (iOS)
+       └─ dev.latchway:latchway-okhttp + latchway-play-integrity 0.1.0 (Android)
+```
 
-## System boundary
+The core repository owns OpenAPI, error codes, attestation binding, DPoP behavior, and compatibility. This package owns the handwritten React Native API, fetch integration, TurboModule schema, cross-instance lease, abort propagation, stable error projection, and redacted diagnostics. Native SDKs exclusively own installation keys, secure session persistence, platform attestation, DPoP signing, and native single-flight.
 
-The React Native application supplies an identity token from its existing
-identity provider and a request intended for its configured Latchway gateway.
-The JavaScript API selects a feature and coordinates transport while native SDKs
-prove installation-key possession, obtain device-bound sessions, and protect
-sensitive state. The gateway authenticates, authorizes, meters, and injects the
-upstream provider credential.
-
-The SDK never receives the upstream credential and never decides server-owned
-facts such as user ID, plan, attestation level, organization, route, upstream,
-price, or usage.
+The gateway, not the SDK, derives user, organization, plan, trust, routing,
+pricing, and quota facts. The SDK never receives an upstream provider
+credential or treats application-supplied values as trusted server facts.
 
 ## Contract ownership
 
-The Latchway core repository exclusively owns:
+The Latchway core repository exclusively owns the client OpenAPI, error-code
+registry, protocol compatibility manifest, canonical attestation binding, DPoP
+vectors, canonical request examples, and checksummed contract bundle. A
+contract update must verify checksums, update `contract.lock`, regenerate only
+internal types, rerun shared vectors, and pass conformance against the exact
+core revision. Generated bridge and wire types do not become public API.
 
-- Client session OpenAPI
-- Error-code registry and retry guidance
-- Protocol-version and compatibility manifest
-- Canonical attestation-binding encoding
-- DPoP and attestation test vectors
-- Canonical request examples
-- The checksummed contract release bundle
+## Operation flow
 
-This repository consumes those artifacts through compatible JavaScript and
-native releases. A contract update must verify checksums, update contract.lock,
-regenerate only internal types, run shared vectors, and pass conformance against
-the exact core image. Generated TurboModule or wire types must not become the
-public TypeScript API.
+1. JavaScript validates the origin, feature, configuration, and request state.
+2. The application identity callback returns an external identity JWT.
+3. The TurboModule passes that JWT transiently to the native SDK while native session work runs.
+4. Native code establishes or refreshes a device-bound session, signs a DPoP proof, and returns only the authorization headers and request ID required for dispatch.
+5. JavaScript installs owned protocol headers and dispatches once through the configured fetch implementation.
+6. A bodyless request may be authorized and dispatched one more time only after an exact-media-type 401 proves `session_expired` or supplies a valid DPoP nonce, is marked retryable, and has correlated problem/response status and request-ID metadata. The client request ID is preserved. A request with a body is neither cloned nor replayed and its response is returned to the application.
 
-## Dependency direction
+Native authorization results are intentionally short-lived JavaScript values because React Native fetch owns the response stream. They are never exposed through diagnostics or errors and are not stored by the package.
 
-~~~text
-@latchway/react-native
-    |
-    +-- @latchway/client
-    |     Shared TypeScript transport concepts and error mapping
-    |
-    +-- Latchway Swift package
-    |     Secure Enclave, Keychain, App Attest, DPoP signing, native state
-    |
-    +-- dev.latchway Android artifacts
-          Android Keystore, StrongBox, Play Integrity, DPoP signing,
-          native state
-~~~
+## Coordination
 
-Dependencies flow in this direction only. The native SDKs do not depend on
-React Native. This repository must not fork or copy their cryptographic or
-attestation implementations.
+A module-global lease map is keyed by native-module identity plus gateway/application/environment scope. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.
 
-## Runtime ownership
+Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against contract 0.1.0 and wire protocol 1 before any operation.
 
-JavaScript owns:
+## TurboModule boundary
 
-- The ergonomic public API and fetch wrapper
-- Feature selection
-- Stable error mapping
-- Diagnostics presentation
-- Request and response objects visible to the application
+The handwritten spec carries configuration, URL/method/feature/optional server nonce, transient application identity token, quota/diagnostic results, cancellation, and disposal. It does not accept provider attestation evidence, Play request hashes, App Attest client-data hashes, session tokens, DPoP proofs, or key material. Generated Objective-C++ and Java specs are disposable codegen output, not public API.
 
-Native code owns:
+## Native dependencies
 
-- Installation keys and public-key operations
-- App Attest or Play Integrity evidence
-- DPoP signing
-- Refresh-token storage
-- Installation and session state
-- Hardware-capability diagnostics
+Published package metadata pins release coordinates. CocoaPods consumes `Latchway/AppAttest` 0.1.0. Gradle consumes `dev.latchway:latchway-okhttp:0.1.0` and `dev.latchway:latchway-play-integrity:0.1.0`. Development may point `LATCHWAY_NATIVE_REPOSITORY` or `-PlatchwayNativeRepository` at a locally published Maven repository; local file links never enter npm metadata.
 
-The TurboModule boundary exposes the minimum typed operations needed by the
-public API. Private keys, refresh tokens, and raw attestation evidence never
-cross into JavaScript. C++ code is bridge infrastructure, not a new security
-implementation.
+## Diagnostics and errors
 
-## Transport and version boundary
-
-The JavaScript layer preserves request cancellation and streamed responses.
-Native failures cross the bridge as stable, redacted errors. Automatic retry is
-prohibited when dispatch outcome is uncertain.
-
-Published package metadata selects compatible released native dependencies.
-Local Swift overrides and Gradle composite builds exist only in development
-examples. Every release declares an exact contract compatibility range and
-must fail clearly when native, JavaScript, or server protocol versions are
-incompatible.
+Diagnostics contain version compatibility, platform, secure key-storage category, attestation support/provider, session state/expiration, installation ID/status, server version, and last request/error identifiers. Native key IDs, JWK thumbprints, tokens, proofs, and evidence are excluded. Native errors are bounded, control-character stripped, secret-pattern redacted, and mapped to the shared `LatchwayError` taxonomy.
 
 ## Verification boundary
 
-Unit tests own public API, error mapping, and bridge serialization. Generated
-TurboModule checks prove schema drift is absent. Native integration tests prove
-delegation without exposing secrets. Example applications test local overrides
-and released-package resolution. Cross-repository conformance validates shared
-DPoP vectors, refresh, revocation, streaming, quota, and protocol rejection on
-both platforms against the exact core image.
+Unit and Node conformance tests own public request shaping, error projection,
+bridge serialization, cancellation, coordination, strict-CSP behavior, and
+canonical vectors. Reproducible code generation proves the handwritten schema
+remains valid. Native consumer builds prove released dependency resolution and
+bridge compilation. Physical-device conformance proves real App Attest and Play
+Integrity behavior, session rotation, quota, streaming, diagnostics, and
+revocation against the exact core image.
 
 ## Non-goals
 
-This repository does not own server policy, provider routing, quota
-enforcement, user-authentication UI, upstream secrets, native cryptography,
-native attestation verification, AI request modeling, or independent platform
-session storage.
+This package does not own server policy, provider routing, quota enforcement,
+user-authentication UI, AI request modeling, upstream secrets, native
+cryptography, native attestation verification, or an independent session store.

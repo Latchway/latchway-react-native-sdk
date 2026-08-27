@@ -2,9 +2,9 @@
 
 ## Release status
 
-Latchway React Native SDK is pre-release and does not yet have a supported
-production version. Do not use this repository as a security boundary until a
-release is published and its compatibility entry is recorded.
+Latchway React Native SDK is implemented but remains pre-release. Do not depend
+on an unpublished checkout as a supported production security boundary; use a
+published version whose native compatibility entry is recorded.
 
 Security fixes will target supported releases once the support matrix is
 established. The unreleased branch may change without compatibility guarantees.
@@ -34,6 +34,14 @@ installation state, native SDK version resolution, request retry/replay
 behavior, token redaction, and diagnostics as security-sensitive. Hardware keys,
 attestation, DPoP signing, refresh-token storage, and installation state belong
 to the native SDKs and must not be reimplemented in JavaScript or C++ here.
+
+The application-owned external identity token crosses the TurboModule boundary
+only for the duration of a native operation. Private keys, refresh tokens, raw
+attestation evidence, attestation challenge bindings, and native session state
+must never enter JavaScript. The access token and DPoP proof necessarily return
+inside a short-lived authorization envelope so React Native fetch can attach
+them to the exact-origin request; they are not exposed as standalone public
+values, persisted, or included in diagnostics and errors.
 
 The SDK must never accept an upstream AI-provider secret. Latchway server or
 native-SDK vulnerabilities should be reported to their owning repository, with

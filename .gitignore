@@ -7,7 +7,10 @@
 # JavaScript dependencies and generated output
 node_modules/
 dist/
+lib/
+schema/
 coverage/
+.artifacts/
 .nyc_output/
 .cache/
 .turbo/
@@ -17,7 +20,10 @@ coverage/
 
 # iOS local output
 Pods/
+.swiftpm/
+.xcode.env.local
 DerivedData/
+ios/build/
 *.xcuserstate
 xcuserdata/
 

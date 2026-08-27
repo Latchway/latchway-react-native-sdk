@@ -1,0 +1,21 @@
+{
+  "name": "latchway-react-native-example",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@latchway/react-native": "workspace:*",
+    "@react-native-firebase/app": "26.3.2",
+    "@react-native-firebase/auth": "26.3.2",
+    "react": "19.1.1",
+    "react-native": "0.82.0",
+    "react-native-config": "1.7.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "typescript": "6.0.3"
+  }
+}

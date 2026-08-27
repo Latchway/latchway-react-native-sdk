@@ -1,0 +1,124 @@
+{
+  "name": "@latchway/react-native",
+  "version": "0.1.0-dev.0",
+  "description": "Hardware-backed React Native client for the Latchway AI gateway",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "react-native": "./src/index.ts",
+  "sideEffects": false,
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=24.19.0",
+    "pnpm": "10.15.0"
+  },
+  "files": [
+    "android/src",
+    "android/build.gradle.kts",
+    "android/consumer-rules.pro",
+    "android/gradle.properties",
+    "android/gradle/wrapper/gradle-wrapper.jar",
+    "android/gradle/wrapper/gradle-wrapper.properties",
+    "android/gradlew",
+    "android/gradlew.bat",
+    "android/settings.gradle.kts",
+    "docs",
+    "ios",
+    "lib",
+    "src",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "SECURITY.md",
+    "LatchwayReactNative.podspec",
+    "contract.lock",
+    "react-native.config.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "react-native": "./src/index.ts",
+      "import": "./lib/index.js",
+      "default": "./lib/index.js"
+    },
+    "./testing": {
+      "types": "./lib/testing.d.ts",
+      "import": "./lib/testing.js",
+      "default": "./lib/testing.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "check": "pnpm verify:contracts && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm native:boundary",
+    "codegen:check": "node scripts/verify-codegen.mjs",
+    "example:check": "tsc -p tsconfig.example.json --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "ios:spec": "pod ipc spec LatchwayReactNative.podspec >/dev/null",
+    "native:boundary": "node scripts/verify-native-boundary.mjs",
+    "pack:check": "node scripts/verify-pack.mjs",
+    "prepack": "pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:contracts": "node scripts/verify-contract.mjs",
+    "verify:reproducible": "node scripts/verify-reproducible.mjs"
+  },
+  "dependencies": {
+    "@latchway/client": "0.1.0-dev.0"
+  },
+  "peerDependencies": {
+    "react": "^19.1.1",
+    "react-native": ">=0.82.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@react-native/codegen": "0.82.0",
+    "@react-native/gradle-plugin": "0.82.0",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "eslint": "10.9.1",
+    "globals": "17.11.0",
+    "react": "19.1.1",
+    "react-native": "0.82.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  },
+  "codegenConfig": {
+    "name": "LatchwayReactNativeSpec",
+    "type": "modules",
+    "jsSrcsDir": "src/native",
+    "android": {
+      "javaPackageName": "dev.latchway.reactnative"
+    },
+    "ios": {
+      "modules": {
+        "NativeLatchway": {
+          "className": "RCTNativeLatchway",
+          "unstableRequiresMainQueueSetup": false
+        }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Latchway/latchway-react-native-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Latchway/latchway-react-native-sdk/issues"
+  },
+  "homepage": "https://github.com/Latchway/latchway-react-native-sdk#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "attestation",
+    "dpop",
+    "react-native",
+    "turbomodule"
+  ]
+}

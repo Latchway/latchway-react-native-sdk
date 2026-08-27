@@ -1,0 +1,6 @@
+packages:
+  - "."
+  - "example"
+
+overrides:
+  "@latchway/client": "link:../latchway-js"

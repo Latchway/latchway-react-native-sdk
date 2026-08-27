@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "paths": {
+      "@latchway/react-native": ["./src/index.ts"]
+    }
+  },
+  "include": ["example/src/**/*.ts", "example/src/**/*.tsx"]
+}
