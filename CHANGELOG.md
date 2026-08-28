@@ -9,6 +9,16 @@ Versioning once package publication begins.
 
 ### Changed
 
+- Native consumers now pin the reviewed JavaScript, iOS, Android, Kotlin,
+  React Native, and core source commits through a machine-verified release
+  compatibility lock.
+- The example now includes complete React Native 0.82 New Architecture iOS and
+  Android hosts, including source-development overrides that are excluded from
+  published metadata.
+- The example provider stack now pins the native-build-verified React Native
+  Firebase 25.1.0, Firebase Apple 12.15.0, and Firebase Android BoM 34.15.0 set,
+  and repository installs use pnpm's hoisted linker for CocoaPods framework
+  compatibility.
 - Synchronized the SDK contract lock, compatibility constant, and canonical
   fixtures to the unreleased Latchway contract 0.4.0 checkpoint while keeping
   wire protocol 1.
@@ -25,6 +35,10 @@ Versioning once package publication begins.
 
 ### Added
 
+- Tag-triggered npm trusted publication with provenance, immutable release
+  package verification, draft GitHub releases, and published native consumer
+  gates.
+- Full contract-bundle verification and clean packed-package consumer gates.
 - Handwritten React Native client API with exact-origin authenticated fetch,
   safe DPoP-nonce/session retries, cancellation, quota, and diagnostics.
 - TurboModule bridges backed by the Latchway iOS and Android SDKs for native

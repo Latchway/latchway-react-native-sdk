@@ -1,5 +1,9 @@
 #import "RCTNativeLatchway.h"
+#if __has_include(<LatchwayReactNative/LatchwayReactNative-Swift.h>)
+#import <LatchwayReactNative/LatchwayReactNative-Swift.h>
+#else
 #import "LatchwayReactNative-Swift.h"
+#endif
 
 @implementation RCTNativeLatchway {
   LatchwayNativeBridge *_bridge;

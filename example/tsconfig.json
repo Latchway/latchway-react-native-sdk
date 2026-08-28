@@ -2,6 +2,7 @@
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
     "exactOptionalPropertyTypes": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "noUncheckedIndexedAccess": true,
     "paths": {
       "@latchway/react-native": ["../src/index.ts"]

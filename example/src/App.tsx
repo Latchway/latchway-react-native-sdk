@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import Config from "react-native-config";
-import { getAuth } from "@react-native-firebase/auth";
+import firebaseAuth from "@react-native-firebase/auth";
 import { createLatchwayClient, LatchwayError } from "@latchway/react-native";
 
 const deployment = {
@@ -36,7 +36,7 @@ export default function App(): React.JSX.Element {
     environment: deployment.environment,
     identityProvider: "firebase",
     getIdentityToken: async () => {
-      const user = getAuth().currentUser;
+      const user = firebaseAuth().currentUser;
       if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
       return user.getIdToken();
     },

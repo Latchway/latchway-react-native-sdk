@@ -1,5 +1,10 @@
 pluginManagement {
     includeBuild("../node_modules/@react-native/gradle-plugin")
+    plugins {
+        // React Native 0.82 owns this supported consumer AGP baseline.
+        id("com.android.library") version "8.12.0"
+        id("org.jetbrains.kotlin.android") version "2.3.21"
+    }
     repositories {
         google()
         mavenCentral()

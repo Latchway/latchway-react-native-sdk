@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": 1,
+  "contract": {
+    "version": "0.4.0",
+    "wire_protocol": 1,
+    "repository": "https://github.com/Latchway/latchway.git",
+    "core_commit": "c9347421fac4c729f20ea87f9205c66c15fa983f",
+    "bundle_sha256": "39d32a2c9e4b0381ff815a40d87d75b51e4f37d6de55121b7bb0beef690c5c59",
+    "fixtures": {
+      "attestation-binding-v1.json": "03e54217ba0da1cac9d882abd26f8cd21642f62dc1fbfaf61c32fc5261d6754e",
+      "dpop-v1.json": "bd897803b910c58926b3f46c1102a1d33c1df89f0266774e6f12cf144d71e587",
+      "protocol-version.json": "3e2cc1b7f6812f8e6319c7f17c8228171af477f77af63be4fb1f04df56f8ffd8"
+    }
+  },
+  "react_native": {
+    "package": "@latchway/react-native",
+    "version": "0.1.0-dev.0",
+    "baseline": "0.82.0",
+    "cli": "20.0.0",
+    "react": "19.1.1",
+    "react_peer": "19.1.x",
+    "new_architecture": true,
+    "node_linker": "hoisted",
+    "firebase": {
+      "react_native": "25.1.0",
+      "apple_sdk": "12.15.0",
+      "android_bom": "34.15.0"
+    }
+  },
+  "javascript": {
+    "package": "@latchway/client",
+    "version": "0.1.0-dev.0",
+    "repository": "https://github.com/Latchway/latchway-js.git",
+    "source_commit": "ae0574e00c807a8cd10b07b7b1e6e36196233b79"
+  },
+  "ios": {
+    "pod": "Latchway/AppAttest",
+    "version": "0.1.0",
+    "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
+    "source_commit": "9c1bb8cf44686d0f69ae6343d23b6e9f9160521a",
+    "minimum_platform": "15.0"
+  },
+  "android": {
+    "group": "dev.latchway",
+    "artifacts": [
+      "latchway-okhttp",
+      "latchway-play-integrity"
+    ],
+    "version": "0.1.0",
+    "repository": "https://github.com/Latchway/latchway-android.git",
+    "source_commit": "0b999722fda574a481b5a39b799273a616466f67",
+    "minimum_sdk": 24,
+    "compile_sdk": 37,
+    "publisher_android_gradle_plugin": "9.3.2",
+    "consumer_android_gradle_plugin": "8.12.0",
+    "kotlin": "2.3.21"
+  }
+}

@@ -1,7 +1,13 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
-    id("com.android.library") version "8.12.0"
-    id("org.jetbrains.kotlin.android") version "2.1.20"
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
     id("com.facebook.react")
+}
+
+kotlin {
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
 group = "dev.latchway"
@@ -17,7 +23,8 @@ react {
 
 android {
     namespace = "dev.latchway.reactnative"
-    compileSdk = 36
+    // The exact native 0.1.0 AAR metadata requires API 37 consumers.
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
@@ -29,16 +36,19 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions { jvmTarget = "17" }
-
     lint {
         abortOnError = true
         warningsAsErrors = true
+        // These versions are compatibility inputs, not opportunistic upgrades.
+        // scripts/verify-compatibility.mjs enforces the reviewed exact lock.
+        disable += setOf("AndroidGradlePluginVersion", "NewerVersionAvailable")
     }
 }
 
 dependencies {
-    implementation("com.facebook.react:react-android")
+    // A real host's React plugin forces this to the installed 0.82.x patch. The
+    // exact baseline keeps standalone package-consumer builds deterministic.
+    implementation("com.facebook.react:react-android:0.82.0")
     implementation("dev.latchway:latchway-okhttp:0.1.0")
     implementation("dev.latchway:latchway-play-integrity:0.1.0")
 }

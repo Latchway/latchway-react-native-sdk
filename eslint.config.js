@@ -3,7 +3,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: [".artifacts/**", "coverage/**", "example/android/**", "example/ios/**", "lib/**", "node_modules/**", "schema/**"] },
+  { ignores: [".artifacts/**", "coverage/**", "example/android/**", "example/ios/**", "integration/**", "lib/**", "node_modules/**", "schema/**"] },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -33,6 +33,7 @@ export default tseslint.config(
     },
     rules: {
       ...tseslint.configs.disableTypeChecked.rules,
+      "@typescript-eslint/no-require-imports": "off",
       "no-console": "off"
     }
   }

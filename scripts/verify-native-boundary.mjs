@@ -22,7 +22,10 @@ if (!spec.includes("identityToken: string")) {
 }
 
 const packageJSON = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-if (packageJSON.dependencies?.["@latchway/client"] !== "0.1.0-dev.0") {
+const compatibility = JSON.parse(
+  await readFile(new URL("../release-compatibility.json", import.meta.url), "utf8"),
+);
+if (packageJSON.dependencies?.[compatibility.javascript.package] !== compatibility.javascript.version) {
   throw new Error("Published JavaScript dependency is not pinned exactly.");
 }
 const ios = await readFile(new URL("../ios/LatchwayNativeBridge.swift", import.meta.url), "utf8");
@@ -33,14 +36,12 @@ const android = await readFile(
 if (!ios.includes(".reactNativeIOS")) throw new Error("iOS bridge does not select react_native_ios runtime identity.");
 if (!android.includes("REACT_NATIVE_ANDROID")) throw new Error("Android bridge does not select react_native_android runtime identity.");
 const podspec = await readFile(new URL("../LatchwayReactNative.podspec", import.meta.url), "utf8");
-if (!podspec.includes('spec.dependency "Latchway/AppAttest", "0.1.0"')) {
+if (!podspec.includes(`spec.dependency "${compatibility.ios.pod}", "${compatibility.ios.version}"`)) {
   throw new Error("The iOS native dependency is not pinned to the locked release.");
 }
 const androidBuild = await readFile(new URL("../android/build.gradle.kts", import.meta.url), "utf8");
-for (const coordinate of [
-  'implementation("dev.latchway:latchway-okhttp:0.1.0")',
-  'implementation("dev.latchway:latchway-play-integrity:0.1.0")',
-]) {
+for (const artifact of compatibility.android.artifacts) {
+  const coordinate = `implementation("${compatibility.android.group}:${artifact}:${compatibility.android.version}")`;
   if (!androidBuild.includes(coordinate)) throw new Error(`The Android native dependency is not pinned: ${coordinate}`);
 }
 

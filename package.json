@@ -35,7 +35,8 @@
     "SECURITY.md",
     "LatchwayReactNative.podspec",
     "contract.lock",
-    "react-native.config.js"
+    "release-compatibility.json",
+    "react-native.config.cjs"
   ],
   "exports": {
     ".": {
@@ -53,7 +54,7 @@
   },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
-    "check": "pnpm verify:contracts && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm native:boundary",
+    "check": "pnpm verify:contracts && pnpm verify:compatibility && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm native:boundary",
     "codegen:check": "node scripts/verify-codegen.mjs",
     "example:check": "tsc -p tsconfig.example.json --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -61,9 +62,14 @@
     "native:boundary": "node scripts/verify-native-boundary.mjs",
     "pack:check": "node scripts/verify-pack.mjs",
     "prepack": "pnpm build",
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "release:publish": "node scripts/publish-or-verify.mjs",
+    "consumer:check": "node scripts/verify-consumer.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:bundle": "node scripts/verify-contract-bundle.mjs",
+    "verify:compatibility": "node scripts/verify-compatibility.mjs",
     "verify:contracts": "node scripts/verify-contract.mjs",
     "verify:reproducible": "node scripts/verify-reproducible.mjs"
   },
@@ -71,8 +77,8 @@
     "@latchway/client": "0.1.0-dev.0"
   },
   "peerDependencies": {
-    "react": "^19.1.1",
-    "react-native": ">=0.82.0"
+    "react": "19.1.x",
+    "react-native": "0.82.x"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -113,7 +119,9 @@
   },
   "homepage": "https://github.com/Latchway/latchway-react-native-sdk#readme",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
   },
   "keywords": [
     "attestation",

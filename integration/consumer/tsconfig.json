@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["react", "react-native"]
+  },
+  "include": ["index.ts"]
+}

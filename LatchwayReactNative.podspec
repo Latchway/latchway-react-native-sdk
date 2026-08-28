@@ -9,9 +9,14 @@ Pod::Spec.new do |spec|
   spec.homepage = package["homepage"]
   spec.license = { type: "Apache-2.0", file: "LICENSE" }
   spec.author = { "Latchway Contributors" => "security@latchway.dev" }
-  spec.source = { git: "https://github.com/Latchway/latchway-react-native-sdk.git", tag: spec.version.to_s }
+  spec.source = { git: "https://github.com/Latchway/latchway-react-native-sdk.git", tag: "v#{spec.version}" }
   spec.platforms = { ios: "15.0" }
   spec.source_files = "ios/**/*.{h,m,mm,swift}"
+  # React Native's generated TurboModule spec is a C++ header. It is an
+  # implementation detail discovered by class name at runtime and must not be
+  # exposed through the framework umbrella module, where Clang may scan it as
+  # plain Objective-C and fail to resolve C++ standard-library headers.
+  spec.private_header_files = "ios/RCTNativeLatchway.h"
   spec.requires_arc = true
   spec.swift_version = "6.0"
   spec.pod_target_xcconfig = {

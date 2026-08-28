@@ -6,10 +6,17 @@
 
 ## Requirements
 
-- React Native 0.82 or newer with the New Architecture enabled
+- React Native 0.82.x with the New Architecture enabled
 - iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 0.1.0
 - Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 0.1.0 artifacts
 - Node 24.19.0 and pnpm 10.15.0 for repository development
+
+The repository example additionally pins React Native Firebase 25.1.0, Firebase
+Apple SDK 12.15.0, and Firebase Android BoM 34.15.0. These are example identity
+provider dependencies, not runtime dependencies of the published Latchway
+package. Repository installs use pnpm's hoisted linker because React Native's
+CocoaPods static-framework exclusions require conventional `node_modules`
+paths.
 
 ## Usage
 
@@ -54,15 +61,24 @@ The only application credential sent into the TurboModule is the external identi
 Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, and Latchway protocol headers are removed before authorization. Provider-credential query names are rejected, including percent-encoded and case-varied names. Only the configured gateway origin can be authorized, redirects are rejected, and insecure HTTP is limited to explicitly enabled loopback conformance.
 
 See [native installation](docs/native-installation.md), [security details](docs/security.md), and [architecture](docs/architecture.md).
+Release ordering and immutable publication gates are in [releasing](docs/releasing.md).
 
 ## Development
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm check
+pnpm verify:compatibility
 pnpm pack:check
 pnpm verify:reproducible
 ```
+
+For a release-candidate checkout, `pnpm verify:compatibility --sources` also
+requires the exact core, JavaScript, iOS, and Android commits recorded in
+`release-compatibility.json`. `pnpm verify:bundle -- /path/to/latchway-contract-<version>.tar.gz`
+verifies the complete immutable contract archive, and `pnpm consumer:check`
+installs the packed JavaScript and React Native archives in a clean temporary
+consumer before compiling it.
 
 `pnpm codegen:check` parses the handwritten TurboModule spec and regenerates both platform surfaces in a disposable directory. Node tests use the explicit `@latchway/react-native/testing` bridge; production applications must never install a test bridge.
 
@@ -70,7 +86,17 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-This release consumes contract `0.4.0`, wire protocol `1`, core commit `c9347421fac4c729f20ea87f9205c66c15fa983f`, and bundle SHA-256 `39d32a2c9e4b0381ff815a40d87d75b51e4f37d6de55121b7bb0beef690c5c59`. `pnpm verify:contracts` checks the lock and vendored canonical fixtures byte-for-byte.
+The checked-in development package currently consumes contract `0.4.0`, wire
+protocol `1`, core commit `c9347421fac4c729f20ea87f9205c66c15fa983f`, and
+bundle SHA-256
+`39d32a2c9e4b0381ff815a40d87d75b51e4f37d6de55121b7bb0beef690c5c59`.
+This is not the final v1 compatibility claim: core contract `0.5.0` is being
+finalized, and core plus all four SDK locks and fixtures must move to its final
+commit and bundle together. All gates read `release-compatibility.json` and
+`contract.lock`, so that synchronization does not require rewriting CI.
+`pnpm verify:contracts` checks the active lock and vendored canonical fixtures
+byte-for-byte. The tag workflow refuses publication while `core_release` is
+`unreleased`.
 
 ## License
 

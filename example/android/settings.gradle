@@ -1,0 +1,25 @@
+pluginManagement { includeBuild("../../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+
+extensions.configure(com.facebook.react.ReactSettingsExtension) { extension ->
+    extension.autolinkLibrariesFromCommand()
+}
+
+dependencyResolutionManagement {
+    repositories {
+        def nativeRepository = System.getenv("LATCHWAY_NATIVE_REPOSITORY")
+        if (nativeRepository != null && !nativeRepository.isBlank()) {
+            maven {
+                name = "latchwayNativeDevelopment"
+                url = uri(nativeRepository)
+                content { includeGroup("dev.latchway") }
+            }
+        }
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "LatchwayExample"
+include(":app")
+includeBuild("../../node_modules/@react-native/gradle-plugin")

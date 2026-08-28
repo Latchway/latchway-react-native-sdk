@@ -1,0 +1,37 @@
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        // The exact Latchway Android 0.1.0 AAR metadata requires API 37.
+        compileSdkVersion = 37
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        // The locked Latchway Android artifacts publish Kotlin 2.3 metadata.
+        kotlinVersion = "2.3.21"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        // RN 0.82 embeds Kotlin 2.1, but the locked native AARs publish 2.3 metadata.
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+    }
+}
+
+allprojects {
+    repositories {
+        def nativeRepository = System.getenv("LATCHWAY_NATIVE_REPOSITORY")
+        if (nativeRepository != null && !nativeRepository.isBlank()) {
+            maven {
+                name = "latchwayNativeDevelopment"
+                url = uri(nativeRepository)
+                content { includeGroup("dev.latchway") }
+            }
+        }
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"

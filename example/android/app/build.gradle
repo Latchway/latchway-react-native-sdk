@@ -1,0 +1,41 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+react {
+    root = file("../..")
+    reactNativeDir = file("../../../node_modules/react-native")
+    codegenDir = file("../../../node_modules/@react-native/codegen")
+    autolinkLibrariesWithApp()
+}
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.latchwayexample"
+    defaultConfig {
+        applicationId "com.latchwayexample"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "0.1.0"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+    lint {
+        abortOnError true
+        warningsAsErrors true
+        disable "AndroidGradlePluginVersion", "NewerVersionAvailable"
+    }
+}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+    implementation("com.facebook.react:hermes-android")
+}

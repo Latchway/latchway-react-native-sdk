@@ -1,77 +1,132 @@
-name: Published native consumer
+name: Published dependency consumer
 
 on:
   workflow_dispatch:
     inputs:
       android:
-        description: Resolve and compile against the published Android 0.1.0 artifacts
+        description: Resolve and build the locked Android artifacts from public repositories
         required: true
         type: boolean
-        default: false
+        default: true
       ios:
-        description: Resolve and lint against the published CocoaPods 0.1.0 release
+        description: Resolve and build the locked CocoaPods release from the public repository
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
+
+env:
+  NODE_VERSION: 24.19.0
+  PNPM_VERSION: 10.15.0
 
 jobs:
   android:
     if: inputs.android
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out React Native SDK
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: latchway-react-native-sdk
           persist-credentials: false
-      - name: Check out JavaScript SDK development dependency
-        uses: actions/checkout@v4
+      - name: Read immutable compatibility lock
+        id: lock
+        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
+      - name: Check out locked JavaScript SDK for workspace compilation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
-          ref: 273925d73a5a959f95664b1b1d838505dcce5f6c
+          ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
-          version: 10.15.0
-      - uses: actions/setup-node@v4
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24.19.0
-      - uses: actions/setup-java@v4
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
           java-version: "17"
-      - run: pnpm install --frozen-lockfile
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      - run: sdkmanager "platforms;android-${{ steps.lock.outputs.android_compile_sdk }}" "build-tools;36.0.0" "ndk;27.1.12297006"
+      - name: Build exact JavaScript source and install workspace
+        run: |
+          pnpm --dir ../latchway-js install --frozen-lockfile
+          pnpm --dir ../latchway-js build
+          pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
-      - name: Compile against released Maven coordinates
-        run: ./android/gradlew -p android check --no-daemon
+      - name: Verify immutable public dependency releases
+        run: node scripts/verify-published-dependencies.mjs --all
+        working-directory: latchway-react-native-sdk
+      - name: Verify clean npm dependency consumer
+        run: |
+          pnpm pack:check
+          pnpm consumer:check --published
+        working-directory: latchway-react-native-sdk
+      - name: Compile standalone bridge against public Maven coordinates
+        run: ./android/gradlew -p android clean check --no-daemon
+        working-directory: latchway-react-native-sdk
+      - name: Compile and lint official Android host against public Maven coordinates
+        run: ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
         working-directory: latchway-react-native-sdk
 
   ios:
     if: inputs.ios
     runs-on: macos-15
+    timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out React Native SDK
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           path: latchway-react-native-sdk
           persist-credentials: false
-      - name: Check out JavaScript SDK development dependency
-        uses: actions/checkout@v4
+      - name: Read immutable compatibility lock
+        id: lock
+        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
+      - name: Check out locked JavaScript SDK for workspace compilation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
-          ref: 273925d73a5a959f95664b1b1d838505dcce5f6c
+          ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
-          version: 10.15.0
-      - uses: actions/setup-node@v4
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24.19.0
-      - run: pnpm install --frozen-lockfile
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - name: Build exact JavaScript source and install workspace
+        run: |
+          pnpm --dir ../latchway-js install --frozen-lockfile
+          pnpm --dir ../latchway-js build
+          pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
-      - name: Resolve released CocoaPods dependency and lint consumer
-        run: pod lib lint LatchwayReactNative.podspec --allow-warnings --skip-tests
+      - name: Verify immutable public dependency releases
+        run: node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
+      - name: Resolve public CocoaPods dependency in official React Native host
+        env:
+          RCT_NEW_ARCH_ENABLED: "1"
+        run: pod install --repo-update
+        working-directory: latchway-react-native-sdk/example/ios
+      - name: Build official iOS host against public CocoaPods dependency
+        run: >-
+          xcodebuild
+          -workspace LatchwayExample.xcworkspace
+          -scheme LatchwayExample
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-published"
+          CODE_SIGNING_ALLOWED=NO
+          build
+        working-directory: latchway-react-native-sdk/example/ios

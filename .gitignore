@@ -26,6 +26,8 @@ DerivedData/
 ios/build/
 *.xcuserstate
 xcuserdata/
+example/ios/LatchwayExample.xcworkspace/
+example/ios/Podfile.lock
 
 # Android local output
 .gradle/
