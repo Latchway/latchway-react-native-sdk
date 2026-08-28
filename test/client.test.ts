@@ -259,7 +259,7 @@ describe("React Native Latchway client", () => {
     const diagnostics = await client.diagnostics();
     expect(diagnostics).toMatchObject({
       platform: "react_native_ios",
-      contractVersion: "0.3.0",
+      contractVersion: "0.4.0",
       protocolVersion: 1,
       keyStorage: "secure_enclave",
       session: { state: "active" },
@@ -317,7 +317,7 @@ describe("React Native Latchway client", () => {
     const protocol = JSON.parse(await readFile(new URL("protocol-version.json", fixtureRoot), "utf8")) as ProtocolFixture;
     const dpop = JSON.parse(await readFile(new URL("dpop-v1.json", fixtureRoot), "utf8")) as DPoPFixture;
     const binding = JSON.parse(await readFile(new URL("attestation-binding-v1.json", fixtureRoot), "utf8")) as BindingFixture;
-    expect(protocol.contract_version).toBe("0.3.0");
+    expect(protocol.contract_version).toBe("0.4.0");
     expect(protocol.wire_protocol.current).toBe(1);
     expect(protocol.sdk_kinds).toContain("react-native");
     expect(dpop.vectors.filter((vector: { expected: { valid: boolean } }) => vector.expected.valid)).toHaveLength(3);
@@ -435,7 +435,7 @@ class FakeNativeModule {
     this.lastIdentityToken = identityToken;
     if (this.error !== undefined) throw this.error;
     return JSON.stringify({
-      contractVersion: "0.3.0",
+      contractVersion: "0.4.0",
       protocolVersion: 1,
       keyStorage: "secure_enclave",
       attestation: { support: "supported", provider: "app_attest" },
