@@ -10,6 +10,7 @@ import type {
   QuotaSnapshot,
   ReactNativeDiagnostics,
 } from "./types.js";
+import { isCanonicalRequestID } from "./request-id.js";
 import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_KIND, SDK_VERSION } from "./version.js";
 
 const forbiddenCredentialHeaders = [
@@ -236,7 +237,7 @@ function parseAuthorization(encoded: string): NativeAuthorization {
   const value = parseRecord(encoded, "native authorization");
   if (typeof value.authorization !== "string" || !/^DPoP [\u0021-\u007e]{16,8192}$/u.test(value.authorization) ||
       typeof value.dpop !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(value.dpop) ||
-      typeof value.requestID !== "string" || !/^[A-Za-z0-9_-]{8,128}$/u.test(value.requestID)) {
+      !isCanonicalRequestID(value.requestID)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native authorization metadata.");
   }
   return value as unknown as NativeAuthorization;
@@ -380,7 +381,7 @@ async function verifiedPreDispatchRejection(
 ): Promise<"dpop_nonce_required" | "session_expired" | undefined> {
   const responseRequestID = response.headers.get("X-Latchway-Request-ID");
   if (response.status !== 401 || responseRequestID === null ||
-      !/^[A-Za-z0-9_-]{8,128}$/u.test(responseRequestID)) return undefined;
+      !isCanonicalRequestID(responseRequestID)) return undefined;
   const problem = await boundedProblem(response);
   if (problem === undefined || problem.status !== response.status || problem.retryable !== true ||
       problem.request_id !== responseRequestID ||

@@ -1,5 +1,6 @@
 import { LatchwayError } from "@latchway/client";
 import type { LatchwayErrorCode } from "@latchway/client";
+import { isCanonicalRequestID } from "./request-id.js";
 
 const knownCodes = new Set<LatchwayErrorCode>([
   "request_invalid", "identity_token_missing", "identity_token_invalid", "identity_token_expired",
@@ -42,7 +43,8 @@ export function fromNativeError(value: unknown): Error {
     : localCodeMap[rawCode] ?? (knownCodes.has(rawCode as LatchwayErrorCode)
       ? rawCode as LatchwayErrorCode
       : "internal_error");
-  const requestID = canonicalRequestID(firstString(record.requestID, record.request_id, userInfo.requestID, userInfo.request_id));
+  const requestIDCandidate = firstString(record.requestID, record.request_id, userInfo.requestID, userInfo.request_id);
+  const requestID = isCanonicalRequestID(requestIDCandidate) ? requestIDCandidate : undefined;
   const status = safeStatus(record.status ?? userInfo.status);
   const retryable = record.retryable === true || userInfo.retryable === true;
   return new LatchwayError(mapped, safeMessage(firstString(record.message, userInfo.message)), {
@@ -80,10 +82,6 @@ function safeMessage(value: string | undefined): string {
     return "Sensitive native error detail was redacted.";
   }
   return bounded;
-}
-
-function canonicalRequestID(value: string | undefined): string | undefined {
-  return value !== undefined && /^[A-Za-z0-9_-]{8,128}$/u.test(value) ? value : undefined;
 }
 
 function safeStatus(value: unknown): number | undefined {

@@ -20,6 +20,7 @@ interface BindingFixture {
 }
 
 const clients: LatchwayClient[] = [];
+const ANDROID_REQUEST_ID = "android:550e8400-e29b-41d4-a716-446655440000";
 let restoreNative: (() => void) | undefined;
 
 afterEach(async () => {
@@ -57,6 +58,7 @@ describe("React Native Latchway client", () => {
     expect(outbound?.headers.get("X-Latchway-Feature")).toBe("habit_assistant");
     expect(outbound?.headers.get("X-Latchway-SDK")).toBe("react-native");
     expect(outbound?.headers.get("X-Latchway-Protocol-Version")).toBe("1");
+    expect(outbound?.headers.get("X-Latchway-Request-ID")).toBe(ANDROID_REQUEST_ID);
     expect(native.lastIdentityToken).toBe("app-owned-identity-token");
     expect(native.authorizations[0]?.encoded).not.toContain("app-owned-identity-token");
   });
@@ -114,7 +116,6 @@ describe("React Native Latchway client", () => {
         if (calls === 1) {
           return problem("dpop_nonce_required", {
             "DPoP-Nonce": "nonce-0123456789abcdef",
-            "X-Latchway-Request-ID": "request-00000001",
           });
         }
         return new Response("retried");
@@ -125,7 +126,7 @@ describe("React Native Latchway client", () => {
     expect(calls).toBe(2);
     expect(native.authorizations).toHaveLength(2);
     expect(native.authorizations[1]?.request.nonce).toBe("nonce-0123456789abcdef");
-    expect(native.authorizations[1]?.request.requestID).toBe("native-request-0001");
+    expect(native.authorizations[1]?.request.requestID).toBe(ANDROID_REQUEST_ID);
   });
 
   it("refreshes once after a validated bodyless session-expired rejection", async () => {
@@ -271,7 +272,7 @@ describe("React Native Latchway client", () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), {
       code: "identity_token_invalid",
-      requestID: "request-00000001",
+      requestID: ANDROID_REQUEST_ID,
     });
     install(native);
     const client = create();
@@ -279,7 +280,7 @@ describe("React Native Latchway client", () => {
       name: "LatchwayError",
       code: "identity_token_invalid",
       message: "Sensitive native error detail was redacted.",
-      requestID: "request-00000001",
+      requestID: ANDROID_REQUEST_ID,
     });
   });
 
@@ -287,7 +288,7 @@ describe("React Native Latchway client", () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error("The active server revision is invalid."), {
       code: "configuration_invalid",
-      requestID: "request-00000001",
+      requestID: ANDROID_REQUEST_ID,
       status: 503,
     });
     install(native);
@@ -295,7 +296,7 @@ describe("React Native Latchway client", () => {
 
     await expect(client.quota("chat")).rejects.toMatchObject({
       code: "configuration_invalid",
-      requestID: "request-00000001",
+      requestID: ANDROID_REQUEST_ID,
       status: 503,
     });
   });
@@ -354,13 +355,13 @@ function problem(code: string, extraHeaders: Record<string, string> = {}, retrya
     detail: "The request was rejected before upstream dispatch.",
     status: 401,
     code,
-    request_id: "request-00000001",
+    request_id: ANDROID_REQUEST_ID,
     retryable,
   }), {
     status: 401,
     headers: {
       "Content-Type": "application/problem+json",
-      "X-Latchway-Request-ID": "request-00000001",
+      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
       ...extraHeaders,
     },
   });
@@ -411,7 +412,7 @@ class FakeNativeModule {
     return JSON.stringify({
       authorization: "DPoP native-access-token",
       dpop: "header.payload.signature",
-      requestID: request.requestID ?? "native-request-0001",
+      requestID: request.requestID ?? ANDROID_REQUEST_ID,
     });
   }
 
