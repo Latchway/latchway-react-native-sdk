@@ -34,6 +34,7 @@ export default function App(): React.JSX.Element {
     baseURL: deployment.baseURL,
     applicationID: deployment.applicationID,
     environment: deployment.environment,
+    identityProvider: "firebase",
     getIdentityToken: async () => {
       const user = getAuth().currentUser;
       if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
@@ -50,14 +51,18 @@ export default function App(): React.JSX.Element {
     setBusy(true);
     setOutput("");
     try {
-      const response = await client.fetch("/v1/responses", {
+      const response = await client.fetch("/v1/chat/completions", {
         method: "POST",
         latchwayFeature: deployment.feature,
         headers: {
           Accept: "text/event-stream",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ model: deployment.model, input, stream: true }),
+        body: JSON.stringify({
+          model: deployment.model,
+          messages: [{ role: "user", content: input }],
+          stream: true,
+        }),
       });
       if (!response.ok) throw new Error(`Gateway returned HTTP ${response.status}.`);
       setStatus("Streaming response");

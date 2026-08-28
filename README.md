@@ -30,11 +30,14 @@ const latchway = createLatchwayClient({
   },
 });
 
-const response = await latchway.fetch("/v1/responses", {
+const response = await latchway.fetch("/v1/chat/completions", {
   method: "POST",
   latchwayFeature: "habit_assistant",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ model: "assistant-default", input: "Plan tomorrow" }),
+  body: JSON.stringify({
+    model: "assistant-default",
+    messages: [{ role: "user", content: "Plan tomorrow" }],
+  }),
 });
 ```
 
@@ -65,7 +68,7 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-This release consumes contract `0.2.0`, wire protocol `1`, core commit `68fa1ba28a80cd3fb1e50dffdefc7de935da9f4c`, and bundle SHA-256 `a4b320906d1bb02712451224c2111d3a673b4df24631c2f1de01ca5dfbfd0059`. `pnpm verify:contracts` checks the lock and vendored canonical fixtures byte-for-byte.
+This release consumes contract `0.3.0`, wire protocol `1`, core commit `05f88b41813c210a23a459519abd3f7a9c3e45fa`, and bundle SHA-256 `ea265cfa750df8faeeaeac7bc60c04c4d907384205b5bf4d78a22a79dfc4d24c`. `pnpm verify:contracts` checks the lock and vendored canonical fixtures byte-for-byte.
 
 ## License
 

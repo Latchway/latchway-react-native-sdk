@@ -7,6 +7,14 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+### Changed
+
+- Synchronized the SDK contract lock, compatibility constant, and canonical
+  fixtures to the unreleased Latchway contract 0.3.0 checkpoint while keeping
+  wire protocol 1.
+- The Firebase example now selects the Firebase identity provider explicitly
+  and uses the currently supported OpenAI Chat route and request shape.
+
 ### Added
 
 - Handwritten React Native client API with exact-origin authenticated fetch,
