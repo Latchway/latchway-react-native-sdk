@@ -8,7 +8,7 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-Phase 13 implementation is active against the locked Latchway 0.1.0 contract
+Phase 13 implementation is active against the locked Latchway 0.2.0 contract
 and wire protocol 1. Production npm, CocoaPods, Gradle, TurboModule, source,
 fixture, example, and CI changes are authorized when they preserve that lock.
 Never invent a wire contract, publish an unreleased package, fake production
