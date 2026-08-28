@@ -148,6 +148,7 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
             userInfo: compact([
                 "code": failure.code,
                 "requestID": failure.requestID as Any,
+                "operationID": failure.operationID as Any,
                 "status": failure.status as Any,
                 "retryable": failure.retryable,
             ])
@@ -411,6 +412,7 @@ private struct NativeFailure {
     let code: String
     let message: String
     let requestID: String?
+    let operationID: String?
     let status: Int?
     let retryable: Bool
 
@@ -421,45 +423,46 @@ private struct NativeFailure {
                 code = problem.code.description
                 message = sanitize(problem.detail)
                 requestID = problem.requestID
+                operationID = problem.operationID
                 status = problem.status
                 retryable = problem.retryable
             case .invalidConfiguration:
                 code = "invalid_configuration"; message = "Latchway native configuration is invalid."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .invalidRequest:
                 code = "request_invalid"; message = "The native Latchway request is invalid."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .secureEnclaveUnavailable:
                 code = "key_unavailable"; message = "Required hardware-backed key storage is unavailable."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .keyStorageFailure:
                 code = "secure_state_unavailable"; message = "Secure Latchway state is unavailable."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .attestationUnavailable:
                 code = "attestation_unsupported"; message = "Required application attestation is unavailable."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .invalidAttestationBinding:
                 code = "attestation_invalid"; message = "The attestation challenge binding is invalid."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .sessionUnavailable:
                 code = "session_unavailable"; message = "A Latchway session is unavailable."
-                requestID = nil; status = nil; retryable = true
+                requestID = nil; operationID = nil; status = nil; retryable = true
             case .transportFailure:
                 code = "network_unavailable"; message = "The Latchway control request failed."
-                requestID = nil; status = nil; retryable = true
+                requestID = nil; operationID = nil; status = nil; retryable = true
             case .invalidServerResponse:
                 code = "response_invalid"; message = "Latchway returned an invalid native response."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             case .cancelled:
                 code = "cancelled"; message = "The Latchway native operation was cancelled."
-                requestID = nil; status = nil; retryable = false
+                requestID = nil; operationID = nil; status = nil; retryable = false
             }
         } else if error is CancellationError {
             code = "cancelled"; message = "The Latchway native operation was cancelled."
-            requestID = nil; status = nil; retryable = false
+            requestID = nil; operationID = nil; status = nil; retryable = false
         } else {
             code = "internal_error"; message = "The Latchway native operation failed."
-            requestID = nil; status = nil; retryable = false
+            requestID = nil; operationID = nil; status = nil; retryable = false
         }
     }
 }

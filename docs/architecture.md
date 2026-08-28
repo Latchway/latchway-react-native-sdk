@@ -27,12 +27,12 @@ core revision. Generated bridge and wire types do not become public API.
 
 ## Operation flow
 
-1. JavaScript validates the origin, feature, configuration, and request state.
+1. JavaScript validates the origin, feature, configuration, request state, and decoded query names; provider-credential names fail before identity acquisition or dispatch.
 2. The application identity callback returns an external identity JWT.
 3. The TurboModule passes that JWT transiently to the native SDK while native session work runs.
 4. Native code establishes or refreshes a device-bound session, signs a DPoP proof, and returns only the authorization headers and request ID required for dispatch.
 5. JavaScript installs owned protocol headers and dispatches once through the configured fetch implementation.
-6. A bodyless request may be authorized and dispatched one more time only after an exact-media-type 401 proves `session_expired` or supplies a valid DPoP nonce, is marked retryable, and has correlated problem/response status and request-ID metadata. The client request ID is preserved. A request with a body is neither cloned nor replayed and its response is returned to the application.
+6. A bodyless request may be authorized and dispatched one more time only after a bounded, duplicate-free, exact-field RFC 9457 document matches the canonical 401 `session_expired` or `dpop_nonce_required` definition and has a correlated request ID. Nonce challenges require one unambiguous nonce and session-expired responses must omit that header. The client request ID is preserved. A request with a body is neither cloned nor replayed and its response is returned to the application.
 
 Native authorization results are intentionally short-lived JavaScript values because React Native fetch owns the response stream. They are never exposed through diagnostics or errors and are not stored by the package.
 
@@ -52,7 +52,7 @@ Published package metadata pins release coordinates. CocoaPods consumes `Latchwa
 
 ## Diagnostics and errors
 
-Diagnostics contain version compatibility, platform, secure key-storage category, attestation support/provider, session state/expiration, installation ID/status, server version, and last request/error identifiers. Native key IDs, JWK thumbprints, tokens, proofs, and evidence are excluded. Native errors are bounded, control-character stripped, secret-pattern redacted, and mapped to the shared `LatchwayError` taxonomy.
+Diagnostics contain version compatibility, platform, secure key-storage category, attestation support/provider, session state/expiration, installation ID/status, server version, and last request/error identifiers. Native key IDs, JWK thumbprints, tokens, proofs, and evidence are excluded. Native errors are bounded, control-character stripped, secret-pattern redacted, and mapped to the shared `LatchwayError` taxonomy. `operation_indeterminate` alone carries a required canonical reconciliation ID through both native bridges; malformed, missing, contradictory, or otherwise attached operation metadata fails closed.
 
 ## Verification boundary
 

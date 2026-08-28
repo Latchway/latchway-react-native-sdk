@@ -2,7 +2,7 @@ import { DefaultLatchwayClient } from "./client.js";
 import { configure } from "./config.js";
 import type { LatchwayClient, LatchwayOptions } from "./types.js";
 
-export { LatchwayError } from "@latchway/client";
+export { errorFromResponse, LatchwayError } from "@latchway/client";
 export { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 export type {
   AndroidKeyPolicy,

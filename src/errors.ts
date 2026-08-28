@@ -12,7 +12,8 @@ const knownCodes = new Set<LatchwayErrorCode>([
   "pricing_unavailable", "route_not_found", "upstream_unavailable", "upstream_timeout",
   "upstream_protocol_error", "configuration_invalid", "server_not_ready",
   "protocol_version_unsupported", "authentication_required", "permission_denied", "resource_not_found",
-  "conflict", "etag_required", "etag_mismatch", "bootstrap_disabled", "rate_limited", "internal_error",
+  "conflict", "etag_required", "etag_mismatch", "bootstrap_disabled", "rate_limited",
+  "operation_indeterminate", "internal_error",
   "client_configuration_invalid", "storage_unavailable", "crypto_unavailable",
   "attestation_provider_missing", "protocol_response_invalid", "request_not_replayable", "network_error",
 ]);
@@ -43,14 +44,39 @@ export function fromNativeError(value: unknown): Error {
     : localCodeMap[rawCode] ?? (knownCodes.has(rawCode as LatchwayErrorCode)
       ? rawCode as LatchwayErrorCode
       : "internal_error");
+  const codeValues = presentValues(record, userInfo, ["code"]);
+  const requestIDValues = presentValues(record, userInfo, ["requestID", "request_id"]);
   const requestIDCandidate = firstString(record.requestID, record.request_id, userInfo.requestID, userInfo.request_id);
   const requestID = isCanonicalRequestID(requestIDCandidate) ? requestIDCandidate : undefined;
+  const statusValues = presentValues(record, userInfo, ["status"]);
   const status = safeStatus(record.status ?? userInfo.status);
+  const retryableValues = presentValues(record, userInfo, ["retryable"]);
   const retryable = record.retryable === true || userInfo.retryable === true;
+  const operationValues = presentValues(record, userInfo, ["operationID", "operation_id"]);
+  const operationID = operationValues.length > 0 &&
+    operationValues.every((candidate) => candidate === operationValues[0]) &&
+    isCanonicalOperationID(operationValues[0])
+    ? operationValues[0]
+    : undefined;
+  const validIndeterminateMetadata = operationID !== undefined && requestID !== undefined &&
+    status === 503 && retryable && codeValues.length > 0 &&
+    codeValues.every((candidate) => candidate === "operation_indeterminate") &&
+    requestIDValues.length > 0 && requestIDValues.every((candidate) => candidate === requestID) &&
+    statusValues.length > 0 && statusValues.every((candidate) => candidate === 503) &&
+    retryableValues.length > 0 && retryableValues.every((candidate) => candidate === true);
+  if ((mapped === "operation_indeterminate" && !validIndeterminateMetadata) ||
+      (mapped !== "operation_indeterminate" && operationValues.length > 0)) {
+    return new LatchwayError(
+      "protocol_response_invalid",
+      "Latchway returned invalid native error metadata.",
+      { requestID, status },
+    );
+  }
   return new LatchwayError(mapped, safeMessage(firstString(record.message, userInfo.message)), {
     requestID,
     status,
     retryable,
+    operationID,
   });
 }
 
@@ -92,6 +118,24 @@ function safeStatus(value: unknown): number | undefined {
 
 function firstString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === "string");
+}
+
+function presentValues(
+  record: Record<string, unknown>,
+  userInfo: Record<string, unknown>,
+  keys: readonly string[],
+): unknown[] {
+  const values: unknown[] = [];
+  for (const source of [record, userInfo]) {
+    for (const key of keys) {
+      if (Object.hasOwn(source, key)) values.push(source[key]);
+    }
+  }
+  return values;
+}
+
+function isCanonicalOperationID(value: unknown): value is string {
+  return typeof value === "string" && /^arq_[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

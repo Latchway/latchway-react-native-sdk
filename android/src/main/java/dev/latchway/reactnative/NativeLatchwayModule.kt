@@ -353,32 +353,35 @@ private fun Promise.rejectSafe(failure: Throwable) {
     val code: String
     val message: String
     val requestID: String?
+    val operationID: String?
     val status: Int?
     val retryable: Boolean
     when (failure) {
         is CancellationException -> {
             code = "cancelled"; message = "The Latchway native operation was cancelled."
-            requestID = null; status = null; retryable = false
+            requestID = null; operationID = null; status = null; retryable = false
         }
         is LatchwayException -> {
             code = failure.code.wireValue
             message = sanitize(failure.message)
             requestID = failure.requestId
+            operationID = failure.operationId
             status = failure.httpStatus
             retryable = failure.retryable
         }
         is IllegalArgumentException -> {
             code = "invalid_configuration"; message = "Latchway native configuration is invalid."
-            requestID = null; status = null; retryable = false
+            requestID = null; operationID = null; status = null; retryable = false
         }
         else -> {
             code = "internal_error"; message = "The Latchway native operation failed."
-            requestID = null; status = null; retryable = false
+            requestID = null; operationID = null; status = null; retryable = false
         }
     }
     val userInfo = Arguments.createMap().apply {
         putString("code", code)
         requestID?.let { putString("requestID", it) }
+        operationID?.let { putString("operationID", it) }
         status?.let { putInt("status", it) }
         putBoolean("retryable", retryable)
     }

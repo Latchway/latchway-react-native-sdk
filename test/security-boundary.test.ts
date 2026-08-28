@@ -14,6 +14,16 @@ describe("JavaScript security boundary", () => {
     expect(spec).toContain("identityToken: string");
     expect(spec).not.toMatch(/accessToken|refreshToken|privateKey|clientDataHash|requestHash|integrityToken|attestationEvidence/gu);
   });
+
+  it("carries only the canonical operation reconciliation identifier through native failures", async () => {
+    const [ios, android] = await Promise.all([
+      readFile(new URL("../ios/LatchwayNativeBridge.swift", import.meta.url), "utf8"),
+      readFile(new URL("../android/src/main/java/dev/latchway/reactnative/NativeLatchwayModule.kt", import.meta.url), "utf8"),
+    ]);
+    expect(ios).toContain('"operationID": failure.operationID as Any');
+    expect(android).toContain('putString("operationID", it)');
+    expect(`${ios}\n${android}`).not.toMatch(/operation.?detail|operation.?payload|operation.?result/iu);
+  });
 });
 
 async function walk(directory: URL): Promise<URL[]> {

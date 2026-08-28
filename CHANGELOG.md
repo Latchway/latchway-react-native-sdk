@@ -14,6 +14,14 @@ Versioning once package publication begins.
   wire protocol 1.
 - The Firebase example now selects the Firebase identity provider explicitly
   and uses the currently supported OpenAI Chat route and request shape.
+- Automatic bodyless retries now require exact canonical, correlated
+  pre-dispatch Problem documents and unambiguous nonce semantics; ambiguous or
+  duplicate response metadata fails closed.
+- Provider credential headers are comprehensively stripped and decoded
+  credential-like query names fail before identity acquisition or dispatch.
+- Native `operation_indeterminate` failures preserve only a canonical
+  reconciliation identifier and reject missing, conflicting, or forbidden
+  operation metadata.
 
 ### Added
 

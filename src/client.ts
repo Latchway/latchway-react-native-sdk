@@ -17,11 +17,27 @@ const forbiddenCredentialHeaders = [
   "authorization",
   "proxy-authorization",
   "api-key",
+  "api_key",
+  "apikey",
   "x-api-key",
   "openai-api-key",
+  "openai_api_key",
   "x-openai-api-key",
+  "anthropic-api-key",
+  "anthropic_api_key",
   "x-goog-api-key",
+  "x-goog_api_key",
+  "access_token",
+  "auth_token",
+  "x-auth-token",
   "cookie",
+  "key",
+  "token",
+  "x-amz-credential",
+  "x-amz-security-token",
+  "x-amz-signature",
+  "x-goog-credential",
+  "x-goog-signature",
   "dpop",
   "x-latchway-feature",
   "x-latchway-protocol-version",
@@ -29,6 +45,59 @@ const forbiddenCredentialHeaders = [
   "x-latchway-sdk",
   "x-latchway-sdk-version",
 ];
+
+const forbiddenCredentialQueryNames = new Set([
+  "authorization",
+  "proxy-authorization",
+  "access_token",
+  "api-key",
+  "api_key",
+  "apikey",
+  "x-api-key",
+  "openai-api-key",
+  "openai_api_key",
+  "x-openai-api-key",
+  "anthropic-api-key",
+  "anthropic_api_key",
+  "x-goog-api-key",
+  "x-goog_api_key",
+  "auth_token",
+  "x-auth-token",
+  "cookie",
+  "key",
+  "token",
+  "x-amz-credential",
+  "x-amz-security-token",
+  "x-amz-signature",
+  "x-goog-credential",
+  "x-goog-signature",
+]);
+
+const preDispatchProblems = {
+  dpop_nonce_required: {
+    title: "DPoP nonce required",
+    detail: "A fresh server DPoP nonce is required.",
+  },
+  session_expired: {
+    title: "Session expired",
+    detail: "The Latchway session is expired.",
+  },
+} as const;
+
+const preDispatchProblemFields = [
+  "type",
+  "title",
+  "status",
+  "detail",
+  "code",
+  "request_id",
+  "retryable",
+] as const;
+
+type PreDispatchProblemCode = keyof typeof preDispatchProblems;
+type VerifiedPreDispatchRejection =
+  | Readonly<{ code: "dpop_nonce_required"; nonce: string }>
+  | Readonly<{ code: "session_expired" }>;
 
 interface NativeAuthorization {
   authorization: string;
@@ -70,7 +139,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const candidate = template === undefined ? request : template.clone();
-      const outbound = await this.authorizeWithNonce(candidate, feature, nonce, preservedRequestID);
+      const outbound = await this.authorizeWithNonce(candidate, feature, nonce, preservedRequestID, signal);
       let response: Response;
       try {
         response = await this.config.fetch(outbound);
@@ -84,17 +153,14 @@ export class DefaultLatchwayClient implements LatchwayClient {
       if (!safeToRetry || response.status !== 401 || !isLatchwayProblem(response)) return response;
       const rejection = await verifiedPreDispatchRejection(response);
       if (rejection === undefined) return response;
-      if (!nonceRetried && rejection === "dpop_nonce_required") {
-        const supplied = response.headers.get("DPoP-Nonce");
-        if (supplied !== null && /^[\u0021-\u007e]{16,512}$/u.test(supplied)) {
-          await response.body?.cancel();
-          preservedRequestID = outbound.headers.get("X-Latchway-Request-ID") ?? undefined;
-          nonce = supplied;
-          nonceRetried = true;
-          continue;
-        }
+      if (!nonceRetried && rejection.code === "dpop_nonce_required") {
+        await response.body?.cancel();
+        preservedRequestID = outbound.headers.get("X-Latchway-Request-ID") ?? undefined;
+        nonce = rejection.nonce;
+        nonceRetried = true;
+        continue;
       }
-      if (!sessionRetried && rejection === "session_expired") {
+      if (!sessionRetried && rejection.code === "session_expired") {
         await response.body?.cancel();
         preservedRequestID = outbound.headers.get("X-Latchway-Request-ID") ?? undefined;
         await this.nativeVoid("refresh", signal);
@@ -142,6 +208,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     feature: string,
     nonce: string | undefined,
     preservedRequestID: string | undefined,
+    signal: AbortSignal = request.signal,
   ): Promise<Request> {
     this.assertActive();
     assertFeature(feature);
@@ -150,7 +217,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
       throw new LatchwayError("request_not_replayable", "The request body has already been consumed.");
     }
     const sanitized = this.sanitize(request);
-    const encoded = await this.nativeString("authorize", request.signal, JSON.stringify({
+    const encoded = await this.nativeString("authorize", signal, JSON.stringify({
       url: request.url,
       method: request.method.toUpperCase(),
       feature,
@@ -218,12 +285,21 @@ export class DefaultLatchwayClient implements LatchwayClient {
   }
 
   private assertGatewayTarget(input: string): void {
-    if (new URL(input).origin !== this.config.baseURL.origin) {
+    const target = new URL(input);
+    if (target.origin !== this.config.baseURL.origin) {
       throw new LatchwayError(
         "client_configuration_invalid",
         "Latchway only authorizes requests to the configured gateway origin.",
       );
     }
+    target.searchParams.forEach((_value, name) => {
+      if (forbiddenCredentialQueryNames.has(name.toLowerCase())) {
+        throw new LatchwayError(
+          "request_invalid",
+          "Upstream provider credentials must not be supplied in the request URL.",
+        );
+      }
+    });
   }
 
   private assertActive(): void {
@@ -378,15 +454,23 @@ function isLatchwayProblem(response: Response): boolean {
 
 async function verifiedPreDispatchRejection(
   response: Response,
-): Promise<"dpop_nonce_required" | "session_expired" | undefined> {
+): Promise<VerifiedPreDispatchRejection | undefined> {
   const responseRequestID = response.headers.get("X-Latchway-Request-ID");
   if (response.status !== 401 || responseRequestID === null ||
       !isCanonicalRequestID(responseRequestID)) return undefined;
   const problem = await boundedProblem(response);
-  if (problem === undefined || problem.status !== response.status || problem.retryable !== true ||
-      problem.request_id !== responseRequestID ||
+  if (problem === undefined || !hasOnlyKeys(problem, preDispatchProblemFields) ||
       (problem.code !== "dpop_nonce_required" && problem.code !== "session_expired")) return undefined;
-  return problem.code;
+  const code: PreDispatchProblemCode = problem.code;
+  const definition = preDispatchProblems[code];
+  if (problem.type !== `https://latchway.dev/problems/${code}` || problem.title !== definition.title ||
+      problem.status !== 401 || problem.status !== response.status || problem.detail !== definition.detail ||
+      problem.request_id !== responseRequestID || problem.retryable !== true) return undefined;
+  const suppliedNonce = response.headers.get("DPoP-Nonce");
+  if (code === "dpop_nonce_required") {
+    return isUsableDPoPNonce(suppliedNonce) ? { code, nonce: suppliedNonce } : undefined;
+  }
+  return suppliedNonce === null ? { code } : undefined;
 }
 
 async function boundedProblem(response: Response): Promise<Record<string, unknown> | undefined> {
@@ -401,7 +485,10 @@ async function boundedProblem(response: Response): Promise<Record<string, unknow
       if (chunk.done) break;
       size += chunk.value.byteLength;
       if (size > 65_536) {
-        await reader.cancel();
+        // Awaiting cancellation of one branch of a cloned/teed response can
+        // wait forever for the untouched application branch to cancel too.
+        // Initiate branch cancellation and return the original response.
+        void reader.cancel().catch(() => undefined);
         return undefined;
       }
       chunks.push(chunk.value);
@@ -412,7 +499,9 @@ async function boundedProblem(response: Response): Promise<Record<string, unknow
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!hasUniqueTopLevelMemberNames(encoded)) return undefined;
+    const value: unknown = JSON.parse(encoded);
     return isRecord(value) ? value : undefined;
   } catch {
     return undefined;
@@ -433,6 +522,85 @@ function parseRecord(encoded: string, label: string): Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= 512 ? value : undefined;
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function hasUniqueTopLevelMemberNames(encoded: string): boolean {
+  const names = new Set<string>();
+  let index = skipJSONWhitespace(encoded, 0);
+  if (encoded[index] !== "{") return false;
+  index += 1;
+  let depth = 1;
+  let expectsName = true;
+  while (index < encoded.length) {
+    index = skipJSONWhitespace(encoded, index);
+    const character = encoded[index];
+    if (character === undefined) return false;
+    if (depth === 1 && expectsName) {
+      if (character === "}") return true;
+      if (character !== '"') return false;
+      const end = jsonStringEnd(encoded, index);
+      if (end === undefined) return false;
+      let name: unknown;
+      try {
+        name = JSON.parse(encoded.slice(index, end + 1));
+      } catch {
+        return false;
+      }
+      if (typeof name !== "string" || names.has(name)) return false;
+      names.add(name);
+      index = skipJSONWhitespace(encoded, end + 1);
+      if (encoded[index] !== ":") return false;
+      index += 1;
+      expectsName = false;
+      continue;
+    }
+    if (character === '"') {
+      const end = jsonStringEnd(encoded, index);
+      if (end === undefined) return false;
+      index = end + 1;
+      continue;
+    }
+    if (character === "{" || character === "[") {
+      depth += 1;
+    } else if (character === "}" || character === "]") {
+      depth -= 1;
+      if (depth === 0) return true;
+    } else if (character === "," && depth === 1) {
+      expectsName = true;
+    }
+    index += 1;
+  }
+  return false;
+}
+
+function jsonStringEnd(encoded: string, start: number): number | undefined {
+  for (let index = start + 1; index < encoded.length; index += 1) {
+    const character = encoded[index];
+    if (character === '"') return index;
+    if (character === "\\") index += 1;
+  }
+  return undefined;
+}
+
+function skipJSONWhitespace(encoded: string, start: number): number {
+  let index = start;
+  while (encoded[index] === " " || encoded[index] === "\t" ||
+         encoded[index] === "\n" || encoded[index] === "\r") index += 1;
+  return index;
+}
+
+function isUsableDPoPNonce(value: string | null): value is string {
+  // Exclude spaces, control characters, commas (including joined duplicate
+  // header values), and non-ASCII bytes from the one-use nonce input.
+  return value !== null && /^[\u0021-\u002b\u002d-\u007e]{16,512}$/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

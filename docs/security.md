@@ -6,7 +6,7 @@
 - Configure a gateway origin, never an upstream provider endpoint.
 - Never add provider keys, service-account credentials, App Attest evidence, or Play Integrity tokens to options or request headers.
 - Treat an authorized `Request` as credential-bearing and short-lived. Prefer `client.fetch` and never log or cache the returned request or its headers.
-- Display only `LatchwayError.code`, status, request ID, retryability, and the already-sanitized message.
+- Display only `LatchwayError.code`, status, request ID, canonical operation ID, retryability, and the already-sanitized message. Preserve an `operation_indeterminate` operation ID for reconciliation rather than automatic replay.
 - Call `revokeCurrentInstallation()` for explicit device removal. `dispose()` alone deliberately preserves secure installation state.
 
 ## Key policy
@@ -19,7 +19,7 @@ App Attest and Play Integrity run entirely in their native SDK providers. Server
 
 ## Replay and redirects
 
-The wrapper rejects cross-origin authorization, strips caller credentials, requests `credentials: "omit"`, `redirect: "error"`, and a no-referrer policy, and never clones or replays a body-bearing request. A maximum of one bodyless replay is permitted only for a 401 Latchway problem marked `retryable: true` whose problem status and request ID agree with the HTTP response metadata. A missing or contradictory field fails closed and the original response is returned without refresh or replay.
+The wrapper rejects cross-origin authorization and provider-credential query names before native authorization or fetch dispatch, strips caller credential headers, requests `credentials: "omit"`, `redirect: "error"`, and a no-referrer policy, and never clones or replays a body-bearing request. A maximum of one bodyless replay is permitted only for an exact canonical 401 Latchway pre-dispatch problem whose status, type, title, detail, code, field set, retryability, and request ID agree with the contract and response metadata. Nonce challenges require one bounded, unambiguous `DPoP-Nonce`; session-expired responses must omit it. A missing, extra, or contradictory field fails closed and the original response is returned without refresh or replay.
 
 ## Reporting
 

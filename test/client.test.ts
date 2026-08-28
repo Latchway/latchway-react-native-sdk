@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LatchwayError } from "@latchway/client";
-import { createLatchwayClient } from "../src/index.js";
+import { createLatchwayClient, errorFromResponse } from "../src/index.js";
 import type { LatchwayClient } from "../src/types.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
@@ -21,6 +21,7 @@ interface BindingFixture {
 
 const clients: LatchwayClient[] = [];
 const ANDROID_REQUEST_ID = "android:550e8400-e29b-41d4-a716-446655440000";
+const OPERATION_ID = "arq_0123456789ABCDEFGHJKMNPQRS";
 let restoreNative: (() => void) | undefined;
 
 afterEach(async () => {
@@ -46,6 +47,10 @@ describe("React Native Latchway client", () => {
       headers: {
         Authorization: "Bearer caller-secret",
         "X-Api-Key": "upstream-secret",
+        "Anthropic-Api-Key": "upstream-secret",
+        "OpenAI_Api_Key": "upstream-secret",
+        "X-Amz-Security-Token": "upstream-secret",
+        "X-Goog-Credential": "upstream-secret",
         DPoP: "caller-proof",
         "X-Latchway-Request-ID": "caller-request",
       },
@@ -54,6 +59,10 @@ describe("React Native Latchway client", () => {
     expect(await response.text()).toBe("ok");
     expect(outbound?.headers.get("Authorization")).toBe("DPoP native-access-token");
     expect(outbound?.headers.get("X-Api-Key")).toBeNull();
+    expect(outbound?.headers.get("Anthropic-Api-Key")).toBeNull();
+    expect(outbound?.headers.get("OpenAI_Api_Key")).toBeNull();
+    expect(outbound?.headers.get("X-Amz-Security-Token")).toBeNull();
+    expect(outbound?.headers.get("X-Goog-Credential")).toBeNull();
     expect(outbound?.headers.get("DPoP")).toBe("header.payload.signature");
     expect(outbound?.headers.get("X-Latchway-Feature")).toBe("habit_assistant");
     expect(outbound?.headers.get("X-Latchway-SDK")).toBe("react-native");
@@ -72,6 +81,54 @@ describe("React Native Latchway client", () => {
       .rejects.toMatchObject({ code: "client_configuration_invalid" });
     expect(getIdentityToken).not.toHaveBeenCalled();
     expect(native.authorizations).toHaveLength(0);
+  });
+
+  it("rejects encoded and case-varied provider credentials in the query before authorization or dispatch", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const getIdentityToken = vi.fn(async () => "identity");
+    const dispatch = vi.fn(async () => new Response("must not dispatch"));
+    const client = create({ getIdentityToken, fetch: dispatch });
+    const credential = "synthetic-provider-secret-marker";
+
+    for (const name of [
+      "AUTHORIZATION",
+      "Proxy-Authorization",
+      "Api-Key",
+      "API_KEY",
+      "%61pi%5Fkey",
+      "X-Api-Key",
+      "OpenAI-Api-Key",
+      "OPENAI_API_KEY",
+      "X-OpenAI-Api-Key",
+      "Anthropic-Api-Key",
+      "ANTHROPIC_API_KEY",
+      "X-Goog-Api-Key",
+      "X-Goog_API_KEY",
+      "Access%5FToken",
+      "AUTH_TOKEN",
+      "X-Auth-Token",
+      "Cookie",
+      "KEY",
+      "ToKeN",
+      "X-Amz-Credential",
+      "X-Amz-Security-Token",
+      "x-amz-signature",
+      "X-Goog-Credential",
+      "X-Goog-Signature",
+    ]) {
+      const failure: unknown = await client.fetch(`/v1/models?${name}=${credential}`, { latchwayFeature: "chat" })
+        .then(() => undefined, (error: unknown) => error);
+      expect(failure).toMatchObject({
+        code: "request_invalid",
+        message: "Upstream provider credentials must not be supplied in the request URL.",
+      });
+      expect(String(failure)).not.toContain(credential);
+    }
+
+    expect(getIdentityToken).not.toHaveBeenCalled();
+    expect(native.authorizations).toHaveLength(0);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("shares one native client across equivalent JavaScript instances", async () => {
@@ -215,6 +272,43 @@ describe("React Native Latchway client", () => {
     expect(native.refreshCalls).toBe(0);
   });
 
+  it("requires the exact canonical pre-dispatch problem before replay", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const responses = [
+      problem("session_expired", {}, true, { type: "https://example.test/problems/session_expired" }),
+      problem("session_expired", {}, true, { title: "Request rejected" }),
+      problem("session_expired", {}, true, { detail: "Please refresh this session." }),
+      problem("session_expired", {}, true, { status: 400 }),
+      problem("session_expired", {}, true, { feature: "chat" }),
+      problem("session_expired", {}, true, { detail: undefined }),
+      problem("dpop_nonce_required"),
+      problem("dpop_nonce_required", { "DPoP-Nonce": "nonce-0123456789,second-nonce" }),
+      problem("dpop_nonce_required", { "DPoP-Nonce": "nonce-0123456789 abcdef" }),
+      problem("session_expired", { "DPoP-Nonce": "nonce-0123456789abcdef" }),
+      duplicateProblem(false),
+      duplicateProblem(true),
+      oversizedProblem(),
+    ];
+    const invalidCount = responses.length;
+    const dispatch = vi.fn(async () => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error("unexpected replay");
+      return response;
+    });
+    const client = create({ fetch: dispatch });
+
+    for (let index = 0; index < invalidCount; index += 1) {
+      const response = await client.fetch(`/v1/models?case=invalid-${index}`, { latchwayFeature: "chat" });
+      expect(response.status).toBe(401);
+      if (index === invalidCount - 1) expect(await response.text()).toHaveLength(65_537);
+    }
+
+    expect(dispatch).toHaveBeenCalledTimes(invalidCount);
+    expect(native.authorizations).toHaveLength(invalidCount);
+    expect(native.refreshCalls).toBe(0);
+  });
+
   it("returns the fetch response stream without consuming or replacing it", async () => {
     const native = new FakeNativeModule();
     install(native);
@@ -284,6 +378,92 @@ describe("React Native Latchway client", () => {
     });
   });
 
+  it("preserves a canonical native reconciliation ID for indeterminate operations", async () => {
+    const native = new FakeNativeModule();
+    native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), {
+      code: "operation_indeterminate",
+      userInfo: {
+        code: "operation_indeterminate",
+        requestID: ANDROID_REQUEST_ID,
+        operationID: OPERATION_ID,
+        status: 503,
+        retryable: true,
+      },
+    });
+    install(native);
+    const client = create();
+
+    await expect(client.quota("chat")).rejects.toMatchObject({
+      name: "LatchwayError",
+      code: "operation_indeterminate",
+      requestID: ANDROID_REQUEST_ID,
+      operationID: OPERATION_ID,
+      status: 503,
+      retryable: true,
+      message: "Sensitive native error detail was redacted.",
+    });
+  });
+
+  it("fails closed on missing, malformed, conflicting, or forbidden native operation IDs", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    const failures = [
+      { code: "operation_indeterminate" },
+      { code: "operation_indeterminate", operationID: "arq_invalid" },
+      {
+        code: "operation_indeterminate",
+        operationID: OPERATION_ID,
+        userInfo: { operation_id: "arq_0ZZZZZZZZZZZZZZZZZZZZZZZZZ" },
+      },
+      {
+        code: "operation_indeterminate",
+        requestID: ANDROID_REQUEST_ID,
+        operationID: OPERATION_ID,
+        status: 500,
+        retryable: true,
+      },
+      { code: "internal_error", operationID: OPERATION_ID },
+    ];
+
+    for (const metadata of failures) {
+      native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), metadata);
+      await expect(client.quota("chat")).rejects.toMatchObject({
+        code: "protocol_response_invalid",
+        message: "Latchway returned invalid native error metadata.",
+        operationID: undefined,
+        retryable: false,
+      });
+    }
+  });
+
+  it("exports HTTP problem conversion with canonical operation reconciliation metadata", async () => {
+    const error = await errorFromResponse(new Response(JSON.stringify({
+      type: "https://latchway.dev/problems/operation_indeterminate",
+      title: "Operation outcome indeterminate",
+      status: 503,
+      detail: "The administrative operation outcome must be reconciled.",
+      code: "operation_indeterminate",
+      request_id: ANDROID_REQUEST_ID,
+      retryable: true,
+      operation_id: OPERATION_ID,
+    }), {
+      status: 503,
+      headers: {
+        "Content-Type": "application/problem+json",
+        "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
+      },
+    }));
+
+    expect(error).toMatchObject({
+      code: "operation_indeterminate",
+      requestID: ANDROID_REQUEST_ID,
+      operationID: OPERATION_ID,
+      status: 503,
+      retryable: true,
+    });
+  });
+
   it("does not misclassify a server configuration error as local SDK configuration", async () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error("The active server revision is invalid."), {
@@ -348,21 +528,61 @@ function baseOptions(overrides: Partial<Parameters<typeof createLatchwayClient>[
   };
 }
 
-function problem(code: string, extraHeaders: Record<string, string> = {}, retryable = true): Response {
+function problem(
+  code: "dpop_nonce_required" | "session_expired",
+  extraHeaders: Record<string, string> = {},
+  retryable = true,
+  overrides: Record<string, unknown> = {},
+): Response {
+  const definition = code === "dpop_nonce_required"
+    ? { title: "DPoP nonce required", detail: "A fresh server DPoP nonce is required." }
+    : { title: "Session expired", detail: "The Latchway session is expired." };
   return new Response(JSON.stringify({
-    type: `https://docs.latchway.dev/errors/${code}`,
-    title: "Request rejected",
-    detail: "The request was rejected before upstream dispatch.",
+    type: `https://latchway.dev/problems/${code}`,
+    title: definition.title,
     status: 401,
+    detail: definition.detail,
     code,
     request_id: ANDROID_REQUEST_ID,
     retryable,
+    ...overrides,
   }), {
     status: 401,
     headers: {
       "Content-Type": "application/problem+json",
       "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
       ...extraHeaders,
+    },
+  });
+}
+
+function oversizedProblem(): Response {
+  return new Response("x".repeat(65_537), {
+    status: 401,
+    headers: {
+      "Content-Type": "application/problem+json",
+      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
+    },
+  });
+}
+
+function duplicateProblem(escaped: boolean): Response {
+  const duplicate = escaped ? "c\\u006fde" : "code";
+  const body = `{` +
+    `"type":"https://latchway.dev/problems/session_expired",` +
+    `"title":"Session expired",` +
+    `"status":401,` +
+    `"detail":"The Latchway session is expired.",` +
+    `"code":"session_expired",` +
+    `"${duplicate}":"session_expired",` +
+    `"request_id":"${ANDROID_REQUEST_ID}",` +
+    `"retryable":true` +
+    `}`;
+  return new Response(body, {
+    status: 401,
+    headers: {
+      "Content-Type": "application/problem+json",
+      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
     },
   });
 }

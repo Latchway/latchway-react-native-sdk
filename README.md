@@ -43,13 +43,15 @@ const response = await latchway.fetch("/v1/chat/completions", {
 
 Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `revokeCurrentInstallation()` is the explicit server and local secure-state destruction operation.
 
-Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. Bodyless `GET`, `HEAD`, and `OPTIONS` requests receive at most one pre-dispatch retry for a `401 application/problem+json` `session_expired` or `dpop_nonce_required` response only when it is marked retryable and its status and request ID agree with the response metadata. Requests with bodies are never cloned or replayed by the JavaScript wrapper.
+Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. Bodyless `GET`, `HEAD`, and `OPTIONS` requests receive at most one pre-dispatch retry only when a `401 application/problem+json` body exactly matches the canonical `session_expired` or `dpop_nonce_required` problem definition and its request ID agrees with the response header. A nonce retry additionally requires one unambiguous bounded `DPoP-Nonce`; a session rejection carrying that header is not replayed. Requests with bodies are never cloned or replayed by the JavaScript wrapper.
+
+`errorFromResponse` is re-exported for explicit conversion of a returned problem response. An `operation_indeterminate` error includes a required canonical `operationID`; preserve it with the request ID and reconcile the operation before deciding whether to retry.
 
 ## Security boundary
 
 The only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of the native operation. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Authorization and DPoP headers cross back only as short-lived output needed for the JavaScript-owned fetch dispatch; diagnostics and errors never include them.
 
-Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, and Latchway protocol headers are removed before authorization. Only the configured gateway origin can be authorized, redirects are rejected, and insecure HTTP is limited to explicitly enabled loopback conformance.
+Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, and Latchway protocol headers are removed before authorization. Provider-credential query names are rejected, including percent-encoded and case-varied names. Only the configured gateway origin can be authorized, redirects are rejected, and insecure HTTP is limited to explicitly enabled loopback conformance.
 
 See [native installation](docs/native-installation.md), [security details](docs/security.md), and [architecture](docs/architecture.md).
 
