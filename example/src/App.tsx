@@ -25,6 +25,7 @@ const deployment = {
   applicationID: required("LATCHWAY_APPLICATION_ID"),
   environment: required("LATCHWAY_ENVIRONMENT"),
   feature: required("LATCHWAY_FEATURE"),
+  errorMappingFeature: required("LATCHWAY_ERROR_MAPPING_FEATURE"),
   model: required("LATCHWAY_MODEL"),
   googleCloudProjectNumber: Platform.OS === "android"
     ? required("LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER")
@@ -151,6 +152,66 @@ export default function App(): React.JSX.Element {
         tamper.status === 401 && tamper.problemCode === "dpop_invalid",
       ));
 
+      try {
+        await measuredClient.quota(deployment.errorMappingFeature);
+        tests.push({ id: "canonical_error_mapping", status: "failed", duration_ms: 0 });
+      } catch (error) {
+        const mapped = error instanceof LatchwayError;
+        const mappedRequestID = mapped ? safeRequestID(error.requestID ?? null) : undefined;
+        tests.push({
+          id: "canonical_error_mapping",
+          status: mapped && error.code === "feature_not_found" && error.status === 404 &&
+            mappedRequestID !== undefined ? "passed" : "failed",
+          duration_ms: 0,
+          ...(mapped && typeof error.status === "number" ? { http_status: error.status } : {}),
+          ...(mapped ? { error_code: error.code, mapped_error_type: "react_native_latchway_error" } : {}),
+          ...(mappedRequestID === undefined ? {} : { request_id: mappedRequestID }),
+        });
+      }
+
+      const beforeRefresh = await measuredClient.authorize(probe, deployment.feature);
+      const beforeDiagnostics = await measuredClient.diagnostics();
+      const beforeAuthorization = beforeRefresh.headers.get("Authorization");
+      const beforeInstallation = beforeDiagnostics.installation.id;
+      if (beforeAuthorization === null || beforeInstallation === undefined) {
+        throw new Error("Session rotation preflight omitted credential or installation metadata.");
+      }
+      const beforeCredentialHash = await sink.sha256(beforeAuthorization);
+      const beforeInstallationHash = await sink.sha256(beforeInstallation);
+      await measuredClient.refresh();
+      const afterRefresh = await measuredClient.authorize(probe, deployment.feature);
+      const afterDiagnostics = await measuredClient.diagnostics();
+      const afterAuthorization = afterRefresh.headers.get("Authorization");
+      const afterInstallation = afterDiagnostics.installation.id;
+      if (afterAuthorization === null || afterInstallation === undefined) {
+        throw new Error("Session rotation result omitted credential or installation metadata.");
+      }
+      const afterCredentialHash = await sink.sha256(afterAuthorization);
+      const afterInstallationHash = await sink.sha256(afterInstallation);
+      tests.push({
+        id: "session_refresh_rotation",
+        status: beforeCredentialHash !== afterCredentialHash && beforeInstallationHash === afterInstallationHash
+          ? "passed" : "failed",
+        duration_ms: 0,
+        credential_before_sha256: beforeCredentialHash,
+        credential_after_sha256: afterCredentialHash,
+        installation_before_sha256: beforeInstallationHash,
+        installation_after_sha256: afterInstallationHash,
+      });
+
+      const badProtocol = await measuredClient.authorize(probe, deployment.feature);
+      const badProtocolHeaders = new Headers(badProtocol.headers);
+      badProtocolHeaders.set("X-Latchway-Protocol-Version", "0");
+      const protocol = await sendBounded(new Request(badProtocol, { headers: badProtocolHeaders }), 65_536);
+      tests.push({
+        ...httpTest(
+          "protocol_version_rejection",
+          protocol,
+          protocol.status === 426 && protocol.problemCode === "protocol_version_unsupported",
+        ),
+        protocol_version_sent: 0,
+      });
+
       const stream = await measuredClient.fetch("/v1/chat/completions", {
         method: "POST",
         latchwayFeature: deployment.feature,
@@ -190,6 +251,15 @@ export default function App(): React.JSX.Element {
       tests.push(booleanTest(
         Platform.OS === "ios" ? "secure_enclave_key" : "hardware_backed_key",
         hardware,
+      ));
+
+      const pendingRevocation = await measuredClient.authorize(probe, deployment.feature);
+      await measuredClient.revokeCurrentInstallation();
+      const revoked = await sendBounded(pendingRevocation, 65_536);
+      tests.push(httpTest(
+        "installation_revocation",
+        revoked,
+        revoked.status === 403 && revoked.problemCode === "installation_revoked",
       ));
 
       const requiredTests = rawEvidenceTests().map((identifier) =>
@@ -311,6 +381,7 @@ function required(name: keyof typeof Config): string {
 
 interface EvidenceSink {
   runID(): Promise<string>;
+  sha256(value: string): Promise<string>;
   write(encoded: string): Promise<void>;
 }
 
@@ -321,6 +392,12 @@ interface EvidenceTest {
   http_status?: number;
   error_code?: string;
   request_id?: string;
+  mapped_error_type?: "react_native_latchway_error";
+  credential_before_sha256?: string;
+  credential_after_sha256?: string;
+  installation_before_sha256?: string;
+  installation_after_sha256?: string;
+  protocol_version_sent?: number;
 }
 
 interface SafeHTTPResult {
@@ -332,7 +409,8 @@ interface SafeHTTPResult {
 
 function evidenceSink(): EvidenceSink {
   const value = NativeModules.LatchwayEvidence as EvidenceSink | undefined;
-  if (value === undefined || typeof value.runID !== "function" || typeof value.write !== "function") {
+  if (value === undefined || typeof value.runID !== "function" || typeof value.sha256 !== "function" ||
+      typeof value.write !== "function") {
     throw new Error("The physical-evidence native sink is unavailable.");
   }
   return value;
@@ -360,6 +438,7 @@ function physicalPins(): Record<string, string> & { native_evidence_sha256: stri
     gateway_deployment_key_id: configured("LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID"),
     gateway_deployment_statement_sha256: configured("LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256"),
     gateway_deployment_public_key_sha256: configured("LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256"),
+    error_mapping_feature: deployment.errorMappingFeature,
     native_evidence_sha256: configured("LATCHWAY_NATIVE_EVIDENCE_SHA256"),
     distribution: configured("LATCHWAY_DISTRIBUTION"),
     signing_certificate_sha256: configured("LATCHWAY_SIGNING_CERTIFICATE_SHA256"),
@@ -388,8 +467,12 @@ function rawEvidenceTests(): string[] {
     "dpop_authorized_request",
     "dpop_replay_rejected",
     "tampered_dpop_rejected",
+    "canonical_error_mapping",
+    "session_refresh_rotation",
+    "protocol_version_rejection",
     "streamed_request",
     "quota",
+    "installation_revocation",
   ];
 }
 

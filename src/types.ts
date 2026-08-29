@@ -105,6 +105,8 @@ export interface LatchwayClient {
   authorize(request: Request, feature: string): Promise<Request>;
   quota(feature: string): Promise<QuotaSnapshot>;
   diagnostics(): Promise<ReactNativeDiagnostics>;
+  /** Explicitly rotates the native session credentials for this installation. */
+  refresh(): Promise<void>;
   revokeCurrentInstallation(): Promise<void>;
   /** Releases this JavaScript instance. Secure installation state remains until revocation. */
   dispose(): Promise<void>;

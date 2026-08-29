@@ -52,7 +52,7 @@ const response = await latchway.fetch("/v1/chat/completions", {
 `applicationID` is the generated application resource ID returned by the
 Admin API, not an app name, package/bundle identifier, or user-chosen slug.
 
-Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `revokeCurrentInstallation()` is the explicit server and local secure-state destruction operation.
+Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them, while `revokeCurrentInstallation()` is the explicit server and local secure-state destruction operation.
 
 Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. Bodyless `GET`, `HEAD`, and `OPTIONS` requests receive at most one pre-dispatch retry only when a `401 application/problem+json` body exactly matches the canonical `session_expired` or `dpop_nonce_required` problem definition and its request ID agrees with the response header. A nonce retry additionally requires one unambiguous bounded `DPoP-Nonce`; a session rejection carrying that header is not replayed. Requests with bodies are never cloned or replayed by the JavaScript wrapper.
 

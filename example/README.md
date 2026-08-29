@@ -19,6 +19,7 @@ Configure these values in the host's uncommitted environment:
 - `LATCHWAY_APPLICATION_ID`
 - `LATCHWAY_ENVIRONMENT`
 - `LATCHWAY_FEATURE`
+- `LATCHWAY_ERROR_MAPPING_FEATURE` (a protected, guaranteed-absent feature)
 - `LATCHWAY_MODEL`
 - `LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER`
 

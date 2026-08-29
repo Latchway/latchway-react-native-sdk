@@ -191,6 +191,11 @@ export class DefaultLatchwayClient implements LatchwayClient {
     return parseDiagnostics(encoded, compatibility.platform, compatibility.nativeSDKVersion);
   }
 
+  async refresh(): Promise<void> {
+    this.assertActive();
+    await this.nativeVoid("refresh");
+  }
+
   async revokeCurrentInstallation(): Promise<void> {
     this.assertActive();
     await this.nativeVoid("revoke");

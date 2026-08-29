@@ -14,7 +14,7 @@ required=(
   LATCHWAY_GATEWAY_ORIGIN LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID
   LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256 LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH
   LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256 LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL
-  LATCHWAY_ENVIRONMENT
+  LATCHWAY_ENVIRONMENT LATCHWAY_ERROR_MAPPING_FEATURE
   LATCHWAY_NATIVE_EVIDENCE_PATH LATCHWAY_NATIVE_PROFILE_PATH LATCHWAY_RUN_ID
 )
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "required protected variable is missing: $name" >&2; exit 2; }; done
@@ -184,6 +184,7 @@ expected = {"application_identifier": os.environ["LATCHWAY_PACKAGE_NAME"], "app_
  "source_commit": os.environ["LATCHWAY_SOURCE_COMMIT"], "core_commit": os.environ["LATCHWAY_CORE_COMMIT"], "contract_bundle_sha256": os.environ["LATCHWAY_CONTRACT_BUNDLE_SHA256"],
  "gateway_image_digest": os.environ["LATCHWAY_GATEWAY_IMAGE_DIGEST"], "gateway_configuration_sha256": os.environ["LATCHWAY_GATEWAY_CONFIGURATION_SHA256"],
  "gateway_origin": os.environ["LATCHWAY_GATEWAY_ORIGIN"], "gateway_environment": os.environ["LATCHWAY_ENVIRONMENT"],
+ "error_mapping_feature": os.environ["LATCHWAY_ERROR_MAPPING_FEATURE"],
  "gateway_deployment_key_id": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID"],
  "gateway_deployment_statement_sha256": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256"],
  "gateway_deployment_public_key_sha256": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256"]}

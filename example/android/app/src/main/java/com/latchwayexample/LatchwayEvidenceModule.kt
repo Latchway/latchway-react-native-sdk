@@ -25,6 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 
 private const val EVIDENCE_FILE = "latchway-rn-device-run.json"
@@ -83,6 +84,16 @@ class LatchwayEvidenceModule(
         val value = reactApplicationContext.getCurrentActivity()?.intent?.getStringExtra("dev.latchway.RUN_ID")
         if (value != null && RUN_ID.matches(value)) promise.resolve(value)
         else promise.reject("device_evidence_invalid", "Protected physical-device run ID is unavailable.")
+    }
+
+    @ReactMethod
+    fun sha256(value: String, promise: Promise) {
+        if (value.toByteArray(StandardCharsets.UTF_8).size !in 1..8_192) {
+            promise.reject("device_evidence_invalid", "Hash input is outside the protected bound.")
+            return
+        }
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
+        promise.resolve(digest.joinToString("") { "%02x".format(Locale.US, it.toInt() and 0xff) })
     }
 
     private fun sanitize(input: JSONObject): JSONObject {
@@ -180,6 +191,8 @@ class LatchwayEvidenceModule(
             val item = input.getJSONObject(index)
             require(item.namesSet().subtract(setOf(
                 "id", "status", "duration_ms", "http_status", "error_code", "request_id",
+                "mapped_error_type", "credential_before_sha256", "credential_after_sha256",
+                "installation_before_sha256", "installation_after_sha256", "protocol_version_sent",
             )).isEmpty())
             require(item.has("id") && item.has("status") && item.has("duration_ms"))
             val id = item.getString("id").also { require(TEST_ID.matches(it) && seen.add(it)) }
@@ -189,6 +202,20 @@ class LatchwayEvidenceModule(
             if (item.has("http_status")) safe.put("http_status", item.getInt("http_status").also { require(it in 100..599) })
             if (item.has("error_code")) safe.put("error_code", item.getString("error_code").also { require(TEST_ID.matches(it)) })
             if (item.has("request_id")) safe.put("request_id", item.getString("request_id").also { require(RUN_ID.matches(it)) })
+            if (item.has("mapped_error_type")) safe.put(
+                "mapped_error_type",
+                item.getString("mapped_error_type").also { require(it == "react_native_latchway_error") },
+            )
+            for (name in listOf(
+                "credential_before_sha256", "credential_after_sha256",
+                "installation_before_sha256", "installation_after_sha256",
+            )) {
+                if (item.has(name)) safe.put(name, item.getString(name).also { require(SHA256.matches(it)) })
+            }
+            if (item.has("protocol_version_sent")) safe.put(
+                "protocol_version_sent",
+                item.getLong("protocol_version_sent").also { require(it in 0..Int.MAX_VALUE.toLong()) },
+            )
             output.put(safe)
         }
         return output
@@ -210,6 +237,7 @@ class LatchwayEvidenceModule(
             "gateway_configuration_sha256", "native_evidence_sha256", "distribution",
             "gateway_origin", "gateway_deployment_key_id", "gateway_deployment_statement_sha256",
             "gateway_deployment_public_key_sha256",
+            "error_mapping_feature",
             "gateway_environment",
             "signing_certificate_sha256", "play_track", "cloud_project_number", "require_licensed",
         )
@@ -224,6 +252,7 @@ class LatchwayEvidenceModule(
         require(KEY_ID.matches(input.getString("gateway_deployment_key_id")))
         require(SHA256.matches(input.getString("gateway_deployment_statement_sha256")))
         require(SHA256.matches(input.getString("gateway_deployment_public_key_sha256")))
+        require(FEATURE.matches(input.getString("error_mapping_feature")))
         require(SHA256.matches(input.getString("native_evidence_sha256")))
         require(SHA256.matches(input.getString("signing_certificate_sha256")))
         require(input.getString("distribution") in setOf("play_internal", "play_closed", "play_open", "play_production"))
@@ -244,6 +273,7 @@ class LatchwayEvidenceModule(
         private val GATEWAY_ORIGIN = Regex("^https://[a-z0-9][A-Za-z0-9.-]*(?::[1-9][0-9]{0,4})?(?:/[A-Za-z0-9_~.-]+)*$")
         private val KEY_ID = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
         private val ENVIRONMENT = Regex("^[a-z][a-z0-9_-]{0,62}$")
+        private val FEATURE = Regex("^[a-z][a-z0-9_.:-]{0,127}$")
         private val CLOUD_PROJECT = Regex("^[1-9][0-9]{0,18}$")
         private val SAFE_TEXT = Regex("^[A-Za-z0-9._+-]{1,128}$")
     }

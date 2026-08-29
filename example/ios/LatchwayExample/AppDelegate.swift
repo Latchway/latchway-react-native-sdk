@@ -3,6 +3,7 @@ import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import Darwin
+import CryptoKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -91,6 +92,19 @@ final class LatchwayEvidence: NSObject {
     } else {
       reject("device_evidence_invalid", "Protected physical-device run ID is unavailable.", nil)
     }
+  }
+
+  @objc(sha256:resolve:reject:)
+  func sha256(
+    _ value: String,
+    resolve: RCTPromiseResolveBlock,
+    reject: RCTPromiseRejectBlock
+  ) {
+    guard (1 ... 8_192).contains(value.utf8.count) else {
+      reject("device_evidence_invalid", "Hash input is outside the protected bound.", nil)
+      return
+    }
+    resolve(SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined())
   }
 
   private static func sanitize(_ input: [String: Any]) throws -> [String: Any] {
@@ -196,6 +210,8 @@ final class LatchwayEvidence: NSObject {
     return try tests.map { item in
       guard Set(item.keys).isSubset(of: [
         "id", "status", "duration_ms", "http_status", "error_code", "request_id",
+        "mapped_error_type", "credential_before_sha256", "credential_after_sha256",
+        "installation_before_sha256", "installation_after_sha256", "protocol_version_sent",
       ]),
       let identifier = item["id"] as? String,
       safe(identifier, pattern: "^[a-z][a-z0-9_]{0,63}$"),
@@ -222,6 +238,25 @@ final class LatchwayEvidence: NSObject {
         guard safe(requestID, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$") else { throw EvidenceFailure.invalid }
         output["request_id"] = requestID
       }
+      if let mapped = item["mapped_error_type"] as? String {
+        guard mapped == "react_native_latchway_error" else { throw EvidenceFailure.invalid }
+        output["mapped_error_type"] = mapped
+      }
+      for name in [
+        "credential_before_sha256", "credential_after_sha256",
+        "installation_before_sha256", "installation_after_sha256",
+      ] {
+        if let hash = item[name] as? String {
+          guard safe(hash, pattern: "^[0-9a-f]{64}$") else { throw EvidenceFailure.invalid }
+          output[name] = hash
+        }
+      }
+      if let version = item["protocol_version_sent"] as? NSNumber {
+        guard version.int64Value >= 0 && version.int64Value <= Int64(Int32.max) else {
+          throw EvidenceFailure.invalid
+        }
+        output["protocol_version_sent"] = version.intValue
+      }
       return output
     }
   }
@@ -243,6 +278,7 @@ final class LatchwayEvidence: NSObject {
       "gateway_configuration_sha256", "native_evidence_sha256", "distribution",
       "gateway_origin", "gateway_deployment_key_id", "gateway_deployment_statement_sha256",
       "gateway_deployment_public_key_sha256",
+      "error_mapping_feature",
       "gateway_environment",
       "signing_certificate_sha256", "javascript_bundle_sha256", "team_id",
       "app_attest_environment",
@@ -268,6 +304,8 @@ final class LatchwayEvidence: NSObject {
           safe(deploymentStatementHash, pattern: "^[0-9a-f]{64}$"),
           let deploymentPublicKeyHash = input["gateway_deployment_public_key_sha256"] as? String,
           safe(deploymentPublicKeyHash, pattern: "^[0-9a-f]{64}$"),
+          let errorMappingFeature = input["error_mapping_feature"] as? String,
+          safe(errorMappingFeature, pattern: "^[a-z][a-z0-9_.:-]{0,127}$"),
           let nativeHash = input["native_evidence_sha256"] as? String,
           safe(nativeHash, pattern: "^[0-9a-f]{64}$"),
           let distribution = input["distribution"] as? String,

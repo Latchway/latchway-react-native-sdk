@@ -93,10 +93,11 @@ def raw_case(platform: str):
     native_observation["tests"] = []
     for name in sorted(validator.PLATFORM_POLICY[native_profile["platform"]]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
-        if name == "dpop_replay_rejected":
-            entry.update(http_status=401, error_code="dpop_replayed", request_id="request-replay-1234")
-        elif name == "tampered_dpop_rejected":
-            entry.update(http_status=401, error_code="dpop_invalid", request_id="request-tamper-1234")
+        fixtures.concrete_test_fields(
+            entry,
+            name,
+            "kotlin_latchway_exception" if android else "swift_latchway_problem",
+        )
         native_observation["tests"].append(entry)
     native_evidence = validator.build_evidence(native_observation, native_profile, SCHEMA)
     assert native_evidence["release_eligible"]
@@ -147,6 +148,15 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
     def test_embedded_pin_substitution_is_rejected(self) -> None:
         profile, raw, collection, native_profile, native_evidence, client_policy = raw_case("react_native_ios_app_attest")
         raw["pins"]["core_commit"] = "0" * 40
+        with self.assertRaises(ValueError):
+            finalizer.build(raw, collection, profile, native_evidence, native_profile, client_policy, self.schema)
+
+    def test_behavior_substitution_is_rejected(self) -> None:
+        profile, raw, collection, native_profile, native_evidence, client_policy = raw_case(
+            "react_native_android_play_integrity",
+        )
+        rotation = next(item for item in raw["tests"] if item["id"] == "session_refresh_rotation")
+        rotation["credential_after_sha256"] = rotation["credential_before_sha256"]
         with self.assertRaises(ValueError):
             finalizer.build(raw, collection, profile, native_evidence, native_profile, client_policy, self.schema)
 

@@ -198,6 +198,15 @@ describe("React Native Latchway client", () => {
     expect(calls).toBe(2);
   });
 
+  it("exposes explicit session rotation without returning credentials", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    await expect(client.refresh()).resolves.toBeUndefined();
+    expect(native.refreshCalls).toBe(1);
+    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
+  });
+
   it("does not replay requests with a body", async () => {
     const native = new FakeNativeModule();
     install(native);

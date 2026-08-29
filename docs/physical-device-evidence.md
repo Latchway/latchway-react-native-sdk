@@ -21,6 +21,10 @@ Each platform run uses the real example application and verifies:
   Integrity session with hardware-backed Android Keystore key material;
 - a DPoP-authorized request, rejection of an exact proof replay, and rejection
   of a fresh request whose DPoP proof was bit-tampered;
+- the concrete React Native `LatchwayError` mapping for a canonical 404,
+  credential rotation across an explicit refresh for the same installation,
+  rejection of protocol version zero, and rejection of a request authorized
+  immediately before that installation is revoked;
 - a bounded, non-empty SSE stream and a quota response through the pinned
   gateway image and configuration;
 - one short-lived, P-256-signed deployment statement fetched from the same
@@ -89,6 +93,9 @@ ECDSA/SHA-256 `.sig`. Statements last no more than 24 hours. Android policy
 requires `PLAY_RECOGNIZED` and `LICENSED`; both platforms deny testing/debug
 clients and require request-hash binding. The candidate embeds the origin,
 environment, key ID, statement digest, and public-key digest.
+Both environments also pin `LATCHWAY_ERROR_MAPPING_FEATURE` to a
+guaranteed-absent feature; the same non-secret value is embedded in the signed
+candidate.
 
 ## Collect and validate
 

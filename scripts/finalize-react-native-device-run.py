@@ -35,11 +35,15 @@ RAW_TESTS = {
         "react_native_bridge", "app_attest_session", "secure_enclave_key",
         "dpop_authorized_request", "dpop_replay_rejected",
         "tampered_dpop_rejected", "streamed_request", "quota",
+        "canonical_error_mapping", "session_refresh_rotation",
+        "installation_revocation", "protocol_version_rejection",
     },
     "react_native_android_play_integrity": {
         "react_native_bridge", "play_integrity_session", "hardware_backed_key",
         "dpop_authorized_request", "dpop_replay_rejected",
         "tampered_dpop_rejected", "streamed_request", "quota",
+        "canonical_error_mapping", "session_refresh_rotation",
+        "installation_revocation", "protocol_version_rejection",
     },
 }
 RAW_PIN_NAMES = {
@@ -48,6 +52,7 @@ RAW_PIN_NAMES = {
         "gateway_configuration_sha256", "native_evidence_sha256", "distribution",
         "gateway_origin", "gateway_deployment_key_id", "gateway_deployment_statement_sha256",
         "gateway_deployment_public_key_sha256",
+        "error_mapping_feature",
         "gateway_environment",
         "signing_certificate_sha256", "javascript_bundle_sha256", "team_id",
         "app_attest_environment",
@@ -57,12 +62,14 @@ RAW_PIN_NAMES = {
         "gateway_configuration_sha256", "native_evidence_sha256", "distribution",
         "gateway_origin", "gateway_deployment_key_id", "gateway_deployment_statement_sha256",
         "gateway_deployment_public_key_sha256",
+        "error_mapping_feature",
         "gateway_environment",
         "signing_certificate_sha256", "play_track", "cloud_project_number", "require_licensed",
     },
 }
 SAFE_TEST = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 SAFE_REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def exact(value: Any, names: set[str], label: str) -> dict[str, Any]:
@@ -78,7 +85,11 @@ def validated_tests(value: Any, platform: str) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict) or not {"id", "status", "duration_ms"}.issubset(item):
             raise ValueError("tests: invalid entry")
-        if set(item) - {"id", "status", "duration_ms", "http_status", "error_code", "request_id"}:
+        if set(item) - {
+            "id", "status", "duration_ms", "http_status", "error_code", "request_id",
+            "mapped_error_type", "credential_before_sha256", "credential_after_sha256",
+            "installation_before_sha256", "installation_after_sha256", "protocol_version_sent",
+        }:
             raise ValueError("tests: unexpected field")
         identifier = item.get("id")
         if not isinstance(identifier, str) or SAFE_TEST.fullmatch(identifier) is None:
@@ -93,10 +104,45 @@ def validated_tests(value: Any, platform: str) -> list[dict[str, Any]]:
             raise ValueError("tests: invalid error code")
         if "request_id" in item and (not isinstance(item["request_id"], str) or SAFE_REQUEST.fullmatch(item["request_id"]) is None):
             raise ValueError("tests: invalid request ID")
+        if "mapped_error_type" in item and item["mapped_error_type"] != "react_native_latchway_error":
+            raise ValueError("tests: invalid typed error mapping")
+        for name in (
+            "credential_before_sha256", "credential_after_sha256",
+            "installation_before_sha256", "installation_after_sha256",
+        ):
+            if name in item and (not isinstance(item[name], str) or SHA256.fullmatch(item[name]) is None):
+                raise ValueError("tests: invalid redacted rotation hash")
+        if "protocol_version_sent" in item and (
+            not isinstance(item["protocol_version_sent"], int)
+            or not 0 <= item["protocol_version_sent"] <= 2_147_483_647
+        ):
+            raise ValueError("tests: invalid protocol version")
         output.append(dict(item))
     identifiers = [item["id"] for item in output]
     if len(identifiers) != len(set(identifiers)) or set(identifiers) != RAW_TESTS[platform]:
         raise ValueError("tests: identifiers do not match platform run contract")
+    by_id = {item["id"]: item for item in output}
+    for test_id, status, code in (
+        ("canonical_error_mapping", 404, "feature_not_found"),
+        ("installation_revocation", 403, "installation_revoked"),
+        ("protocol_version_rejection", 426, "protocol_version_unsupported"),
+    ):
+        item = by_id[test_id]
+        if item.get("http_status") != status or item.get("error_code") != code or "request_id" not in item:
+            raise ValueError(f"tests: {test_id} lacks a concrete canonical response")
+    if by_id["canonical_error_mapping"].get("mapped_error_type") != "react_native_latchway_error":
+        raise ValueError("tests: canonical mapping was not the React Native error type")
+    if by_id["protocol_version_rejection"].get("protocol_version_sent") != 0:
+        raise ValueError("tests: protocol rejection did not send version zero")
+    rotation = by_id["session_refresh_rotation"]
+    rotation_hashes = [
+        rotation.get("credential_before_sha256"), rotation.get("credential_after_sha256"),
+        rotation.get("installation_before_sha256"), rotation.get("installation_after_sha256"),
+    ]
+    if any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in rotation_hashes):
+        raise ValueError("tests: rotation lacks redacted credential and installation hashes")
+    if rotation_hashes[0] == rotation_hashes[1] or rotation_hashes[2] != rotation_hashes[3]:
+        raise ValueError("tests: credentials did not rotate for the same installation")
     return output
 
 
@@ -161,6 +207,8 @@ def build(
     if any(not isinstance(value, str) for value in pins.values()):
         raise ValueError("raw pin value is invalid")
     expected = profile["expected_pins"]
+    if native_profile.get("expected_pins", {}).get("error_mapping_feature") != expected.get("error_mapping_feature"):
+        raise ValueError("linked native error-mapping feature differs from the React Native candidate")
     for name, observed in pins.items():
         if name != "distribution" and expected.get(name) != observed:
             raise ValueError("raw pin does not match protected profile")
