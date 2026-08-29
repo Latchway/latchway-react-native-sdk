@@ -16,7 +16,9 @@ builds real React Native 0.82 hosts.
    final contract. Update each exact source commit in
    `release-compatibility.json` only after its repository is green.
 3. Publish the exact JavaScript package, the iOS pod/tag, and all Android Maven
-   artifacts/tag. Their package versions and tag commits must match the lock.
+   artifacts/tag. Their immutable GitHub releases, per-asset attestations,
+   public registry bytes, registry signatures, and source commits must all match
+   the lock; git tag or package metadata alone is not sufficient.
 4. Run the manual `Published dependency consumer` workflow. It removes all
    local path/repository overrides and builds the clean npm consumer plus the
    official iOS and Android example hosts.
@@ -34,17 +36,36 @@ file.
 Configure `@latchway/react-native` on npm with this GitHub repository and the
 exact `release.yml` workflow as a trusted publisher. The workflow runs on a
 GitHub-hosted runner with `id-token: write`, npm 11.6.2, and
-`npm publish --provenance`. If npm requires a token to bootstrap the package's
-first-ever publication, add a narrowly scoped short-lived `NPM_TOKEN` secret,
-publish once through the same reviewed workflow, configure trusted publishing,
-and remove the secret.
+`npm publish --provenance`. The protected `npm` environment must also contain a
+fine-grained `LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN` with read-only repository
+Administration permission. Before any draft or asset mutation, the workflow
+requires GitHub's exact immutable-release settings response to report
+`enabled: true` and a Boolean `enforced_by_owner`. Bootstrap the npm package
+record through a separately reviewed one-time procedure if the registry requires
+it; the release workflow never accepts `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
 
-The workflow publishes or verifies the already checked archive before touching
-the GitHub release. It checks an existing npm version by SHA-512 for safe retry,
-then reconciles a draft or final GitHub release without ever overwriting an
-asset. Existing assets are downloaded and compared byte for byte, only missing
-draft assets are attached, and a mismatched or incomplete final release stops
-the run. An interrupted exact promotion can therefore be rerun safely.
+After the protected immutable-settings preflight, the workflow creates or
+resumes the fixed-asset GitHub draft before npm publication, but does not publish
+that release until every asset is attached. It checks an existing npm version by
+exact tarball bytes and SHA-512 for safe retry, then retains the bounded raw npm
+registry, `npm view --json --include-attestations`, Sigstore, and
+`npm audit signatures` outputs as hash-bound release assets. Existing GitHub
+assets are downloaded and compared byte for byte, only missing draft assets are
+attached, and a mismatched or incomplete final release stops the run. After
+publication, `gh release verify` and `gh release verify-asset` validate GitHub's
+automatic immutable-release attestation and every fixed or adoption-history
+asset.
+
+If an npm publish succeeds but a later step fails, a rerun may adopt that
+immutable version only after rechecking its exact bytes, signatures, and source
+provenance. The attested adoption record binds the original provenance-producing
+run and attempt, the current successful run and attempt, and the exact retained
+registry evidence manifest. The published-dependency gate applies the same
+standard to the locked JavaScript, iOS, and Android releases: it verifies every
+automatic release/asset attestation, source-bound workflow attestation, and live
+registry byte; it also reruns npm signature audit and independently verifies
+Maven signatures against the attested public key. An interrupted exact promotion
+can therefore be rerun safely.
 
 Do not manually retag a failed release or overwrite a published npm version.
 Fix the release inputs, choose a new semantic version, and rerun the complete

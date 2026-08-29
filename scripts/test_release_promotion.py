@@ -443,8 +443,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_github_release_retry_never_overwrites_assets(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        draft = workflow.index("--prepare-draft")
         registry = workflow.index("node scripts/publish-or-verify.mjs")
-        reconciliation = workflow.index("python3 scripts/reconcile-github-release.py")
+        final_step = workflow.index(
+            "Attach every fixed asset, publish once, and require immutability"
+        )
+        reconciliation = workflow.index(
+            "python3 scripts/reconcile-github-release.py", final_step
+        )
+        self.assertLess(draft, registry)
         self.assertLess(registry, reconciliation)
         self.assertNotIn("--clobber", workflow)
         self.assertNotIn("gh release upload", workflow)

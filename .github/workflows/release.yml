@@ -148,6 +148,9 @@ jobs:
     needs: promote
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    permissions:
+      attestations: read
+      contents: read
     env:
       RELEASE_TAG: ${{ needs.promote.outputs.tag }}
     steps:
@@ -218,12 +221,14 @@ jobs:
         working-directory: latchway-react-native-sdk
       - name: Wait for verified locked public SDK releases
         env:
+          GH_TOKEN: ${{ github.token }}
           ANDROID_VERSION: ${{ steps.lock.outputs.android_version }}
           IOS_VERSION: ${{ steps.lock.outputs.ios_version }}
           LATCHWAY_CENTRAL_VERIFY_ATTEMPTS: 180
           LATCHWAY_CENTRAL_VERIFY_DELAY_SECONDS: 30
           LATCHWAY_COCOAPODS_VERIFY_ATTEMPTS: 180
           LATCHWAY_COCOAPODS_VERIFY_DELAY_SECONDS: 30
+          LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/published-dependency-evidence.json
         run: |
           wait_for_coordinates() {
             for attempt in $(seq 1 180); do
@@ -264,6 +269,9 @@ jobs:
           pnpm verify:reproducible
           pnpm consumer:check --published
         working-directory: latchway-react-native-sdk
+      - name: Stage exact published-dependency evidence with the package
+        run: install -m 600 "$RUNNER_TEMP/published-dependency-evidence.json" .artifacts/published-dependency-evidence.json
+        working-directory: latchway-react-native-sdk
       - name: Upload immutable release package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -273,6 +281,7 @@ jobs:
             latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256
             latchway-react-native-sdk/.artifacts/package-evidence.json
             latchway-react-native-sdk/.artifacts/build-reproducibility.json
+            latchway-react-native-sdk/.artifacts/published-dependency-evidence.json
           if-no-files-found: error
           retention-days: 30
 
@@ -381,7 +390,9 @@ jobs:
     needs: [promote, verify, android, ios]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: npm
     permissions:
+      actions: read
       attestations: write
       contents: write
       id-token: write
@@ -419,6 +430,36 @@ jobs:
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
           node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
+      - name: Create or resume the fail-closed GitHub draft
+        id: github_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+        run: |
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          python3 scripts/reconcile-github-release.py \
+            --prepare-draft \
+            --npm-adoption-history \
+            --source-commit "$RELEASE_COMMIT" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
+            "${prerelease[@]}" \
+            --expected-asset-name "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
+            --expected-asset-name "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
+            --expected-asset-name package-evidence.json \
+            --expected-asset-name build-reproducibility.json \
+            --expected-asset-name published-dependency-evidence.json \
+            --expected-asset-name npm-registry-version.json \
+            --expected-asset-name npm-registry-view.json \
+            --expected-asset-name npm-attestations.json \
+            --expected-asset-name npm-audit-signatures.json \
+            --expected-asset-name npm-registry-evidence-manifest.json \
+            --expected-asset-name post-publish-evidence.json
+        working-directory: latchway-react-native-sdk
       - name: Attest reviewed npm package and reproducibility inputs
         uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
         with:
@@ -426,20 +467,44 @@ jobs:
             .release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
             .release/package-evidence.json
             .release/build-reproducibility.json
-      - name: Publish or verify exact npm archive with provenance
+            .release/published-dependency-evidence.json
+      - name: Publish or adopt the exact npm archive with trusted publishing
+        id: registry
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_STATE: ${{ steps.github_release.outputs.release_state }}
         run: node scripts/publish-or-verify.mjs "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz"
         working-directory: latchway-react-native-sdk
-      - name: Reconcile immutable GitHub release assets
+      - name: Verify registry bytes, signatures, and exact trusted-publisher provenance
+        id: registry_evidence
+        env:
+          EXPECTED_RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+          EXPECTED_SOURCE_COMMIT: ${{ needs.promote.outputs.commit }}
+          PUBLISH_PERFORMED: ${{ steps.registry.outputs.publish_performed }}
+        run: node scripts/verify-published.mjs "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz"
+        working-directory: latchway-react-native-sdk
+      - name: Attest exact retained registry and adoption evidence
+        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: |
+            .release/npm-registry-version.json
+            .release/npm-registry-view.json
+            .release/npm-attestations.json
+            .release/npm-audit-signatures.json
+            .release/npm-registry-evidence-manifest.json
+            .release/post-publish-evidence.json
+            .release/${{ steps.registry_evidence.outputs.adoption_asset }}
+      - name: Attach every fixed asset, publish once, and require immutability
         env:
           GH_TOKEN: ${{ github.token }}
+          LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
         run: |
           prerelease=()
           if [[ "$RELEASE_TAG" == *-* ]]; then
             prerelease=(--prerelease)
           fi
           python3 scripts/reconcile-github-release.py \
+            --npm-adoption-history \
+            --source-commit "$RELEASE_COMMIT" \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \
             --title "$RELEASE_TAG" \
@@ -447,5 +512,13 @@ jobs:
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
             ../.release/package-evidence.json \
-            ../.release/build-reproducibility.json
+            ../.release/build-reproducibility.json \
+            ../.release/published-dependency-evidence.json \
+            ../.release/npm-registry-version.json \
+            ../.release/npm-registry-view.json \
+            ../.release/npm-attestations.json \
+            ../.release/npm-audit-signatures.json \
+            ../.release/npm-registry-evidence-manifest.json \
+            ../.release/post-publish-evidence.json \
+            "../.release/${{ steps.registry_evidence.outputs.adoption_asset }}"
         working-directory: latchway-react-native-sdk
