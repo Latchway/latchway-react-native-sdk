@@ -3,14 +3,15 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-import json
 from unittest.mock import patch
 
 
@@ -20,6 +21,11 @@ assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+REPOSITORY = "Latchway/example"
+TAG = "v1.0.0"
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+TAG_OBJECT = "89abcdef0123456789abcdef0123456789abcdef"
 
 
 class FakeClient:
@@ -31,8 +37,11 @@ class FakeClient:
         self.finalized = 0
         self.attestations_verified: list[str] = []
         self.release_attestations_verified: list[str] = []
+        self.release_attested_commits: list[str] = []
         self.settings_reads = 0
         self.settings_enabled = True
+        self.tag_validations: list[tuple[str, str, str]] = []
+        self.reject_tag_validation_calls: set[int] = set()
 
     def immutable_releases_enabled(self, repository: str) -> bool:
         del repository
@@ -47,6 +56,11 @@ class FakeClient:
             **self.value,
             "assets": [dict(asset) for asset in self.value["assets"]],
         }
+
+    def validate_remote_tag(self, repository: str, tag: str, expected_commit: str) -> None:
+        self.tag_validations.append((repository, tag, expected_commit))
+        if len(self.tag_validations) in self.reject_tag_validation_calls:
+            raise MODULE.Rejected("Remote annotated release tag does not identify the promoted commit.")
 
     def create(self, repository: str, tag: str, title: str, prerelease: bool) -> None:
         del repository
@@ -89,9 +103,12 @@ class FakeClient:
         del repository, source_commit
         self.attestations_verified.append(path.name)
 
-    def verify_release_attestation(self, repository: str, tag: str, assets: list[Any]) -> None:
+    def verify_release_attestation(
+        self, repository: str, tag: str, expected_commit: str, assets: list[Any]
+    ) -> None:
         del repository, tag
         self.release_attestations_verified = [asset.name for asset in assets]
+        self.release_attested_commits.append(expected_commit)
 
 
 def release(*, draft: bool, assets: list[dict[str, Any]], title: str = "Latchway v1.0.0") -> dict[str, Any]:
@@ -120,12 +137,13 @@ class ReconciliationTests(unittest.TestCase):
 
     def reconcile(self, client: FakeClient) -> None:
         MODULE.reconcile(
-            repository="Latchway/example",
-            tag="v1.0.0",
+            repository=REPOSITORY,
+            tag=TAG,
             title="Latchway v1.0.0",
             prerelease=False,
             assets=self.assets,
             client=client,
+            expected_commit=COMMIT,
         )
 
     def test_creates_uploads_and_finalizes_new_release(self) -> None:
@@ -134,6 +152,8 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(client.created, 1)
         self.assertEqual(client.uploaded, ["SHA256SUMS", "first.tgz"])
         self.assertEqual(client.finalized, 1)
+        self.assertEqual(client.tag_validations, [(REPOSITORY, TAG, COMMIT)] * 2)
+        self.assertEqual(client.release_attested_commits, [COMMIT])
 
     def test_resumes_partial_draft_without_overwriting_identical_asset(self) -> None:
         first = next(asset for asset in self.assets if asset.name == "first.tgz")
@@ -154,6 +174,7 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(client.created, 0)
         self.assertEqual(client.uploaded, ["SHA256SUMS"])
         self.assertEqual(client.finalized, 1)
+        self.assertEqual(client.tag_validations, [(REPOSITORY, TAG, COMMIT)])
 
     def test_exact_final_release_is_a_read_only_success(self) -> None:
         remote_assets = []
@@ -172,6 +193,8 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(client.created, 0)
         self.assertEqual(client.uploaded, [])
         self.assertEqual(client.finalized, 0)
+        self.assertEqual(client.tag_validations, [])
+        self.assertEqual(client.release_attested_commits, [COMMIT])
 
     def test_rejects_different_existing_bytes(self) -> None:
         first = next(asset for asset in self.assets if asset.name == "first.tgz")
@@ -226,6 +249,49 @@ class ReconciliationTests(unittest.TestCase):
         self.reconcile(client)
         self.assertEqual(client.release_attestations_verified, ["SHA256SUMS", "first.tgz"])
 
+    def test_rejects_remote_tag_change_before_create_without_mutation(self) -> None:
+        client = FakeClient()
+        client.reject_tag_validation_calls = {1}
+        with self.assertRaisesRegex(MODULE.Rejected, "promoted commit"):
+            self.reconcile(client)
+        self.assertEqual(client.created, 0)
+        self.assertEqual(client.uploaded, [])
+        self.assertEqual(client.finalized, 0)
+
+    def test_rejects_remote_tag_change_immediately_before_finalization(self) -> None:
+        remote_assets = []
+        contents: dict[int, bytes] = {}
+        for identifier, asset in enumerate(self.assets, 1):
+            remote_assets.append({
+                "id": identifier,
+                "name": asset.name,
+                "size": asset.size,
+                "state": "uploaded",
+                "digest": f"sha256:{asset.sha256}",
+            })
+            contents[identifier] = asset.path.read_bytes()
+        client = FakeClient(release(draft=True, assets=remote_assets), contents)
+        client.reject_tag_validation_calls = {1}
+        with self.assertRaisesRegex(MODULE.Rejected, "promoted commit"):
+            self.reconcile(client)
+        self.assertEqual(client.uploaded, [])
+        self.assertEqual(client.finalized, 0)
+
+    def test_rejects_noncanonical_expected_commit_before_remote_action(self) -> None:
+        client = FakeClient()
+        with self.assertRaisesRegex(MODULE.Rejected, "canonical Git object ID"):
+            MODULE.reconcile(
+                repository=REPOSITORY,
+                tag=TAG,
+                title="Latchway v1.0.0",
+                prerelease=False,
+                assets=self.assets,
+                client=client,
+                expected_commit="A" * 40,
+            )
+        self.assertEqual(client.settings_reads, 0)
+        self.assertEqual(client.tag_validations, [])
+
     def test_prepare_creates_draft_and_accepts_only_declared_names(self) -> None:
         client = FakeClient()
         state = MODULE.prepare_release(
@@ -233,6 +299,7 @@ class ReconciliationTests(unittest.TestCase):
             tag="v1.0.0",
             title="Latchway v1.0.0",
             prerelease=False,
+            expected_commit=COMMIT,
             expected_names={"first.tgz"},
             adoption_pattern=None,
             client=client,
@@ -245,6 +312,7 @@ class ReconciliationTests(unittest.TestCase):
                 tag="v1.0.0",
                 title="Latchway v1.0.0",
                 prerelease=False,
+                expected_commit=COMMIT,
                 expected_names={"first.tgz"},
                 adoption_pattern=None,
                 client=client,
@@ -294,7 +362,7 @@ class ReconciliationTests(unittest.TestCase):
             prerelease=False,
             assets=MODULE.inspect_assets([str(fixed.path), str(current_path)]),
             client=client,
-            source_commit=commit,
+            expected_commit=commit,
             adoption_pattern=MODULE.re.compile(r"npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\.json"),
         )
         self.assertIn(current_name, client.uploaded)
@@ -313,19 +381,24 @@ class ReconciliationTests(unittest.TestCase):
                 tarballs={fixed.name: fixed},
             )
 
-    def test_admin_preflight_requires_exact_enabled_response_and_protected_token(self) -> None:
+    def test_admin_preflight_requires_exact_enabled_response_and_consumes_protected_token(self) -> None:
         client = MODULE.GitHubClient()
         accepted = {"enabled": True, "enforced_by_owner": False}
-        with patch.dict(os.environ, {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN": "token"}), patch.object(
+        with patch.dict(
+            os.environ, {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN": "token"}, clear=True
+        ), patch.object(
             MODULE.subprocess,
             "run",
             return_value=MODULE.subprocess.CompletedProcess([], 0, json.dumps(accepted), ""),
         ) as run:
-            self.assertTrue(client.immutable_releases_enabled("Latchway/example"))
+            self.assertTrue(client.immutable_releases_enabled(REPOSITORY))
+            self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", os.environ)
             arguments = run.call_args.args[0]
             self.assertIn("X-GitHub-Api-Version: 2026-03-10", arguments)
-            self.assertIn("repos/Latchway/example/immutable-releases", arguments)
-            self.assertEqual(run.call_args.kwargs["env"]["GH_TOKEN"], "token")
+            self.assertIn(f"repos/{REPOSITORY}/immutable-releases", arguments)
+            environment = run.call_args.kwargs["env"]
+            self.assertEqual(environment["GH_TOKEN"], "token")
+            self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", environment)
 
         for response in (
             {"enabled": False, "enforced_by_owner": False},
@@ -333,13 +406,26 @@ class ReconciliationTests(unittest.TestCase):
             {"enabled": True, "enforced_by_owner": False, "unexpected": True},
         ):
             with self.subTest(response=response), patch.dict(
-                os.environ, {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN": "token"}
+                os.environ, {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN": "token"}, clear=True
             ), patch.object(
                 MODULE.subprocess,
                 "run",
                 return_value=MODULE.subprocess.CompletedProcess([], 0, json.dumps(response), ""),
             ):
-                self.assertFalse(client.immutable_releases_enabled("Latchway/example"))
+                self.assertFalse(client.immutable_releases_enabled(REPOSITORY))
+                self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", os.environ)
+
+        with patch.dict(
+            os.environ, {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN": "token"}, clear=True
+        ), patch.object(
+            MODULE.subprocess,
+            "run",
+            return_value=MODULE.subprocess.CompletedProcess(
+                [], 0, '{"enabled":false,"enabled":true,"enforced_by_owner":false}', ""
+            ),
+        ):
+            self.assertFalse(client.immutable_releases_enabled(REPOSITORY))
+            self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", os.environ)
 
     def test_admin_preflight_rejects_missing_or_multiline_token_without_network(self) -> None:
         client = MODULE.GitHubClient()
@@ -349,18 +435,9 @@ class ReconciliationTests(unittest.TestCase):
                 MODULE.subprocess, "run"
             ) as run:
                 with self.assertRaisesRegex(RuntimeError, "credential is missing"):
-                    client.immutable_releases_enabled("Latchway/example")
+                    client.immutable_releases_enabled(REPOSITORY)
+                self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", os.environ)
                 run.assert_not_called()
-
-    def test_release_attestation_invokes_github_verifier_for_every_asset(self) -> None:
-        with patch.object(MODULE, "_run") as run:
-            MODULE.GitHubClient().verify_release_attestation(
-                "Latchway/example", "v1.0.0", self.assets
-            )
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands[0][:4], ["gh", "release", "verify", "v1.0.0"])
-        self.assertEqual(len(commands), 3)
-        self.assertEqual({Path(command[4]).name for command in commands[1:]}, {"first.tgz", "SHA256SUMS"})
 
     def test_adoption_attestation_is_pinned_to_exact_source_commit(self) -> None:
         commit = "c" * 40
@@ -370,6 +447,182 @@ class ReconciliationTests(unittest.TestCase):
             )
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--source-digest") + 1], commit)
+
+
+def attestation_document(
+    assets: list[MODULE.Asset],
+    *,
+    commit: str = COMMIT,
+    include_all_assets: bool = True,
+) -> dict[str, Any]:
+    subjects = [{
+        "uri": f"pkg:github/{REPOSITORY}@{TAG}",
+        "digest": {"sha1": commit},
+    }]
+    if include_all_assets:
+        subjects.extend(
+            {"name": asset.name, "digest": {"sha256": asset.sha256}}
+            for asset in assets
+        )
+    statement = {
+        "_type": MODULE.STATEMENT_TYPE,
+        "subject": subjects,
+        "predicateType": MODULE.RELEASE_PREDICATE_TYPE,
+        "predicate": {"release": {"tag": TAG}},
+    }
+    encoded = base64.b64encode(
+        json.dumps(statement, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii")
+    return {
+        "attestation": {"bundle": {"dsseEnvelope": {
+            "payloadType": "application/vnd.in-toto+json",
+            "payload": encoded,
+            "signatures": [{"sig": "verified-by-gh"}],
+        }}},
+        "verificationResult": {"verified": True},
+    }
+
+
+class GitHubClientTests(unittest.TestCase):
+    def make_assets(self, temporary: str) -> list[MODULE.Asset]:
+        first = Path(temporary, "first.tgz")
+        second = Path(temporary, "SHA256SUMS")
+        first.write_bytes(b"first")
+        second.write_bytes(b"sum")
+        return MODULE.inspect_assets([str(first), str(second)])
+
+    def test_release_and_each_asset_attestation_retry_then_bind_exact_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = self.make_assets(temporary)
+            document = json.dumps(attestation_document(assets))
+            results = [
+                MODULE.subprocess.CompletedProcess([], 1, "", "not propagated"),
+                MODULE.subprocess.CompletedProcess([], 0, document, ""),
+                MODULE.subprocess.CompletedProcess([], 1, "", "asset not propagated"),
+                MODULE.subprocess.CompletedProcess([], 0, document, ""),
+                MODULE.subprocess.CompletedProcess([], 0, document, ""),
+            ]
+            with patch.dict(
+                os.environ,
+                {
+                    "LATCHWAY_GITHUB_RELEASE_ATTESTATION_ATTEMPTS": "2",
+                    "LATCHWAY_GITHUB_RELEASE_ATTESTATION_DELAY_SECONDS": "1",
+                },
+            ), patch.object(MODULE.subprocess, "run", side_effect=results) as run, patch.object(
+                MODULE.time, "sleep"
+            ) as sleep:
+                MODULE.GitHubClient().verify_release_attestation(
+                    REPOSITORY, TAG, COMMIT, assets
+                )
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands[0], commands[1])
+            self.assertEqual(commands[2], commands[3])
+            self.assertEqual(commands[0][:4], ["gh", "release", "verify", TAG])
+            self.assertEqual(
+                {Path(command[4]).name for command in commands[3:]},
+                {"first.tgz", "SHA256SUMS"},
+            )
+            self.assertEqual(sleep.call_count, 2)
+
+    def test_release_attestation_rejects_wrong_commit_missing_asset_and_wrong_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = self.make_assets(temporary)
+            wrong_asset = attestation_document(assets)
+            payload = wrong_asset["attestation"]["bundle"]["dsseEnvelope"]["payload"]
+            statement = json.loads(base64.b64decode(payload, validate=True))
+            statement["subject"][1]["digest"]["sha256"] = "f" * 64
+            wrong_asset["attestation"]["bundle"]["dsseEnvelope"]["payload"] = (
+                base64.b64encode(json.dumps(statement).encode("utf-8")).decode("ascii")
+            )
+            for document, message in (
+                (attestation_document(assets, commit="f" * 40), "promoted source commit"),
+                (attestation_document(assets, include_all_assets=False), "exact release asset set"),
+                (wrong_asset, "exact asset bytes"),
+            ):
+                with self.subTest(message=message), patch.object(
+                    MODULE.subprocess,
+                    "run",
+                    return_value=MODULE.subprocess.CompletedProcess([], 0, json.dumps(document), ""),
+                ):
+                    with self.assertRaisesRegex(MODULE.Rejected, message):
+                        MODULE.GitHubClient().verify_release_attestation(
+                            REPOSITORY, TAG, COMMIT, assets
+                        )
+
+    def test_release_attestation_rejects_duplicate_or_malformed_outer_and_dsse_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = self.make_assets(temporary)
+            malformed_envelope = attestation_document(assets)
+            del malformed_envelope["attestation"]["bundle"]["dsseEnvelope"]["signatures"]
+            valid = attestation_document(assets)
+            payload = base64.b64decode(
+                valid["attestation"]["bundle"]["dsseEnvelope"]["payload"], validate=True
+            ).decode("utf-8")
+            duplicate_inner = payload.replace('"_type":', '"_type":"duplicate","_type":', 1)
+            inner_document = attestation_document(assets)
+            inner_document["attestation"]["bundle"]["dsseEnvelope"]["payload"] = (
+                base64.b64encode(duplicate_inner.encode("utf-8")).decode("ascii")
+            )
+            outputs = [
+                "",
+                "not-json",
+                "[]",
+                "{}",
+                '{"attestation":{},"attestation":{},"verificationResult":{}}',
+                '{"attestation":NaN,"verificationResult":{}}',
+                json.dumps(malformed_envelope),
+                json.dumps(inner_document),
+            ]
+            for output in outputs:
+                with self.subTest(output=output[:40]), patch.object(
+                    MODULE.subprocess,
+                    "run",
+                    return_value=MODULE.subprocess.CompletedProcess([], 0, output, ""),
+                ):
+                    with self.assertRaises((RuntimeError, MODULE.Rejected)):
+                        MODULE.GitHubClient().verify_release_attestation(
+                            REPOSITORY, TAG, COMMIT, assets
+                        )
+
+    def test_remote_tag_requires_exact_annotated_object_and_commit(self) -> None:
+        reference = {
+            "ref": f"refs/tags/{TAG}",
+            "object": {"type": "tag", "sha": TAG_OBJECT},
+        }
+        annotated = {"tag": TAG, "object": {"type": "commit", "sha": COMMIT}}
+        with patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=[
+                MODULE.subprocess.CompletedProcess([], 0, json.dumps(reference), ""),
+                MODULE.subprocess.CompletedProcess([], 0, json.dumps(annotated), ""),
+            ],
+        ) as run:
+            MODULE.GitHubClient().validate_remote_tag(REPOSITORY, TAG, COMMIT)
+        self.assertIn(f"repos/{REPOSITORY}/git/ref/tags/{TAG}", run.call_args_list[0].args[0])
+        self.assertIn(f"repos/{REPOSITORY}/git/tags/{TAG_OBJECT}", run.call_args_list[1].args[0])
+
+        lightweight = {**reference, "object": {"type": "commit", "sha": COMMIT}}
+        with patch.object(
+            MODULE.subprocess,
+            "run",
+            return_value=MODULE.subprocess.CompletedProcess([], 0, json.dumps(lightweight), ""),
+        ) as run:
+            with self.assertRaisesRegex(MODULE.Rejected, "annotated tag object"):
+                MODULE.GitHubClient().validate_remote_tag(REPOSITORY, TAG, COMMIT)
+            self.assertEqual(run.call_count, 1)
+
+        wrong_commit = {"tag": TAG, "object": {"type": "commit", "sha": "f" * 40}}
+        with patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=[
+                MODULE.subprocess.CompletedProcess([], 0, json.dumps(reference), ""),
+                MODULE.subprocess.CompletedProcess([], 0, json.dumps(wrong_commit), ""),
+            ],
+        ):
+            with self.assertRaisesRegex(MODULE.Rejected, "promoted commit"):
+                MODULE.GitHubClient().validate_remote_tag(REPOSITORY, TAG, COMMIT)
 
 
 if __name__ == "__main__":

@@ -430,6 +430,13 @@ jobs:
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
           node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
+      - name: Require GitHub immutable-release attestation tooling
+        run: |
+          set -euo pipefail
+          verify_help=$(gh release verify --help)
+          verify_asset_help=$(gh release verify-asset --help)
+          grep --fixed-strings -- '--format' <<<"$verify_help" >/dev/null
+          grep --fixed-strings -- '--format' <<<"$verify_asset_help" >/dev/null
       - name: Create or resume the fail-closed GitHub draft
         id: github_release
         env:
@@ -443,7 +450,7 @@ jobs:
           python3 scripts/reconcile-github-release.py \
             --prepare-draft \
             --npm-adoption-history \
-            --source-commit "$RELEASE_COMMIT" \
+            --expected-commit "$RELEASE_COMMIT" \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \
             --title "$RELEASE_TAG" \
@@ -504,7 +511,7 @@ jobs:
           fi
           python3 scripts/reconcile-github-release.py \
             --npm-adoption-history \
-            --source-commit "$RELEASE_COMMIT" \
+            --expected-commit "$RELEASE_COMMIT" \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \
             --title "$RELEASE_TAG" \

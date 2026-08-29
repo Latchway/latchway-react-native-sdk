@@ -15,6 +15,9 @@ import {
   verifyProvenanceStatement,
   verifyPublishStatement,
 } from "./npm-release-evidence.mjs";
+import { validateGPGStatus } from "./gpg-status.mjs";
+import { validateReleaseAttestation } from "./release-attestation.mjs";
+import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 
@@ -62,7 +65,6 @@ async function verifyJavaScript() {
   verifyReleaseTag(dependency, "JavaScript", tag);
   const release = githubRelease(repository, tag);
   requireImmutableRelease(release, tag);
-  const releaseAttestation = verifyReleaseAttestation(repository, tag);
   const archiveName = `latchway-client-${dependency.version}.tgz`;
   const fixed = [
     archiveName,
@@ -85,6 +87,9 @@ async function verifyJavaScript() {
   if (adoptions.length === 0) throw new Error("JavaScript release is missing an authenticated npm adoption record.");
   requireExactReleaseAssets(release, [...fixed, ...adoptions]);
   const assets = await downloadAssets(repository, release, [...fixed, ...adoptions], "javascript");
+  const releaseAttestation = verifyImmutableReleaseAttestations(
+    repository, tag, dependency.source_commit, assets,
+  );
   for (const name of [archiveName, "build-reproducibility.json", "package-evidence.json",
     "post-publish-evidence.json", "npm-registry-version.json", "npm-registry-view.json",
     "npm-attestations.json", "npm-audit-signatures.json", "npm-registry-evidence-manifest.json",
@@ -284,7 +289,6 @@ async function verifyIOS() {
   verifyReleaseTag(dependency, "iOS", tag);
   const release = githubRelease(repository, tag);
   requireImmutableRelease(release, tag);
-  const releaseAttestation = verifyReleaseAttestation(repository, tag);
   const archiveName = `latchway-ios-sdk-${dependency.version}.tar.gz`;
   const names = [
     archiveName,
@@ -296,6 +300,9 @@ async function verifyIOS() {
   ];
   requireExactReleaseAssets(release, names);
   const assets = await downloadAssets(repository, release, names, "ios");
+  const releaseAttestation = verifyImmutableReleaseAttestations(
+    repository, tag, dependency.source_commit, assets,
+  );
   for (const name of names.filter((name) => name !== `${archiveName}.sha256`)) {
     verifyGitHubAttestation(repository, assets.get(name).path, dependency.source_commit);
   }
@@ -349,7 +356,6 @@ async function verifyAndroid() {
   verifyReleaseTag(dependency, "Android", tag);
   const release = githubRelease(repository, tag);
   requireImmutableRelease(release, tag);
-  const releaseAttestation = verifyReleaseAttestation(repository, tag);
   const archiveName = `latchway-android-${dependency.version}-maven-repository.zip`;
   const required = [
     archiveName,
@@ -362,6 +368,9 @@ async function verifyAndroid() {
   ];
   requireExactReleaseAssets(release, required);
   const assets = await downloadAssets(repository, release, required, "android");
+  const releaseAttestation = verifyImmutableReleaseAttestations(
+    repository, tag, dependency.source_commit, assets,
+  );
   for (const name of required) {
     verifyGitHubAttestation(repository, assets.get(name).path, dependency.source_commit);
   }
@@ -458,15 +467,16 @@ async function verifyAndroid() {
         || file.gpg_status?.primary_fingerprint !== proof.signing_fingerprint
         || !/^[0-9A-F]{40}$/u.test(file.gpg_status?.signing_fingerprint)
         || !Array.isArray(file.gpg_status?.status_lines)
-        || file.gpg_status.status_lines.length === 0 || file.gpg_status.status_lines.length > 64
-        || file.gpg_status.status_lines.some((line) => typeof line !== "string" || line.length > 2048
-          || !line.startsWith("[GNUPG:] "))
-        || !file.gpg_status.status_lines.some((line) => line.startsWith(
-          `[GNUPG:] VALIDSIG ${file.gpg_status.signing_fingerprint} `,
-        ))
         || file.checksums_byte_identical !== true || !Array.isArray(file.checksums)
         || file.checksums.length !== 4) {
       throw new Error("Maven Central evidence contains an invalid or duplicate signed file.");
+    }
+    const retainedGPG = validateGPGStatus(
+      file.gpg_status.status_lines, proof.signing_fingerprint,
+    );
+    if (retainedGPG.primaryFingerprint !== file.gpg_status.primary_fingerprint
+        || retainedGPG.signingFingerprint !== file.gpg_status.signing_fingerprint) {
+      throw new Error(`Maven Central retained GnuPG proof differs for ${file.path}.`);
     }
     seen.add(file.path);
     const live = await fetchBounded(`https://repo1.maven.org/maven2/dev/latchway/${file.path}`,
@@ -592,14 +602,9 @@ async function verifyDetachedSignature(home, index, artifactBytes, signatureByte
   await writeFile(signature, signatureBytes, { mode: 0o600, flag: "wx" });
   const status = execFileSync("gpg", ["--batch", "--homedir", home, "--status-fd", "1", "--verify",
     signature, artifact], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1024 * 1024 });
-  const valid = status.split("\n").filter((line) => line.startsWith("[GNUPG:] VALIDSIG "));
-  if (valid.length !== 1) throw new Error("Independent GnuPG verification did not return one VALIDSIG result.");
-  const fields = valid[0].split(/ +/u).slice(2);
-  if (!new Set([9, 10]).has(fields.length)) throw new Error("Independent GnuPG VALIDSIG is malformed.");
-  const signingFingerprint = fields[0];
-  const primaryFingerprint = fields.length === 10 ? fields[9] : signingFingerprint;
-  if (signingFingerprint !== retainedStatus.signing_fingerprint
-      || primaryFingerprint !== retainedStatus.primary_fingerprint) {
+  const verified = validateGPGStatus(status.split("\n").filter(Boolean), retainedStatus.primary_fingerprint);
+  if (verified.signingFingerprint !== retainedStatus.signing_fingerprint
+      || verified.primaryFingerprint !== retainedStatus.primary_fingerprint) {
     throw new Error("Independent GnuPG verification differs from retained signature proof.");
   }
 }
@@ -628,33 +633,33 @@ function requireExactReleaseAssets(release, names) {
   }
 }
 
-function verifyReleaseAttestation(repository, tag) {
+function verifyReleaseAttestation(repository, tag, sourceCommit, assets) {
   return captureGHVerification(
     ["release", "verify", tag, "--repo", repository, "--format", "json"],
     `${repository}@${tag} immutable release attestation`,
+    { repository, tag, sourceCommit, assets },
   );
 }
 
-function verifyReleaseAsset(repository, tag, path) {
+function verifyReleaseAsset(repository, tag, path, sourceCommit, assets) {
   return captureGHVerification(
     ["release", "verify-asset", tag, path, "--repo", repository, "--format", "json"],
     `${repository}@${tag} immutable release asset attestation`,
+    { repository, tag, sourceCommit, assets },
   );
 }
 
-function captureGHVerification(arguments_, label) {
+function captureGHVerification(arguments_, label, expected) {
   const bytes = execFileSync("gh", arguments_, {
-    encoding: "buffer", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+    encoding: "buffer", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
   });
-  if (bytes.byteLength === 0 || bytes.byteLength > 4 * 1024 * 1024) {
-    throw new Error(`${label} returned an invalid amount of evidence.`);
-  }
-  let value;
-  try { value = JSON.parse(bytes.toString("utf8")); } catch { throw new Error(`${label} did not return JSON.`); }
-  if (value === null || typeof value !== "object" || Object.keys(value).length === 0) {
-    throw new Error(`${label} returned empty evidence.`);
-  }
-  return { bytes: bytes.byteLength, sha256: digest(bytes) };
+  return validateReleaseAttestation(bytes, {
+    repository: expected.repository,
+    tag: expected.tag,
+    expectedCommit: expected.sourceCommit,
+    assets: expected.assets,
+    label,
+  });
 }
 
 async function downloadAssets(repository, release, names, directory) {
@@ -681,10 +686,28 @@ async function downloadAssets(repository, release, names, directory) {
     }
     const path = join(root, name);
     await writeFile(path, bytes, { mode: 0o600 });
-    const immutableAttestation = verifyReleaseAsset(repository, release.tag_name, path);
-    result.set(name, { path, bytes, sha256: observed, immutableAttestation });
+    result.set(name, { path, bytes, sha256: observed });
   }
   return result;
+}
+
+function verifyImmutableReleaseAttestations(repository, tag, sourceCommit, assets) {
+  const expectedAssets = [...assets.entries()].map(([name, asset]) => ({
+    name,
+    sha256: asset.sha256,
+  }));
+  const releaseAttestation = verifyReleaseAttestation(
+    repository, tag, sourceCommit, expectedAssets,
+  );
+  for (const [name, asset] of assets) {
+    asset.immutableAttestation = verifyReleaseAsset(
+      repository, tag, asset.path, sourceCommit, expectedAssets,
+    );
+    if (asset.immutableAttestation.asset_count !== expectedAssets.length) {
+      throw new Error(`${repository} immutable release attestation omitted ${name}.`);
+    }
+  }
+  return releaseAttestation;
 }
 
 function verifyGitHubAttestation(repository, path, sourceCommit) {
@@ -740,11 +763,7 @@ function verifyReleaseTag(dependency, label, explicitTag) {
   const output = execFileSync("git", ["ls-remote", dependency.repository, `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
     encoding: "utf8", maxBuffer: 1024 * 1024,
   }).trim();
-  if (output.length === 0) throw new Error(`${label} release tag ${tag} does not exist.`);
-  const lines = output.split("\n").map((line) => line.split(/\s+/u));
-  const peeled = lines.find(([, reference]) => reference === `refs/tags/${tag}^{}`)?.[0];
-  const direct = lines.find(([, reference]) => reference === `refs/tags/${tag}`)?.[0];
-  if ((peeled ?? direct) !== dependency.source_commit) throw new Error(`${label} release tag commit mismatch.`);
+  requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
 }
 
 async function auditNpmSignatures(packageName, version, integrity, directory) {
