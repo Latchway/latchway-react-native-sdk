@@ -49,7 +49,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "96371f1340a4fb835429290360a344d66a79454d",
+    "source_commit": "e2a0e0c288f0d0b9b6d8104c48f08f764f06c029",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "publisher_android_gradle_plugin": "9.3.2",
