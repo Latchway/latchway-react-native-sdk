@@ -1,12 +1,15 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  repository_dispatch:
+    types: [latchway_release_promoted]
 
 permissions:
   contents: read
+
+concurrency:
+  group: react-native-release-${{ github.event.client_payload.repository.commit }}
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: 24.19.0
@@ -14,17 +17,153 @@ env:
   NPM_VERSION: 11.6.2
 
 jobs:
-  verify:
-    name: Verify immutable release inputs
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  promote:
+    name: Verify core promotion and create SDK tag
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: read
+      contents: write
+    outputs:
+      commit: ${{ steps.promotion.outputs.release_commit }}
+      tag: ${{ steps.promotion.outputs.release_tag }}
+      version: ${{ steps.promotion.outputs.release_version }}
     steps:
-      - name: Check out tagged React Native SDK
+      - name: Check out exact promoted React Native source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.client_payload.repository.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate dispatch envelope before network access
+        shell: bash
+        env:
+          SDK_ID: ${{ github.event.client_payload.repository.id }}
+          SDK_COMMIT: ${{ github.event.client_payload.repository.commit }}
+          SDK_VERSION: ${{ github.event.client_payload.repository.version }}
+          SDK_TAG: ${{ github.event.client_payload.repository.intended_tag }}
+          CORE_TAG: ${{ github.event.client_payload.core_tag }}
+          REPORT_URL: ${{ github.event.client_payload.promotion_evidence_url }}
+          REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
+          OCI_IMAGE_DIGEST: ${{ github.event.client_payload.oci_image_digest }}
+        run: |
+          set -euo pipefail
+          test "$SDK_ID" = react_native
+          [[ "$SDK_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SDK_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$SDK_TAG" = "v$SDK_VERSION"
+          [[ "$CORE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$OCI_IMAGE_DIGEST" =~ ^ghcr\.io/latchway/latchway@sha256:[0-9a-f]{64}$ ]]
+          test "$REPORT_URL" = "https://github.com/Latchway/latchway/releases/download/$CORE_TAG/latchway-cross-repository-promotion.json"
+          test "$GITHUB_SHA" = "$SDK_COMMIT"
+          test "$(git rev-parse --verify HEAD)" = "$SDK_COMMIT"
+      - name: Download and hash the exact core promotion report
+        shell: bash
+        env:
+          CORE_TAG: ${{ github.event.client_payload.core_tag }}
+          REPORT_URL: ${{ github.event.client_payload.promotion_evidence_url }}
+          REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/latchway-cross-repository-promotion.json"
+          test "$REPORT_URL" = "https://github.com/Latchway/latchway/releases/download/$CORE_TAG/latchway-cross-repository-promotion.json"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 120 --max-filesize 2097152 \
+            --fail --location --silent --show-error --output "$report" "$REPORT_URL"
+          printf '%s  %s\n' "$REPORT_SHA256" "$report" | sha256sum --check --strict
+      - name: Verify the core workflow artifact attestation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
+            --repo Latchway/latchway \
+            --signer-workflow Latchway/latchway/.github/workflows/cross-repository-conformance.yml \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+      - name: Validate exact report, dispatch, and local source bindings
+        id: promotion
+        shell: bash
+        env:
+          SDK_COMMIT: ${{ github.event.client_payload.repository.commit }}
+          SDK_VERSION: ${{ github.event.client_payload.repository.version }}
+          SDK_TAG: ${{ github.event.client_payload.repository.intended_tag }}
+          CORE_TAG: ${{ github.event.client_payload.core_tag }}
+          REPORT_URL: ${{ github.event.client_payload.promotion_evidence_url }}
+          REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
+          OCI_IMAGE_DIGEST: ${{ github.event.client_payload.oci_image_digest }}
+        run: |
+          python3 scripts/verify-release-promotion.py \
+            --report "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
+            --report-url "$REPORT_URL" \
+            --report-sha256 "$REPORT_SHA256" \
+            --repository-id react_native \
+            --repository-commit "$SDK_COMMIT" \
+            --repository-version "$SDK_VERSION" \
+            --repository-tag "$SDK_TAG" \
+            --workflow-commit "$GITHUB_SHA" \
+            --core-tag "$CORE_TAG" \
+            --oci-image-digest "$OCI_IMAGE_DIGEST" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Create or verify evidence-gated annotated SDK tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.promotion.outputs.release_commit }}
+          RELEASE_TAG: ${{ steps.promotion.outputs.release_tag }}
+          CORE_TAG: ${{ steps.promotion.outputs.core_tag }}
+          REPORT_SHA256: ${{ steps.promotion.outputs.report_sha256 }}
+        run: |
+          set -euo pipefail
+          message="React Native SDK $RELEASE_TAG
+
+          Core promotion: $CORE_TAG
+          Promotion evidence SHA-256: $REPORT_SHA256"
+          remote=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
+          if [[ -n "$remote" ]]; then
+            tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.type)" = commit
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)" = "$RELEASE_COMMIT"
+            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .message)" = "$message"
+          else
+            jq --null-input --arg tag "$RELEASE_TAG" --arg message "$message" \
+              --arg object "$RELEASE_COMMIT" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{tag: $tag, message: $message, object: $object, type: "commit", tagger: {name: "github-actions[bot]", email: "41898282+github-actions[bot]@users.noreply.github.com", date: $date}}' \
+              > "$RUNNER_TEMP/sdk-tag-object.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input "$RUNNER_TEMP/sdk-tag-object.json" > "$RUNNER_TEMP/sdk-tag-result.json"
+            tag_object=$(jq --raw-output .sha "$RUNNER_TEMP/sdk-tag-result.json")
+            jq --null-input --arg ref "refs/tags/$RELEASE_TAG" --arg sha "$tag_object" \
+              '{ref: $ref, sha: $sha}' > "$RUNNER_TEMP/sdk-tag-ref.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input "$RUNNER_TEMP/sdk-tag-ref.json" >/dev/null
+          fi
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
+
+  verify:
+    name: Verify immutable release inputs
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+    steps:
+      - name: Check out exact promoted React Native SDK
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.promote.outputs.commit }}
           path: latchway-react-native-sdk
           fetch-depth: 0
           persist-credentials: false
+      - name: Fetch promoted annotated tag
+        run: |
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "${{ needs.promote.outputs.commit }}"
+        working-directory: latchway-react-native-sdk
       - name: Read immutable compatibility lock
         id: lock
         run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
@@ -74,11 +213,43 @@ jobs:
         working-directory: latchway-react-native-sdk
       - name: Verify tag, release metadata, and all locked source commits
         run: |
-          pnpm release:preflight -- "$GITHUB_REF_NAME"
+          pnpm release:preflight -- "$RELEASE_TAG"
           pnpm verify:compatibility --sources
         working-directory: latchway-react-native-sdk
-      - name: Verify locked public SDK releases
-        run: node scripts/verify-published-dependencies.mjs --all
+      - name: Wait for verified locked public SDK releases
+        env:
+          ANDROID_VERSION: ${{ steps.lock.outputs.android_version }}
+          IOS_VERSION: ${{ steps.lock.outputs.ios_version }}
+          LATCHWAY_CENTRAL_VERIFY_ATTEMPTS: 180
+          LATCHWAY_CENTRAL_VERIFY_DELAY_SECONDS: 30
+          LATCHWAY_COCOAPODS_VERIFY_ATTEMPTS: 180
+          LATCHWAY_COCOAPODS_VERIFY_DELAY_SECONDS: 30
+        run: |
+          wait_for_coordinates() {
+            for attempt in $(seq 1 180); do
+              if node scripts/verify-published-dependencies.mjs --all; then
+                return 0
+              fi
+              if [[ "$attempt" -eq 180 ]]; then
+                echo "Locked SDK coordinates did not become verifiable within 90 minutes." >&2
+                return 1
+              fi
+              sleep 30
+            done
+          }
+
+          wait_for_coordinates &
+          coordinates_pid=$!
+          ../latchway-ios-sdk/scripts/verify-cocoapods-release.sh "$IOS_VERSION" &
+          ios_pid=$!
+          ../latchway-android/scripts/verify-central-release.sh "$ANDROID_VERSION" &
+          android_pid=$!
+
+          status=0
+          wait "$coordinates_pid" || status=1
+          wait "$ios_pid" || status=1
+          wait "$android_pid" || status=1
+          test "$status" -eq 0
         working-directory: latchway-react-native-sdk
       - name: Build and verify immutable core contract bundle
         run: |
@@ -105,13 +276,14 @@ jobs:
 
   android:
     name: Verify published Android consumer
-    needs: verify
+    needs: [promote, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Check out tagged React Native SDK
+      - name: Check out exact promoted React Native SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ needs.promote.outputs.commit }}
           path: latchway-react-native-sdk
           persist-credentials: false
       - name: Read immutable compatibility lock
@@ -152,13 +324,14 @@ jobs:
 
   ios:
     name: Verify published iOS consumer
-    needs: verify
+    needs: [promote, verify]
     runs-on: macos-15
     timeout-minutes: 35
     steps:
-      - name: Check out tagged React Native SDK
+      - name: Check out exact promoted React Native SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ needs.promote.outputs.commit }}
           path: latchway-react-native-sdk
           persist-credentials: false
       - name: Read immutable compatibility lock
@@ -203,16 +376,20 @@ jobs:
 
   publish:
     name: Publish npm package and GitHub release
-    needs: [verify, android, ios]
+    needs: [promote, verify, android, ios]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
+    env:
+      RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+      RELEASE_TAG: ${{ needs.promote.outputs.tag }}
     steps:
-      - name: Check out tagged React Native SDK
+      - name: Check out exact promoted React Native SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ needs.promote.outputs.commit }}
           path: latchway-react-native-sdk
           fetch-depth: 0
           persist-credentials: false
@@ -233,19 +410,22 @@ jobs:
           path: .release
       - name: Verify downloaded archive checksum and release tag
         run: |
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
-          node scripts/release-preflight.mjs "$GITHUB_REF_NAME"
+          node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
       - name: Create recoverable draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "GitHub release already exists; preserving it for an idempotent retry."
-          elif [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --generate-notes --title "$GITHUB_REF_NAME"
+          elif [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --generate-notes --title "$RELEASE_TAG"
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "$GITHUB_REF_NAME"
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
           fi
       - name: Publish or verify exact npm archive with provenance
         env:
@@ -256,9 +436,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" .release/* --repo "$GITHUB_REPOSITORY" --clobber
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          gh release upload "$RELEASE_TAG" .release/* --repo "$GITHUB_REPOSITORY" --clobber
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
           else
-            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
           fi
