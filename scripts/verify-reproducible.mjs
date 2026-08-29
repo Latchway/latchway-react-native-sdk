@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 
 runPackageScript("build");
 const first = await digestTree();
 runPackageScript("build");
 const second = await digestTree();
 if (first !== second) throw new Error("Two clean builds produced different lib trees.");
+const artifacts = new URL("../.artifacts/", import.meta.url);
+await mkdir(artifacts, { recursive: true });
+await writeFile(
+  new URL("build-reproducibility.json", artifacts),
+  `${JSON.stringify({ schema_version: 1, identical: true, sha256: first }, null, 2)}\n`,
+  { mode: 0o600 },
+);
 
 function runPackageScript(name) {
   const packageManager = process.env.npm_execpath;

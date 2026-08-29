@@ -271,6 +271,8 @@ jobs:
           path: |
             latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
             latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256
+            latchway-react-native-sdk/.artifacts/package-evidence.json
+            latchway-react-native-sdk/.artifacts/build-reproducibility.json
           if-no-files-found: error
           retention-days: 30
 
@@ -380,6 +382,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      attestations: write
       contents: write
       id-token: write
     env:
@@ -416,6 +419,13 @@ jobs:
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
           node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
+      - name: Attest reviewed npm package and reproducibility inputs
+        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: |
+            .release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
+            .release/package-evidence.json
+            .release/build-reproducibility.json
       - name: Publish or verify exact npm archive with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -435,5 +445,7 @@ jobs:
             --title "$RELEASE_TAG" \
             "${prerelease[@]}" \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
-            "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256"
+            "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
+            ../.release/package-evidence.json \
+            ../.release/build-reproducibility.json
         working-directory: latchway-react-native-sdk

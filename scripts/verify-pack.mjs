@@ -21,8 +21,9 @@ if (archiveName === undefined) throw new Error("Could not resolve npm archive na
 const archive = new URL(archiveName, artifacts).pathname;
 await copyFile(firstArchive, archive);
 await writeFile(new URL(`${archiveName}.sha256`, artifacts), `${firstHash}  ${archiveName}\n`);
+const archiveBytes = await readFile(archive);
 const listing = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" });
-const entries = listing.split("\n");
+const entries = listing.split("\n").filter((entry) => entry !== "");
 for (const required of [
   "package/package.json",
   "package/contract.lock",
@@ -66,6 +67,23 @@ for (const nativeFile of ["package/android/build.gradle.kts", "package/LatchwayR
     throw new Error(`${nativeFile} contains a local dependency override or snapshot coordinate.`);
   }
 }
+await writeFile(
+  new URL("package-evidence.json", artifacts),
+  `${JSON.stringify({
+    schema_version: 1,
+    package: manifest.name,
+    version: manifest.version,
+    tarball: archiveName,
+    bytes: archiveBytes.byteLength,
+    sha256: firstHash,
+    sha512: createHash("sha512").update(archiveBytes).digest("hex"),
+    integrity: `sha512-${createHash("sha512").update(archiveBytes).digest("base64")}`,
+    double_pack_byte_identical: true,
+    archive_allowlist_verified: true,
+    entries,
+  }, null, 2)}\n`,
+  { mode: 0o600 },
+);
 
 async function pack(destination) {
   const packArguments = ["pack", "--pack-destination", destination.pathname];
