@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { readJSON, readLock, requireLockValue } from "./release-metadata.mjs";
@@ -20,6 +21,10 @@ import { validateReleaseAttestation } from "./release-attestation.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+
+execFileSync("python3", [fileURLToPath(new URL("./require-gh-version.py", import.meta.url))], {
+  stdio: ["ignore", "ignore", "inherit"],
+});
 
 const compatibility = await readJSON("release-compatibility.json");
 const contractLock = await readLock();

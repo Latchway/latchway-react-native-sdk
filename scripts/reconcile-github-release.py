@@ -852,6 +852,13 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_arguments()
     try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("require-gh-version.py"))],
+            check=False,
+            stdout=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("GitHub CLI does not satisfy the release security baseline.")
         adoption_pattern = (
             re.compile(r"npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\.json")
             if arguments.npm_adoption_history else None

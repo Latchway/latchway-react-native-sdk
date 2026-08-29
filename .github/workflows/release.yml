@@ -78,6 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 scripts/require-gh-version.py
           gh attestation verify "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
             --repo Latchway/latchway \
             --signer-workflow Latchway/latchway/.github/workflows/cross-repository-conformance.yml \
@@ -433,6 +434,7 @@ jobs:
       - name: Require GitHub immutable-release attestation tooling
         run: |
           set -euo pipefail
+          python3 scripts/require-gh-version.py
           verify_help=$(gh release verify --help)
           verify_asset_help=$(gh release verify-asset --help)
           grep --fixed-strings -- '--format' <<<"$verify_help" >/dev/null

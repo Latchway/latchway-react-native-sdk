@@ -202,6 +202,15 @@ def verify_provenance(
     executable = shutil.which("gh")
     if executable is None:
         raise Rejected("github_attestation_verifier_unavailable")
+    version_check = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).with_name("require-gh-version.py")), "--gh", executable],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=20,
+    )
+    if version_check.returncode != 0:
+        raise Rejected("github_attestation_verifier_unsafe")
     repository, workflow = PROVENANCE_FOR_PLATFORM[platform]
     environment = dict(os.environ)
     environment["GH_PROMPT_DISABLED"] = "1"

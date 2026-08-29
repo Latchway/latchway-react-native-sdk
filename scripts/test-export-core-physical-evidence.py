@@ -295,6 +295,10 @@ class ExportCoreEvidenceTest(unittest.TestCase):
         fake_gh = binary_root / "gh"
         fake_gh.write_text(
             "#!/bin/sh\n"
+            "if [ \"${1:-}\" = version ]; then\n"
+            "  printf 'gh version 2.97.0 (2026-08-29)\\nhttps://github.com/cli/cli/releases\\n'\n"
+            "  exit 0\n"
+            "fi\n"
             "if [ \"${LATCHWAY_TEST_PROVENANCE_FAILURE:-}\" = 1 ]; then exit 1; fi\n"
             "printf '[{\"verificationResult\":{}}]\\n'\n",
             encoding="utf-8",
