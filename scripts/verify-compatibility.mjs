@@ -138,7 +138,28 @@ async function verifyDependencySources(lock) {
     requireDirectory(coreRoot, "core"),
   ]);
 
-  assertEqual(gitOutput(coreRoot, "rev-parse", "HEAD"), lock.contract.core_commit, "core source commit");
+  const coreHead = gitOutput(coreRoot, "rev-parse", "HEAD");
+  assertEqual(
+    gitOutput(coreRoot, "rev-parse", "--verify", `${lock.contract.core_commit}^{commit}`),
+    lock.contract.core_commit,
+    "locked core contract checkpoint",
+  );
+  assertEqual(
+    gitOutput(coreRoot, "merge-base", lock.contract.core_commit, coreHead),
+    lock.contract.core_commit,
+    "core source ancestry",
+  );
+  const contractDrift = gitOutput(
+    coreRoot,
+    "diff",
+    "--name-only",
+    `${lock.contract.core_commit}..${coreHead}`,
+    "--",
+    "api",
+  );
+  if (contractDrift.length !== 0) {
+    throw new Error(`Core source changed frozen contract files after ${lock.contract.core_commit}: ${contractDrift}`);
+  }
   const coreProtocol = await readJSON("api/protocol-version.json", coreRoot);
   assertEqual(coreProtocol.contract_version, lock.contract.version, "core contract manifest version");
   assertEqual(coreProtocol.wire_protocol?.current, lock.contract.wire_protocol,
