@@ -172,6 +172,31 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   assert.doesNotMatch(workflow, /--source-commit/u);
 });
 
+test("private sibling checkouts use the optional read token and release docs forbid manual tags", async () => {
+  const token = "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}";
+  for (const workflowName of ["ci.yml", "native-consumer.yml", "release.yml"]) {
+    const workflow = await readFile(new URL(`../.github/workflows/${workflowName}`, import.meta.url), "utf8");
+    const siblingCheckouts = workflow.match(/^\s+repository:\s+Latchway\//gmu)?.length ?? 0;
+    assert.ok(siblingCheckouts > 0, `${workflowName} no longer exercises a sibling checkout`);
+    assert.equal(workflow.split(token).length - 1, siblingCheckouts,
+      `${workflowName} has a sibling checkout without the bounded token fallback`);
+  }
+  const documentation = await readFile(new URL("../docs/releasing.md", import.meta.url), "utf8");
+  const overviewDocumentation = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/native-installation.md", import.meta.url), "utf8"),
+  ]);
+  assert.match(documentation, /`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`/u);
+  assert.match(documentation, /Contents read permission and no\s+write permission/u);
+  assert.match(documentation, /repository_dispatch/u);
+  assert.match(documentation, /tag manually/iu);
+  assert.doesNotMatch(documentation, /\n(?:git tag|git push)\s/u);
+  assert.doesNotMatch(
+    `${documentation}\n${overviewDocumentation.join("\n")}`,
+    /tag-triggered release workflow|the tag workflow/iu,
+  );
+});
+
 test("published dependency gate requires immutable attested assets and live registry bytes", async () => {
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
   const androidContract = await readFile(new URL("android-release-evidence.mjs", import.meta.url), "utf8");

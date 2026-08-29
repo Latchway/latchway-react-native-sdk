@@ -99,8 +99,9 @@ compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and
 `contract.lock`, so later compatible releases do not require rewriting CI.
 `pnpm verify:contracts` checks the active lock and vendored canonical fixtures
-byte-for-byte. The tag workflow still refuses publication until exact native
-registry, provenance, physical-device, and immutable-release evidence passes.
+byte-for-byte. The promotion-dispatched release workflow still refuses
+publication until exact native registry, provenance, physical-device, and
+immutable-release evidence passes.
 
 ## License
 

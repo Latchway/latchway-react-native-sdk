@@ -373,6 +373,34 @@ class PromotionVerifierTests(unittest.TestCase):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_docs_delegate_tag_creation_to_promoted_dispatch(self) -> None:
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn("repository_dispatch", documentation)
+        self.assertIn("tag manually", documentation.lower())
+        self.assertNotIn("\ngit tag ", documentation)
+        self.assertNotIn("\ngit push", documentation)
+
+    def test_private_sibling_checkouts_use_read_only_secret_with_public_fallback(self) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only sibling checkout policy")
+        token = (
+            "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN "
+            "|| github.token }}"
+        )
+        for relative in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/native-consumer.yml",
+            ".github/workflows/release.yml",
+        ):
+            with self.subTest(workflow=relative):
+                workflow = (ROOT / relative).read_text(encoding="utf-8")
+                sibling_checkouts = workflow.count("repository: Latchway/")
+                self.assertGreater(sibling_checkouts, 0)
+                self.assertEqual(workflow.count(token), sibling_checkouts)
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn("`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`", documentation)
+        self.assertIn("Contents read permission and no\nwrite permission", documentation)
+
     def test_only_attested_core_dispatch_can_reach_tag_and_publication(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("repository_dispatch:", workflow)
