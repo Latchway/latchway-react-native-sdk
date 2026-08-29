@@ -8,13 +8,15 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-Phase 13 implementation is active against the checked-in Latchway 0.4.0
-development lock and wire protocol 1 while the final 0.5.0 v1 bundle is being
-synchronized across core and all SDKs. Production npm, CocoaPods, Gradle,
-TurboModule, source, fixture, example, and CI changes are authorized when they
-preserve the active lock.
-Never invent a wire contract, publish an unreleased package, fake production
-behavior, or weaken the native security boundary.
+The version 1 React Native implementation is locked to released contract
+checkpoint 0.5.1 and wire protocol 1, with exact reviewed JavaScript, iOS, and
+Android source commits in `release-compatibility.json`. The package remains
+unpublished until protected native-device, dependency-registry, provenance,
+compatibility, and immutable-release evidence gates pass. Production npm,
+CocoaPods, Gradle, TurboModule, source, fixture, example, and CI changes are
+authorized when they preserve the active lock. Never invent a wire contract,
+publish an unreleased package, fake production behavior, or weaken the native
+security boundary.
 
 ## Authority and dependency boundaries
 

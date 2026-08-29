@@ -90,17 +90,17 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-The checked-in development package currently consumes contract `0.4.0`, wire
-protocol `1`, core commit `c9347421fac4c729f20ea87f9205c66c15fa983f`, and
+The version 1 source candidate consumes released contract checkpoint `0.5.1`,
+wire protocol `1`, core commit `2f5e5e67c824e270431f1232cc6dc2824848e380`, and
 bundle SHA-256
-`39d32a2c9e4b0381ff815a40d87d75b51e4f37d6de55121b7bb0beef690c5c59`.
-This is not the final v1 compatibility claim: core contract `0.5.0` is being
-finalized, and core plus all four SDK locks and fixtures must move to its final
-commit and bundle together. All gates read `release-compatibility.json` and
-`contract.lock`, so that synchronization does not require rewriting CI.
+`52ebacd1e38c522b89bb14a1f34782176be32cdf91d22b7ab962003dbca2d754`.
+Core plus all four SDK locks and fixtures are synchronized. This is source
+compatibility evidence, not a claim that the npm package or native dependencies
+have been published. All gates read `release-compatibility.json` and
+`contract.lock`, so later compatible releases do not require rewriting CI.
 `pnpm verify:contracts` checks the active lock and vendored canonical fixtures
-byte-for-byte. The tag workflow refuses publication while `core_release` is
-`unreleased`.
+byte-for-byte. The tag workflow still refuses publication until exact native
+registry, provenance, physical-device, and immutable-release evidence passes.
 
 ## License
 

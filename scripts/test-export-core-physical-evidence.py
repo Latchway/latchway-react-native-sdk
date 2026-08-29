@@ -88,6 +88,7 @@ def android_native_case() -> tuple[dict, dict]:
         "gateway_image_digest": "sha256:" + "4" * 64,
         "gateway_configuration_sha256": "5" * 64,
         "gateway_environment": "production",
+        "error_mapping_feature": "missing_feature",
     }
     current_profile.update(
         platform="android_play_integrity",
@@ -134,10 +135,7 @@ def tests_for(platform: str) -> list[dict]:
     result = []
     for name in sorted(validator.PLATFORM_POLICY[platform]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
-        if name == "dpop_replay_rejected":
-            entry.update(http_status=401, error_code="dpop_replayed", request_id="request-replay-1234")
-        elif name == "tampered_dpop_rejected":
-            entry.update(http_status=401, error_code="dpop_invalid", request_id="request-tamper-1234")
+        fixtures.concrete_test_fields(entry, name, "kotlin_latchway_exception")
         result.append(entry)
     return result
 
@@ -172,7 +170,7 @@ class ExportCoreEvidenceTest(unittest.TestCase):
         deployment_mismatch: bool = False,
     ) -> tuple[pathlib.Path, list[pathlib.Path], list[pathlib.Path], list[pathlib.Path]]:
         versions = versions or {
-            "core": "0.4.0",
+            "core": "1.0.0",
             "javascript": "0.1.0",
             "ios": "0.1.0",
             "android": "0.1.0",
@@ -193,7 +191,8 @@ class ExportCoreEvidenceTest(unittest.TestCase):
         native_hashes: dict[str, str] = {}
         for name, profile, observation in cases:
             evidence = validator.build_evidence(observation, profile, self.schema)
-            self.assertTrue(evidence["release_eligible"])
+            errors = validator.schema_errors(evidence, self.schema) + validator.semantic_errors(evidence, profile)
+            self.assertTrue(evidence["release_eligible"], f"{name}: {errors}")
             profile_path = root / f"{name}-profile.json"
             evidence_path = root / f"{name}-evidence.json"
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
@@ -230,7 +229,7 @@ class ExportCoreEvidenceTest(unittest.TestCase):
             "schema_version": 1,
             "core_commit": "7" * 40,
             "core_release": f"v{versions['core']}",
-            "contract_version": "0.4.0",
+            "contract_version": "0.5.1",
             "bundle_sha256": "3" * 64,
             "oci_image_digest": "ghcr.io/latchway/latchway@sha256:" + "4" * 64,
             "gateway_configuration_sha256": "5" * 64,

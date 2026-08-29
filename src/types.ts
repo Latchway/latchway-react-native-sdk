@@ -70,7 +70,7 @@ export interface QuotaSnapshot {
 export interface ReactNativeDiagnostics {
   sdkVersion: string;
   nativeSDKVersion: string;
-  contractVersion: "0.4.0";
+  contractVersion: "0.5.1";
   protocolVersion: 1;
   platform: ReactNativePlatform;
   keyStorage: string;

@@ -2,15 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "schema_version": 1,
   "contract": {
-    "version": "0.4.0",
+    "version": "0.5.1",
     "wire_protocol": 1,
     "repository": "https://github.com/Latchway/latchway.git",
-    "core_commit": "c9347421fac4c729f20ea87f9205c66c15fa983f",
-    "bundle_sha256": "39d32a2c9e4b0381ff815a40d87d75b51e4f37d6de55121b7bb0beef690c5c59",
+    "core_commit": "2f5e5e67c824e270431f1232cc6dc2824848e380",
+    "bundle_sha256": "52ebacd1e38c522b89bb14a1f34782176be32cdf91d22b7ab962003dbca2d754",
     "fixtures": {
-      "attestation-binding-v1.json": "03e54217ba0da1cac9d882abd26f8cd21642f62dc1fbfaf61c32fc5261d6754e",
-      "dpop-v1.json": "bd897803b910c58926b3f46c1102a1d33c1df89f0266774e6f12cf144d71e587",
-      "protocol-version.json": "3e2cc1b7f6812f8e6319c7f17c8228171af477f77af63be4fb1f04df56f8ffd8"
+      "attestation-binding-v1.json": "e24ec75cc37b331060c67637fe3a4421c644e354fe73b9049b652d61a9e2896b",
+      "dpop-v1.json": "d14702db02a4498e8d52b5b39d5bc25d141dcf87ea4f7c4aeb929fd191eb8101",
+      "protocol-version.json": "c469ab7c23c78dc5de2430bdc1d524268afe400f7af7eb8efb36b1c5d739fd51"
     }
   },
   "react_native": {
@@ -32,13 +32,13 @@
     "package": "@latchway/client",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "2f21cf335d9342b326bc18d137593f09b04c7293"
+    "source_commit": "857f4e12b98b36a9bf4026babaf97a2ae936575e"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "70d731776ed189f25bda8c6635848d0b9dd8af5a",
+    "source_commit": "57b45999fbc6edb717ebbf365ec59efb5abba2e2",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -49,7 +49,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "438291e23d3bb621643f629301d5231266534753",
+    "source_commit": "7d099fff11f6730917f37d019ad730a3973672d7",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "publisher_android_gradle_plugin": "9.3.2",

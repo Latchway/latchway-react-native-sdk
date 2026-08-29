@@ -40,7 +40,7 @@ Native authorization results are intentionally short-lived JavaScript values bec
 
 A module-global lease map is keyed by native-module identity plus gateway/application/environment scope. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.
 
-Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against contract 0.4.0 and wire protocol 1 before any operation.
+Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against contract 0.5.1 and wire protocol 1 before any operation.
 
 ## TurboModule boundary
 

@@ -22,8 +22,8 @@ Versioning once package publication begins.
   and repository installs use pnpm's hoisted linker for CocoaPods framework
   compatibility.
 - Synchronized the SDK contract lock, compatibility constant, and canonical
-  fixtures to the unreleased Latchway contract 0.4.0 checkpoint while keeping
-  wire protocol 1.
+  fixtures to released Latchway contract checkpoint 0.5.1 while keeping wire
+  protocol 1 and pinning the exact reviewed JavaScript, iOS, and Android heads.
 - The Firebase example now selects the Firebase identity provider explicitly
   and uses the currently supported OpenAI Chat route and request shape.
 - Automatic bodyless retries now require exact canonical, correlated
