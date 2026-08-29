@@ -5,9 +5,9 @@
 ```text
 React Native application
   └─ @latchway/react-native
-       ├─ @latchway/client 0.1.0-dev.0 (errors and shared transport concepts)
-       ├─ Latchway/AppAttest 0.1.0 (iOS)
-       └─ dev.latchway:latchway-okhttp + latchway-play-integrity 0.1.0 (Android)
+       ├─ @latchway/client 1.0.0 (errors and shared transport concepts)
+       ├─ Latchway/AppAttest 1.0.0 (iOS)
+       └─ dev.latchway:latchway-okhttp + latchway-play-integrity 1.0.0 (Android)
 ```
 
 The core repository owns OpenAPI, error codes, attestation binding, DPoP behavior, and compatibility. This package owns the handwritten React Native API, fetch integration, TurboModule schema, cross-instance lease, abort propagation, stable error projection, and redacted diagnostics. Native SDKs exclusively own installation keys, secure session persistence, platform attestation, DPoP signing, and native single-flight.
@@ -48,7 +48,7 @@ The handwritten spec carries configuration, URL/method/feature/optional server n
 
 ## Native dependencies
 
-Published package metadata pins release coordinates. CocoaPods consumes `Latchway/AppAttest` 0.1.0. Gradle consumes `dev.latchway:latchway-okhttp:0.1.0` and `dev.latchway:latchway-play-integrity:0.1.0`. Development may point `LATCHWAY_NATIVE_REPOSITORY` or `-PlatchwayNativeRepository` at a locally published Maven repository; local file links never enter npm metadata.
+Published package metadata pins release coordinates. CocoaPods consumes `Latchway/AppAttest` 1.0.0. Gradle consumes `dev.latchway:latchway-okhttp:1.0.0` and `dev.latchway:latchway-play-integrity:1.0.0`. Development may point `LATCHWAY_NATIVE_REPOSITORY` or `-PlatchwayNativeRepository` at a locally published Maven repository; local file links never enter npm metadata.
 
 ## Diagnostics and errors
 

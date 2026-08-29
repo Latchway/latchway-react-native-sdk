@@ -2,13 +2,13 @@
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-> **Release status:** `0.1.0-dev.0` is implemented and tested from source, but has not been published. Use a workspace dependency or the archive produced by `pnpm pack:check`; do not assume an npm or native artifact exists until the release is announced.
+> **Release status:** `1.0.0` is the intended stable source candidate, but has not yet been published. Use a workspace dependency or the archive produced by `pnpm pack:check`; do not assume an npm or native artifact exists until the release is announced.
 
 ## Requirements
 
 - React Native 0.82.x with the New Architecture enabled
-- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 0.1.0
-- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 0.1.0 artifacts
+- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.0.0
+- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.0.0 artifacts
 - Node 24.19.0 and pnpm 10.15.0 for repository development
 
 The repository example additionally pins React Native Firebase 25.1.0, Firebase

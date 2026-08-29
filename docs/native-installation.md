@@ -2,7 +2,7 @@
 
 ## iOS
 
-The podspec pins `Latchway/AppAttest` 0.1.0 and React Native codegen dependencies. Run CocoaPods from the host application after installing the npm package. Enable App Attest for the application identifier and use a real device for conformance; simulators report attestation unsupported.
+The podspec pins `Latchway/AppAttest` 1.0.0 and React Native codegen dependencies. Run CocoaPods from the host application after installing the npm package. Enable App Attest for the application identifier and use a real device for conformance; simulators report attestation unsupported.
 
 The Firebase Authentication example pins React Native Firebase 25.1.0 and
 Firebase Apple SDK 12.15.0 and uses CocoaPods static frameworks. The Latchway
@@ -36,7 +36,7 @@ Local paths belong only in the host Podfile. They are absent from the published 
 
 ## Android
 
-The library pins the native 0.1.0 Maven coordinates. Those AARs publish Kotlin
+The library pins the native 1.0.0 Maven coordinates. Those AARs publish Kotlin
 2.3 metadata and require compile SDK 37; the React Native 0.82 host therefore
 pins Kotlin 2.3.21 while retaining RN's supported consumer AGP 8.12 baseline.
 Play Integrity requires the decimal Google Cloud project number in

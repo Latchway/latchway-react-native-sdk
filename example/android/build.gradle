@@ -2,7 +2,7 @@ buildscript {
     ext {
         buildToolsVersion = "36.0.0"
         minSdkVersion = 24
-        // The exact Latchway Android 0.1.0 AAR metadata requires API 37.
+        // The exact Latchway Android 1.0.0 AAR metadata requires API 37.
         compileSdkVersion = 37
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"

@@ -1,6 +1,6 @@
 {
   "name": "@latchway/react-native",
-  "version": "0.1.0-dev.0",
+  "version": "1.0.0",
   "description": "Hardware-backed React Native client for the Latchway AI gateway",
   "license": "Apache-2.0",
   "type": "module",
@@ -74,7 +74,7 @@
     "verify:reproducible": "node scripts/verify-reproducible.mjs"
   },
   "dependencies": {
-    "@latchway/client": "0.1.0-dev.0"
+    "@latchway/client": "1.0.0"
   },
   "peerDependencies": {
     "react": "19.1.x",

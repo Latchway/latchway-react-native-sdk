@@ -11,7 +11,7 @@ kotlin {
 }
 
 group = "dev.latchway"
-version = "0.1.0-dev.0"
+version = "1.0.0"
 
 react {
     root.set(file(".."))
@@ -23,7 +23,7 @@ react {
 
 android {
     namespace = "dev.latchway.reactnative"
-    // The exact native 0.1.0 AAR metadata requires API 37 consumers.
+    // The exact native 1.0.0 AAR metadata requires API 37 consumers.
     compileSdk = 37
 
     defaultConfig {
@@ -49,6 +49,6 @@ dependencies {
     // A real host's React plugin forces this to the installed 0.82.x patch. The
     // exact baseline keeps standalone package-consumer builds deterministic.
     implementation("com.facebook.react:react-android:0.82.0")
-    implementation("dev.latchway:latchway-okhttp:0.1.0")
-    implementation("dev.latchway:latchway-play-integrity:0.1.0")
+    implementation("dev.latchway:latchway-okhttp:1.0.0")
+    implementation("dev.latchway:latchway-play-integrity:1.0.0")
 }

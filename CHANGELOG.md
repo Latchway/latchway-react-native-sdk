@@ -7,6 +7,8 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-29
+
 ### Changed
 
 - Native consumers now pin the reviewed JavaScript, iOS, Android, Kotlin,
