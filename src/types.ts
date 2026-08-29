@@ -76,7 +76,10 @@ export interface ReactNativeDiagnostics {
   keyStorage: string;
   attestation: {
     support: "supported" | "unsupported" | "unknown";
+    /** Provider bound to the currently accepted native session grant. */
     provider?: string;
+    /** Trust level bound to the currently accepted native session grant. */
+    trustLevel?: string;
     lastOperation?: string;
   };
   session: {

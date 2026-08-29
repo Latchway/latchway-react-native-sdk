@@ -1,0 +1,176 @@
+name: Physical React Native evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full React Native SDK commit embedded in both candidates
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: physical-react-native-production
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    name: React Native App Attest on physical iOS
+    environment: react-native-ios-production
+    runs-on: [self-hosted, macOS, latchway-physical-ios]
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact React Native candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Verify immutable commit and Xcode toolchain
+        env:
+          EXPECTED_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
+          REQUESTED_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_XCODE: ${{ vars.LATCHWAY_XCODE_IDENTITY }}
+        run: |
+          test "$REQUESTED_COMMIT" = "$EXPECTED_COMMIT"
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]*$//')" = "$EXPECTED_XCODE"
+      - name: Collect and validate physical React Native iOS evidence
+        env:
+          LATCHWAY_EVIDENCE_OUTPUT_DIR: ${{ runner.temp }}/latchway-rn-ios-evidence
+          LATCHWAY_IOS_DEVICE_ID: ${{ secrets.LATCHWAY_IOS_DEVICE_ID }}
+          LATCHWAY_IOS_APP_BUNDLE_PATH: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_PATH }}
+          LATCHWAY_IOS_INSTALL_MODE: ${{ vars.LATCHWAY_IOS_INSTALL_MODE }}
+          LATCHWAY_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
+          LATCHWAY_APP_VERSION: ${{ vars.LATCHWAY_IOS_APP_VERSION }}
+          LATCHWAY_BUILD_NUMBER: ${{ vars.LATCHWAY_IOS_BUILD_NUMBER }}
+          LATCHWAY_TEAM_ID: ${{ vars.LATCHWAY_IOS_TEAM_ID }}
+          LATCHWAY_SIGNING_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_IOS_SIGNING_CERTIFICATE_SHA256 }}
+          LATCHWAY_APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
+          LATCHWAY_DISTRIBUTION: ${{ vars.LATCHWAY_IOS_DISTRIBUTION }}
+          LATCHWAY_SOURCE_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
+          LATCHWAY_CORE_COMMIT: ${{ vars.LATCHWAY_CORE_COMMIT }}
+          LATCHWAY_IOS_COMMIT: ${{ vars.LATCHWAY_IOS_COMMIT }}
+          LATCHWAY_RN_SDK_VERSION: ${{ vars.LATCHWAY_RN_SDK_VERSION }}
+          LATCHWAY_NATIVE_SDK_VERSION: ${{ vars.LATCHWAY_IOS_SDK_VERSION }}
+          LATCHWAY_CONTRACT_VERSION: ${{ vars.LATCHWAY_CONTRACT_VERSION }}
+          LATCHWAY_CONTRACT_BUNDLE_SHA256: ${{ vars.LATCHWAY_CONTRACT_BUNDLE_SHA256 }}
+          LATCHWAY_GATEWAY_IMAGE_DIGEST: ${{ vars.LATCHWAY_GATEWAY_IMAGE_DIGEST }}
+          LATCHWAY_GATEWAY_CONFIGURATION_SHA256: ${{ vars.LATCHWAY_GATEWAY_CONFIGURATION_SHA256 }}
+          LATCHWAY_GATEWAY_ORIGIN: ${{ vars.LATCHWAY_GATEWAY_ORIGIN }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256 }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256 }}
+          LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL: ${{ vars.LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL }}
+          LATCHWAY_ENVIRONMENT: ${{ vars.LATCHWAY_ENVIRONMENT }}
+          LATCHWAY_NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
+          LATCHWAY_NATIVE_EVIDENCE_PATH: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_PATH }}
+          LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_IOS_NATIVE_PROFILE_PATH }}
+          LATCHWAY_RUN_ID: rn-ios-${{ github.run_id }}-${{ github.run_attempt }}
+        run: scripts/run-physical-react-native-ios.sh
+      - name: Attest the validated iOS profile and evidence
+        id: attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-profile.json
+            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-evidence.json
+            ${{ runner.temp }}/latchway-rn-ios-evidence/SHA256SUMS
+      - name: Retain the iOS GitHub Sigstore bundle with the report
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "${{ runner.temp }}/latchway-rn-ios-evidence/github-attestation.sigstore.json"
+      - name: Retain redacted iOS evidence and hashes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-ios-physical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  android:
+    name: React Native Play Integrity on physical Android
+    environment: react-native-android-production
+    runs-on: [self-hosted, Linux, latchway-physical-android]
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact React Native candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Verify immutable commit and Android toolchain
+        env:
+          EXPECTED_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
+          REQUESTED_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_ADB: ${{ vars.LATCHWAY_ADB_VERSION }}
+          EXPECTED_APKSIGNER: ${{ vars.LATCHWAY_APKSIGNER_VERSION }}
+        run: |
+          test "$REQUESTED_COMMIT" = "$EXPECTED_COMMIT"
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(adb version | head -n 1)" = "$EXPECTED_ADB"
+          test "$(apksigner --version 2>&1 | head -n 1)" = "$EXPECTED_APKSIGNER"
+      - name: Collect and validate physical React Native Android evidence
+        env:
+          LATCHWAY_EVIDENCE_OUTPUT_DIR: ${{ runner.temp }}/latchway-rn-android-evidence
+          LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
+          LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          LATCHWAY_APP_VERSION: ${{ vars.LATCHWAY_ANDROID_APP_VERSION }}
+          LATCHWAY_VERSION_CODE: ${{ vars.LATCHWAY_ANDROID_VERSION_CODE }}
+          LATCHWAY_SIGNING_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_ANDROID_SIGNING_CERTIFICATE_SHA256 }}
+          LATCHWAY_INSTALLED_APK_SET_SHA256: ${{ vars.LATCHWAY_ANDROID_INSTALLED_APK_SET_SHA256 }}
+          LATCHWAY_PLAY_TRACK: ${{ vars.LATCHWAY_ANDROID_PLAY_TRACK }}
+          LATCHWAY_CLOUD_PROJECT_NUMBER: ${{ vars.LATCHWAY_ANDROID_CLOUD_PROJECT_NUMBER }}
+          LATCHWAY_SOURCE_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
+          LATCHWAY_CORE_COMMIT: ${{ vars.LATCHWAY_CORE_COMMIT }}
+          LATCHWAY_ANDROID_COMMIT: ${{ vars.LATCHWAY_ANDROID_COMMIT }}
+          LATCHWAY_RN_SDK_VERSION: ${{ vars.LATCHWAY_RN_SDK_VERSION }}
+          LATCHWAY_NATIVE_SDK_VERSION: ${{ vars.LATCHWAY_ANDROID_SDK_VERSION }}
+          LATCHWAY_CONTRACT_VERSION: ${{ vars.LATCHWAY_CONTRACT_VERSION }}
+          LATCHWAY_CONTRACT_BUNDLE_SHA256: ${{ vars.LATCHWAY_CONTRACT_BUNDLE_SHA256 }}
+          LATCHWAY_GATEWAY_IMAGE_DIGEST: ${{ vars.LATCHWAY_GATEWAY_IMAGE_DIGEST }}
+          LATCHWAY_GATEWAY_CONFIGURATION_SHA256: ${{ vars.LATCHWAY_GATEWAY_CONFIGURATION_SHA256 }}
+          LATCHWAY_GATEWAY_ORIGIN: ${{ vars.LATCHWAY_GATEWAY_ORIGIN }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256 }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256 }}
+          LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL: ${{ vars.LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL }}
+          LATCHWAY_ENVIRONMENT: ${{ vars.LATCHWAY_ENVIRONMENT }}
+          LATCHWAY_NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
+          LATCHWAY_NATIVE_EVIDENCE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_PATH }}
+          LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_PROFILE_PATH }}
+          LATCHWAY_RUN_ID: rn-android-${{ github.run_id }}-${{ github.run_attempt }}
+        run: scripts/run-physical-react-native-android.sh
+      - name: Attest the validated Android profile and evidence
+        id: attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/latchway-rn-android-evidence/react-native-android-profile.json
+            ${{ runner.temp }}/latchway-rn-android-evidence/react-native-android-evidence.json
+            ${{ runner.temp }}/latchway-rn-android-evidence/SHA256SUMS
+      - name: Retain the Android GitHub Sigstore bundle with the report
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "${{ runner.temp }}/latchway-rn-android-evidence/github-attestation.sigstore.json"
+      - name: Retain redacted Android evidence and hashes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-physical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-evidence
+          if-no-files-found: warn
+          retention-days: 30

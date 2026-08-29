@@ -204,7 +204,6 @@ private final class NativeClientContext: @unchecked Sendable {
     private let identity = TransientIdentityTokenProvider()
     private let operationLock = NativeOperationLock()
     private let client: LatchwayClient
-    private let attestationProviderName: String?
 
     init(configuration: NativeConfiguration) throws {
         guard let baseURL = URL(string: configuration.baseURL) else {
@@ -224,7 +223,6 @@ private final class NativeClientContext: @unchecked Sendable {
         } else {
             attestation = nil
         }
-        attestationProviderName = configuration.apple.appAttestEnabled ? "app_attest" : nil
         let fallback: LatchwaySoftwareKeyFallbackPolicy = configuration.apple.softwareKeyFallbackPolicy == "allow"
             ? .allowWhenSecureEnclaveUnavailable
             : .disallow
@@ -285,7 +283,8 @@ private final class NativeClientContext: @unchecked Sendable {
                 "keyStorage": diagnostics.keyStorage.rawValue,
                 "attestation": compact([
                     "support": diagnostics.attestation.support.rawValue,
-                    "provider": self.attestationProviderName as Any,
+                    "provider": diagnostics.trustProvider as Any,
+                    "trustLevel": diagnostics.trustLevel as Any,
                     "lastOperation": diagnostics.attestation.lastOperation as Any,
                 ]),
                 "session": compact([

@@ -11,6 +11,11 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <provider
+            android:name=".LatchwayEvidenceProvider"
+            android:authorities="${applicationId}.device-evidence"
+            android:exported="true"
+            android:readPermission="android.permission.DUMP" />
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"

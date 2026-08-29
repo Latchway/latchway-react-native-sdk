@@ -357,6 +357,7 @@ describe("React Native Latchway client", () => {
       contractVersion: "0.4.0",
       protocolVersion: 1,
       keyStorage: "secure_enclave",
+      attestation: { provider: "app_attest", trustLevel: "device_verified" },
       session: { state: "active" },
     });
     expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private/iu);
@@ -491,6 +492,16 @@ describe("React Native Latchway client", () => {
     expect(() => createLatchwayClient(baseOptions({
       android: { playIntegrityCloudProjectNumber: "not-a-project-number" },
     }))).toThrow(/Google Cloud project number/iu);
+    for (const applicationID of [
+      "habitify",
+      "app_habitify",
+      "app_81J00000000000000000000000",
+      "app_01j00000000000000000000000",
+      "app_01J0000000000000000000000",
+    ]) {
+      expect(() => createLatchwayClient(baseOptions({ applicationID })))
+        .toThrow(/canonical app_ resource ID/iu);
+    }
   });
 
   it("consumes the pinned canonical protocol and DPoP vectors", async () => {
@@ -521,7 +532,7 @@ function create(overrides: Partial<Parameters<typeof createLatchwayClient>[0]> =
 function baseOptions(overrides: Partial<Parameters<typeof createLatchwayClient>[0]> = {}): Parameters<typeof createLatchwayClient>[0] {
   return {
     baseURL: "https://gateway.example.test",
-    applicationID: "app_habitify",
+    applicationID: "app_01J00000000000000000000000",
     environment: "production",
     getIdentityToken: async () => "app-owned-identity-token",
     ...overrides,
@@ -659,7 +670,7 @@ class FakeNativeModule {
       contractVersion: "0.4.0",
       protocolVersion: 1,
       keyStorage: "secure_enclave",
-      attestation: { support: "supported", provider: "app_attest" },
+      attestation: { support: "supported", provider: "app_attest", trustLevel: "device_verified" },
       session: { state: "active", expiresAt: "2026-08-28T00:00:00Z", refreshAvailable: true },
       installation: { id: "ins_0000000000000001", status: "active" },
       server: { version: "0.1.0", lastRequestID: "request-00000001" },

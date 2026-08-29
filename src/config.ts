@@ -17,7 +17,7 @@ export interface RuntimeConfiguration {
 
 export function configure(options: LatchwayOptions): RuntimeConfiguration {
   const baseURL = parseBaseURL(options.baseURL, options.allowInsecureLoopback === true);
-  const applicationID = boundedString(options.applicationID, "applicationID", 128);
+  const applicationID = applicationResourceID(options.applicationID);
   const environment = identifier(options.environment, "environment");
   const identityProvider = identifier(options.identityProvider ?? "custom_jwt", "identityProvider");
   const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
@@ -80,6 +80,17 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     fingerprint: nativeJSON,
     scope: `${baseURL.origin}|${applicationID}|${environment}`,
   };
+}
+
+function applicationResourceID(value: string): string {
+  const applicationID = boundedString(value, "applicationID", 30);
+  if (!/^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$/u.test(applicationID)) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "applicationID must be the canonical app_ resource ID returned by the Admin API.",
+    );
+  }
+  return applicationID;
 }
 
 function tokenProvider(options: LatchwayOptions): () => Promise<string> {

@@ -22,6 +22,9 @@ Configure these values in the host's uncommitted environment:
 - `LATCHWAY_MODEL`
 - `LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER`
 
+`LATCHWAY_APPLICATION_ID` is the generated `app_` resource ID returned by the
+Latchway Admin API, not the package/bundle identifier or a name/slug.
+
 Add the normal Firebase iOS/Android configuration files through the provider's protected application setup. Do not commit service-account credentials, identity tokens, App Attest evidence, Play Integrity tokens, session credentials, or provider keys.
 Copy `.env.example` to the ignored `.env` file and replace only its non-secret
 deployment identifiers; provider credentials never belong there.
@@ -58,3 +61,11 @@ Release-consumer CI deliberately removes both overrides and resolves only the
 public CocoaPods and Maven coordinates. Simulator/emulator success establishes
 consumer compilation; physical App Attest and Play-distributed Play Integrity
 prerequisites are documented in [native installation](../docs/native-installation.md).
+
+The example also contains an example-only, allowlisted evidence sink used by
+the protected physical-device workflows. It rejects debug builds,
+simulators/emulators, test processes, debuggers, malformed release pins, and
+records resembling secrets. `LATCHWAY_CONFORMANCE_AUTORUN=true` is reserved for
+a pinned Release candidate built for those workflows; ordinary development
+should leave it `false`. See [physical-device evidence](../docs/physical-device-evidence.md)
+for the complete build, collection, and cross-repository finalization contract.

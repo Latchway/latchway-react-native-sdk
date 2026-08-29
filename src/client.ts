@@ -361,6 +361,7 @@ function parseDiagnostics(
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native diagnostic state.");
   }
   const provider = optionalString(value.attestation.provider);
+  const trustLevel = optionalString(value.attestation.trustLevel);
   const lastOperation = optionalString(value.attestation.lastOperation);
   const expiresAt = optionalString(value.session.expiresAt);
   const installationID = optionalString(value.installation.id);
@@ -378,6 +379,7 @@ function parseDiagnostics(
     attestation: {
       support,
       ...(provider === undefined ? {} : { provider }),
+      ...(trustLevel === undefined ? {} : { trustLevel }),
       ...(lastOperation === undefined ? {} : { lastOperation }),
     },
     session: {

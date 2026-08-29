@@ -18,6 +18,10 @@ coverage/
 *.tsbuildinfo
 *.log
 
+# Python conformance test cache
+__pycache__/
+*.py[cod]
+
 # iOS local output
 Pods/
 .swiftpm/

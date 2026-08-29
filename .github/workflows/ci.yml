@@ -85,6 +85,16 @@ jobs:
       - name: Verify source, tests, codegen, example, and boundaries
         run: pnpm check
         working-directory: latchway-react-native-sdk
+      - name: Verify physical-device evidence validators fail closed
+        run: |
+          python3 scripts/test-device-evidence.py
+          python3 scripts/test-finalize-react-native-device-run.py
+          python3 scripts/test-export-core-physical-evidence.py
+          python3 scripts/test-verify-gateway-deployment.py
+          bash -n scripts/gateway-deployment-evidence.sh
+          bash -n scripts/run-physical-react-native-ios.sh
+          bash -n scripts/run-physical-react-native-android.sh
+        working-directory: latchway-react-native-sdk
       - name: Pack exact JavaScript dependency
         run: pnpm pack:check
         working-directory: latchway-js

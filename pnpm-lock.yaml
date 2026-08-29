@@ -54,6 +54,9 @@ importers:
 
   example:
     dependencies:
+      '@babel/runtime':
+        specifier: 7.29.7
+        version: 7.29.7
       '@latchway/react-native':
         specifier: workspace:*
         version: link:..
