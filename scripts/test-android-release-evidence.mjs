@@ -1,12 +1,45 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  ANDROID_RELEASE_SCHEMAS,
   androidReleaseAssetNames,
   publicManifestFromFiles,
   validateAndroidReleaseEvidence,
 } from "./android-release-evidence.mjs";
+
+test("Android dependency schemas match the canonical v2 release contract", () => {
+  assert.deepEqual(ANDROID_RELEASE_SCHEMAS, {
+    intent: "latchway.maven-central-upload-intent.v2",
+    record: "latchway.maven-central-deployment.v2",
+    status: "latchway.maven-central-deployment-status.v2",
+    proof: 2,
+    tagBinding: "latchway.github-release-tag-binding.v1",
+  });
+});
+
+test("checked-out Android source agrees with the locked schema constants", async (context) => {
+  let source;
+  try {
+    source = await readFile(
+      new URL("../../latchway-android/scripts/central-deployment-record.py", import.meta.url),
+      "utf8",
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      context.skip("canonical Android checkout is not present in this standalone SDK job");
+      return;
+    }
+    throw error;
+  }
+  for (const [constant, schema] of [
+    ["INTENT_SCHEMA", ANDROID_RELEASE_SCHEMAS.intent],
+    ["RECORD_SCHEMA", ANDROID_RELEASE_SCHEMAS.record],
+    ["STATUS_SCHEMA", ANDROID_RELEASE_SCHEMAS.status],
+  ]) assert.match(source, new RegExp(`^${constant} = "${schema.replaceAll(".", "\\.")}"$`, "mu"));
+});
 
 test("Android dependency contract requires the exact nine release assets", () => {
   assert.deepEqual(androidReleaseAssetNames("1.0.0"), [
@@ -100,7 +133,7 @@ function fixture() {
   const publicManifest = publicManifestFromFiles(files);
   const publicManifestSHA256 = digest(canonicalJSON(publicManifest));
   const uploadIntent = {
-    schema: "latchway.maven-central-upload-intent.v1",
+    schema: "latchway.maven-central-upload-intent.v2",
     repository: "Latchway/latchway-android",
     source_commit: sourceCommit,
     release_tag: tag,
@@ -118,7 +151,7 @@ function fixture() {
     authorization: "recoverable_exact_upload",
   };
   const deployment = {
-    schema: "latchway.maven-central-deployment.v1",
+    schema: "latchway.maven-central-deployment.v2",
     intent_sha256: intentSHA256,
     deployment_name: deploymentName,
     publishing_type: "user_managed",
@@ -132,7 +165,7 @@ function fixture() {
     public_manifest_sha256: null,
   };
   const deploymentStatus = {
-    schema: "latchway.maven-central-deployment-status.v1",
+    schema: "latchway.maven-central-deployment-status.v2",
     intent_sha256: intentSHA256,
     record_sha256: recordSHA256,
     record_kind: "portal_deployment",

@@ -5,6 +5,14 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
+export const ANDROID_RELEASE_SCHEMAS = Object.freeze({
+  intent: "latchway.maven-central-upload-intent.v2",
+  record: "latchway.maven-central-deployment.v2",
+  status: "latchway.maven-central-deployment-status.v2",
+  proof: 2,
+  tagBinding: "latchway.github-release-tag-binding.v1",
+});
+
 export function androidReleaseAssetNames(version) {
   return [
     `latchway-android-${version}-maven-repository.zip`,
@@ -74,7 +82,7 @@ export function validateAndroidReleaseEvidence({
     "reviewed_public_key_sha256", "expected_purls", "authorization",
   ], "Maven Central upload intent");
   const expectedDeploymentName = `latchway-android-v${version}-${sourceCommit.slice(0, 12)}-${portalSHA256}`;
-  if (uploadIntent.schema !== "latchway.maven-central-upload-intent.v1"
+  if (uploadIntent.schema !== ANDROID_RELEASE_SCHEMAS.intent
       || uploadIntent.repository !== "Latchway/latchway-android"
       || uploadIntent.source_commit !== sourceCommit || uploadIntent.release_tag !== tag
       || uploadIntent.version !== version || uploadIntent.namespace !== "dev.latchway"
@@ -93,7 +101,7 @@ export function validateAndroidReleaseEvidence({
 
   requireExactKeys(tagBinding, ["schema", "tag", "tag_object_sha", "commit", "message_sha256"],
     "Android GitHub release tag binding");
-  if (tagBinding.schema !== "latchway.github-release-tag-binding.v1"
+  if (tagBinding.schema !== ANDROID_RELEASE_SCHEMAS.tagBinding
       || tagBinding.tag !== tag || tagBinding.tag_object_sha !== tagObject
       || tagBinding.commit !== sourceCommit || !SHA256.test(tagBinding.message_sha256)) {
     throw new Error("Android GitHub release tag binding does not match the locked source.");
@@ -105,7 +113,8 @@ export function validateAndroidReleaseEvidence({
     "signatures_cryptographically_verified", "signing_fingerprint", "reviewed_public_key_sha256",
     "deployment", "public_manifest", "public_manifest_sha256", "files",
   ], "Maven Central release evidence");
-  if (proof.schema_version !== 2 || proof.registry !== "maven_central" || proof.namespace !== "dev.latchway"
+  if (proof.schema_version !== ANDROID_RELEASE_SCHEMAS.proof
+      || proof.registry !== "maven_central" || proof.namespace !== "dev.latchway"
       || proof.version !== version || proof.reviewed_repository !== true
       || proof.primary_artifacts_byte_identical !== true || proof.checksum_files_byte_identical !== true
       || proof.signature_files_present !== true || proof.signatures_cryptographically_verified !== true
@@ -131,13 +140,13 @@ export function validateAndroidReleaseEvidence({
   requireExactKeys(proof.deployment, [
     "intent_sha256", "record_sha256", "status_sha256", "record_kind", "record", "status",
   ], "Maven Central retained deployment evidence");
-  if (deployment.schema !== "latchway.maven-central-deployment.v1"
+  if (deployment.schema !== ANDROID_RELEASE_SCHEMAS.record
       || deployment.intent_sha256 !== intentSHA256 || deployment.deployment_name !== expectedDeploymentName
       || deployment.publishing_type !== "user_managed" || deployment.namespace !== "dev.latchway"
       || deployment.version !== version || deployment.source_commit !== sourceCommit
       || !isDeepStrictEqual(deployment.expected_purls, expectedPURLs)
       || deployment.reviewed_portal_bundle_sha256 !== portalSHA256
-      || deploymentStatus.schema !== "latchway.maven-central-deployment-status.v1"
+      || deploymentStatus.schema !== ANDROID_RELEASE_SCHEMAS.status
       || deploymentStatus.intent_sha256 !== intentSHA256 || deploymentStatus.record_sha256 !== recordSHA256
       || deploymentStatus.record_kind !== deployment.record_kind
       || deploymentStatus.deployment_id !== deployment.deployment_id

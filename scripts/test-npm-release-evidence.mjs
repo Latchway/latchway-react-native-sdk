@@ -195,10 +195,16 @@ test("published dependency gate requires immutable attested assets and live regi
     "reviewed_portal_bundle_file_count",
     'publishing_type !== "user_managed"',
     'authorization !== "recoverable_exact_upload"',
-    "proof.schema_version !== 2",
+    "proof.schema_version !== ANDROID_RELEASE_SCHEMAS.proof",
+    'intent: "latchway.maven-central-upload-intent.v2"',
+    'record: "latchway.maven-central-deployment.v2"',
+    'status: "latchway.maven-central-deployment-status.v2"',
     'record_kind === "public_registry_adoption"',
   ]) assert.ok(androidContract.includes(control), `Android dependency contract omits ${control}`);
-  assert.doesNotMatch(androidContract, /single_upload_only|publishing_type\s*!==\s*"automatic"|proof\.schema_version\s*!==\s*1/u);
+  assert.doesNotMatch(
+    androidContract,
+    /single_upload_only|publishing_type\s*!==\s*"automatic"|proof\.schema_version\s*!==\s*1|maven-central-(?:upload-intent|deployment(?:-status)?)\.v1/u,
+  );
 
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(workflow, /attestations: read/u);
