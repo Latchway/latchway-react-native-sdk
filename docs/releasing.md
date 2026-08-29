@@ -39,10 +39,12 @@ first-ever publication, add a narrowly scoped short-lived `NPM_TOKEN` secret,
 publish once through the same reviewed workflow, configure trusted publishing,
 and remove the secret.
 
-The workflow first creates a draft GitHub release. It publishes the already
-verified archive, checks an existing npm version by SHA-512 for safe retry, then
-attaches the `.tgz` and SHA-256 file and finalizes the release. A failed npm
-publication leaves the GitHub release as a recoverable draft.
+The workflow publishes or verifies the already checked archive before touching
+the GitHub release. It checks an existing npm version by SHA-512 for safe retry,
+then reconciles a draft or final GitHub release without ever overwriting an
+asset. Existing assets are downloaded and compared byte for byte, only missing
+draft assets are attached, and a mismatched or incomplete final release stops
+the run. An interrupted exact promotion can therefore be rerun safely.
 
 Do not manually retag a failed release or overwrite a published npm version.
 Fix the release inputs, choose a new semantic version, and rerun the complete

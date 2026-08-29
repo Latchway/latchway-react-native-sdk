@@ -441,6 +441,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("sleep 30", workflow)
         self.assertIn("needs: [promote, verify, android, ios]", workflow)
 
+    def test_github_release_retry_never_overwrites_assets(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        registry = workflow.index("node scripts/publish-or-verify.mjs")
+        reconciliation = workflow.index("python3 scripts/reconcile-github-release.py")
+        self.assertLess(registry, reconciliation)
+        self.assertNotIn("--clobber", workflow)
+        self.assertNotIn("gh release upload", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

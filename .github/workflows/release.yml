@@ -416,29 +416,24 @@ jobs:
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
           node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
-      - name: Create recoverable draft GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "GitHub release already exists; preserving it for an idempotent retry."
-          elif [[ "$RELEASE_TAG" == *-* ]]; then
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --generate-notes --title "$RELEASE_TAG"
-          else
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
-          fi
       - name: Publish or verify exact npm archive with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node scripts/publish-or-verify.mjs "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz"
         working-directory: latchway-react-native-sdk
-      - name: Attach archive and finalize GitHub release
+      - name: Reconcile immutable GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$RELEASE_TAG" .release/* --repo "$GITHUB_REPOSITORY" --clobber
+          prerelease=()
           if [[ "$RELEASE_TAG" == *-* ]]; then
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-          else
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+            prerelease=(--prerelease)
           fi
+          python3 scripts/reconcile-github-release.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --title "$RELEASE_TAG" \
+            "${prerelease[@]}" \
+            "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
+            "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256"
+        working-directory: latchway-react-native-sdk
