@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import {
+  androidReleaseAssetNames,
+  validateAndroidReleaseEvidence,
+} from "./android-release-evidence.mjs";
 import { readJSON, readLock, requireLockValue } from "./release-metadata.mjs";
 import {
   PROVENANCE_TYPE,
@@ -358,19 +362,12 @@ async function verifyAndroid() {
   const dependency = compatibility.android;
   const repository = repositorySlug(dependency.repository, "Latchway/latchway-android");
   const tag = `v${dependency.version}`;
-  verifyReleaseTag(dependency, "Android", tag);
+  const tagReference = verifyReleaseTag(dependency, "Android", tag);
   const release = githubRelease(repository, tag);
   requireImmutableRelease(release, tag);
   const archiveName = `latchway-android-${dependency.version}-maven-repository.zip`;
-  const required = [
-    archiveName,
-    "SHA256SUMS",
-    "latchway-maven-signing-public-key.asc",
-    "maven-central-upload-intent.json",
-    "maven-central-deployment.json",
-    "maven-central-deployment-status.json",
-    "maven-central-release-evidence.json",
-  ];
+  const portalName = `latchway-android-${dependency.version}-central-portal.zip`;
+  const required = androidReleaseAssetNames(dependency.version);
   requireExactReleaseAssets(release, required);
   const assets = await downloadAssets(repository, release, required, "android");
   const releaseAttestation = verifyImmutableReleaseAttestations(
@@ -389,65 +386,37 @@ async function verifyAndroid() {
   const uploadIntent = await jsonAsset(assets, "maven-central-upload-intent.json");
   const deployment = await jsonAsset(assets, "maven-central-deployment.json");
   const deploymentStatus = await jsonAsset(assets, "maven-central-deployment-status.json");
+  const tagBinding = await jsonAsset(assets, "github-release-tag-binding.json");
   const reviewedRepository = inspectMavenRepositoryArchive(assets.get(archiveName).path);
+  const expectedPrimaryPaths = new Set(expectedMavenPrimaryPaths(dependency.version));
+  const reviewedPortal = inspectMavenPortalArchive(
+    assets.get(portalName).path, reviewedRepository.files, expectedPrimaryPaths,
+  );
   const expectedPURLs = expectedMavenPURLs(dependency.version);
   const intentSHA = digest(assets.get("maven-central-upload-intent.json").bytes);
   const recordSHA = digest(assets.get("maven-central-deployment.json").bytes);
   const statusSHA = digest(assets.get("maven-central-deployment-status.json").bytes);
-  if (!hasExactKeys(uploadIntent, [
-    "schema", "repository", "source_commit", "release_tag", "version", "namespace", "deployment_name",
-    "publishing_type", "reviewed_repository_archive_sha256", "reviewed_repository_manifest_sha256",
-    "reviewed_repository_file_count", "reviewed_public_key_sha256", "expected_purls", "authorization",
-  ]) || !hasExactKeys(proof, [
-    "schema_version", "registry", "namespace", "version", "reviewed_repository",
-    "primary_artifacts_byte_identical", "checksum_files_byte_identical", "signature_files_present",
-    "signatures_cryptographically_verified", "signing_fingerprint", "reviewed_public_key_sha256",
-    "deployment", "files",
-  ]) || uploadIntent.schema !== "latchway.maven-central-upload-intent.v1"
-      || uploadIntent.repository !== "Latchway/latchway-android"
-      || uploadIntent.source_commit !== dependency.source_commit || uploadIntent.release_tag !== tag
-      || uploadIntent.version !== dependency.version || uploadIntent.namespace !== "dev.latchway"
-      || uploadIntent.publishing_type !== "automatic" || uploadIntent.authorization !== "single_upload_only"
-      || uploadIntent.reviewed_repository_archive_sha256 !== digest(assets.get(archiveName).bytes)
-      || uploadIntent.reviewed_repository_manifest_sha256 !== reviewedRepository.manifestSHA256
-      || uploadIntent.reviewed_repository_file_count !== reviewedRepository.files.size
-      || uploadIntent.reviewed_public_key_sha256 !== digest(assets.get("latchway-maven-signing-public-key.asc").bytes)
-      || !isDeepStrictEqual(uploadIntent.expected_purls, expectedPURLs)
-      || proof.schema_version !== 1 || proof.registry !== "maven_central" || proof.namespace !== "dev.latchway"
-      || proof.version !== dependency.version || proof.reviewed_repository !== true
-      || proof.primary_artifacts_byte_identical !== true || proof.checksum_files_byte_identical !== true
-      || proof.signature_files_present !== true
-      || proof.reviewed_public_key_sha256 !== digest(assets.get("latchway-maven-signing-public-key.asc").bytes)
-      || proof.signatures_cryptographically_verified !== true || !Array.isArray(proof.files) || proof.files.length === 0) {
-    throw new Error("Attested Maven Central evidence does not bind exact signed registry bytes and locked source.");
-  }
-  if (!hasExactKeys(deployment, [
-    "schema", "intent_sha256", "deployment_id", "deployment_name", "publishing_type", "namespace", "version",
-    "source_commit", "expected_purls",
-  ]) || !hasExactKeys(deploymentStatus, [
-    "schema", "intent_sha256", "record_sha256", "deployment_id", "deployment_name", "deployment_state", "purls",
-  ]) || !hasExactKeys(proof.deployment, ["intent_sha256", "record_sha256", "status_sha256", "record", "status"])
-      || deployment.schema !== "latchway.maven-central-deployment.v1" || deployment.intent_sha256 !== intentSHA
-      || deployment.deployment_name !== uploadIntent.deployment_name
-      || deployment.publishing_type !== uploadIntent.publishing_type
-      || deployment.namespace !== uploadIntent.namespace || deployment.version !== uploadIntent.version
-      || deployment.source_commit !== uploadIntent.source_commit
-      || !isDeepStrictEqual(deployment.expected_purls, expectedPURLs)
-      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(deployment.deployment_id)
-      || deploymentStatus.schema !== "latchway.maven-central-deployment-status.v1"
-      || deploymentStatus.intent_sha256 !== intentSHA || deploymentStatus.record_sha256 !== recordSHA
-      || deploymentStatus.deployment_id !== deployment.deployment_id
-      || deploymentStatus.deployment_name !== deployment.deployment_name
-      || deploymentStatus.deployment_state !== "PUBLISHED"
-      || !isDeepStrictEqual(deploymentStatus.purls, [...expectedPURLs].sort())
-      || proof.deployment?.intent_sha256 !== intentSHA
-      || proof.deployment?.record_sha256 !== recordSHA
-      || proof.deployment?.status_sha256 !== statusSHA
-      || !isDeepStrictEqual(proof.deployment.record, deployment)
-      || !isDeepStrictEqual(proof.deployment.status, deploymentStatus)) {
-    throw new Error("Maven Central evidence does not bind the exact deployment and terminal status.");
-  }
-  const expectedPrimaryPaths = new Set(expectedMavenPrimaryPaths(dependency.version));
+  validateAndroidReleaseEvidence({
+    version: dependency.version,
+    sourceCommit: dependency.source_commit,
+    tag,
+    tagObject: tagReference.tagObject,
+    archiveSHA256: digest(assets.get(archiveName).bytes),
+    portalSHA256: digest(assets.get(portalName).bytes),
+    repositoryManifestSHA256: reviewedRepository.manifestSHA256,
+    repositoryFileCount: reviewedRepository.files.size,
+    portalFileCount: reviewedPortal.size,
+    publicKeySHA256: digest(assets.get("latchway-maven-signing-public-key.asc").bytes),
+    expectedPURLs,
+    intentSHA256: intentSHA,
+    recordSHA256: recordSHA,
+    statusSHA256: statusSHA,
+    uploadIntent,
+    deployment,
+    deploymentStatus,
+    proof,
+    tagBinding,
+  });
   if (proof.files.length !== expectedPrimaryPaths.size) {
     throw new Error("Maven Central evidence does not enumerate every exact primary artifact.");
   }
@@ -493,8 +462,10 @@ async function verifyAndroid() {
     }
     const signature = await fetchBounded(`https://repo1.maven.org/maven2/dev/latchway/${file.path}.asc`,
       512 * 1024, new Set(["https://repo1.maven.org"]));
+    const reviewedSignature = reviewedPortal.get(`dev/latchway/${file.path}.asc`);
     if (file.signature_bytes !== signature.bytes.byteLength
         || !signature.bytes.equals(Buffer.from(file.signature_armored, "ascii"))
+        || !Buffer.isBuffer(reviewedSignature) || !reviewedSignature.equals(signature.bytes)
         || digest(signature.bytes) !== file.signature_sha256) {
       throw new Error(`Maven Central signature differs for ${file.path}.`);
     }
@@ -579,6 +550,39 @@ function inspectMavenRepositoryArchive(archive) {
     files,
     manifestSHA256: digest(Buffer.from(`${JSON.stringify(rows, null, 2)}\n`, "utf8")),
   };
+}
+
+function inspectMavenPortalArchive(archive, reviewedRepository, expectedPrimaryPaths) {
+  const listing = execFileSync("unzip", ["-Z1", archive], {
+    encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+  });
+  const rawNames = listing.split("\n").filter(Boolean);
+  const expected = new Set([
+    ...reviewedRepository.keys(),
+    ...[...expectedPrimaryPaths].map((path) => `dev/latchway/${path}.asc`),
+  ]);
+  if (rawNames.length !== expected.size || rawNames.length > 10_000) {
+    throw new Error("Reviewed Central Portal ZIP has an invalid entry count.");
+  }
+  const files = new Map();
+  for (const rawName of rawNames) {
+    const name = rawName.replace(/^\.\//u, "");
+    if (!expected.has(name) || files.has(name) || name.includes("..")) {
+      throw new Error(`Reviewed Central Portal ZIP contains an unsafe, unexpected, or duplicate path: ${name}.`);
+    }
+    const bytes = execFileSync("unzip", ["-p", archive, rawName], {
+      encoding: "buffer", maxBuffer: 20 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (bytes.byteLength === 0 || bytes.byteLength > 20 * 1024 * 1024) {
+      throw new Error(`Reviewed Central Portal entry has an invalid size: ${name}.`);
+    }
+    const repositoryBytes = reviewedRepository.get(name);
+    if (repositoryBytes !== undefined && !repositoryBytes.equals(bytes)) {
+      throw new Error(`Reviewed Central Portal entry differs from the reviewed repository: ${name}.`);
+    }
+    files.set(name, bytes);
+  }
+  return files;
 }
 
 async function prepareGPGVerifier(publicKey, expectedFingerprint) {
@@ -768,7 +772,7 @@ function verifyReleaseTag(dependency, label, explicitTag) {
   const output = execFileSync("git", ["ls-remote", dependency.repository, `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
     encoding: "utf8", maxBuffer: 1024 * 1024,
   }).trim();
-  requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
+  return requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
 }
 
 async function auditNpmSignatures(packageName, version, integrity, directory) {

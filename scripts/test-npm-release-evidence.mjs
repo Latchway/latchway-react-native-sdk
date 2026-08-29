@@ -164,6 +164,8 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
 
 test("published dependency gate requires immutable attested assets and live registry bytes", async () => {
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
+  const androidContract = await readFile(new URL("android-release-evidence.mjs", import.meta.url), "utf8");
+  const verifierSource = `${source}\n${androidContract}`;
   for (const control of [
     "release.immutable !== true",
     '"release", "verify"',
@@ -184,8 +186,19 @@ test("published dependency gate requires immutable attested assets and live regi
     "validateReleaseAttestation",
     "validateGPGStatus",
     "requireAnnotatedTagRefs",
-  ]) assert.ok(source.includes(control), `dependency verifier omits ${control}`);
+  ]) assert.ok(verifierSource.includes(control), `dependency verifier omits ${control}`);
   assert.doesNotMatch(source, /gitHead/u);
+  for (const control of [
+    "central-portal.zip",
+    "github-release-tag-binding.json",
+    "reviewed_portal_bundle_sha256",
+    "reviewed_portal_bundle_file_count",
+    'publishing_type !== "user_managed"',
+    'authorization !== "recoverable_exact_upload"',
+    "proof.schema_version !== 2",
+    'record_kind === "public_registry_adoption"',
+  ]) assert.ok(androidContract.includes(control), `Android dependency contract omits ${control}`);
+  assert.doesNotMatch(androidContract, /single_upload_only|publishing_type\s*!==\s*"automatic"|proof\.schema_version\s*!==\s*1/u);
 
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(workflow, /attestations: read/u);
