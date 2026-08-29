@@ -32,13 +32,13 @@
     "package": "@latchway/client",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "b1738804a9519d9adb39fb31da01258224b955ea"
+    "source_commit": "e47676775e8e902cf868646348174e2b898162c1"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "0163f91f6f2bb5be6e021dd1c79a8837f5e25f96",
+    "source_commit": "f7e3e3585c233ddff88bebb4f39402cd6398a1f2",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -49,7 +49,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "dbfcc2936d3f74f61201bb8933fabd40937a70fb",
+    "source_commit": "a41c0a5fd648365258695b2fe0abda44b618b9d6",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "publisher_android_gradle_plugin": "9.3.2",
