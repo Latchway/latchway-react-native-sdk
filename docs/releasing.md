@@ -54,8 +54,9 @@ be a fine-grained token selected only for `Latchway/latchway`,
 `Latchway/latchway-js`, `Latchway/latchway-ios-sdk`, and
 `Latchway/latchway-android`, with repository Contents read permission and no
 write permission. Cross-repository checkout steps use it only for the pinned
-sibling fetch and set `persist-credentials: false`. If every sibling is public,
-the secret may be omitted; those steps fall back to the job's `github.token`.
+sibling fetch and set `persist-credentials: false`; the promotion job also uses
+it for the exact core release-asset download and attestation verification. If
+every sibling is public, the secret may be omitted and the job token is used.
 
 After the protected preflight, the workflow resolves the remote annotated tag
 object to the promoted commit immediately before it creates or resumes the
