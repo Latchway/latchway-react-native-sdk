@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   PROVENANCE_TYPE,
@@ -12,7 +16,13 @@ import {
   sha256,
   verifyProvenanceStatement,
 } from "./npm-release-evidence.mjs";
-import { validateGPGStatus } from "./gpg-status.mjs";
+import {
+  APPROVED_PUBLIC_KEY_ALGORITHMS,
+  GPG_STATUS_RECORD_KEYS,
+  REQUIRED_HASH_ALGORITHM,
+  validateGPGStatus,
+  validateRetainedGPGStatus,
+} from "./gpg-status.mjs";
 import {
   RELEASE_PREDICATE_TYPE,
   STATEMENT_TYPE,
@@ -185,6 +195,7 @@ test("published dependency gate requires immutable attested assets and live regi
     "immutable_attestation",
     "validateReleaseAttestation",
     "validateGPGStatus",
+    "validateRetainedGPGStatus",
     "requireAnnotatedTagRefs",
   ]) assert.ok(verifierSource.includes(control), `dependency verifier omits ${control}`);
   assert.doesNotMatch(source, /gitHead/u);
@@ -283,7 +294,9 @@ test("GnuPG parser accepts a signing subkey and rejects revoked, expired, unknow
   const subkey = "B".repeat(40);
   const valid = validGPGStatus(subkey, primary);
   assert.deepEqual(validateGPGStatus(valid, primary), {
+    hashAlgorithm: "10",
     primaryFingerprint: primary,
+    publicKeyAlgorithm: "1",
     signingFingerprint: subkey,
   });
   for (const tag of [
@@ -306,6 +319,86 @@ test("GnuPG parser accepts a signing subkey and rejects revoked, expired, unknow
     const weak = valid.map((line) => line.startsWith("[GNUPG:] VALIDSIG ")
       ? line.replace(" 4 0 1 10 00 ", replacement) : line);
     assert.throws(() => validateGPGStatus(weak, primary), /unapproved/u);
+  }
+});
+
+test("retained GnuPG proof requires Android's exact six fields and algorithm binding", () => {
+  const primary = "A".repeat(40);
+  const subkey = "B".repeat(40);
+  const valid = {
+    schema_version: 1,
+    primary_fingerprint: primary,
+    signing_fingerprint: subkey,
+    public_key_algorithm: "1",
+    hash_algorithm: "10",
+    status_lines: validGPGStatus(subkey, primary),
+  };
+  assert.deepEqual(GPG_STATUS_RECORD_KEYS, [
+    "schema_version",
+    "primary_fingerprint",
+    "signing_fingerprint",
+    "public_key_algorithm",
+    "hash_algorithm",
+    "status_lines",
+  ]);
+  assert.deepEqual(APPROVED_PUBLIC_KEY_ALGORITHMS, ["1", "3", "19", "22", "27"]);
+  assert.equal(REQUIRED_HASH_ALGORITHM, "10");
+  assert.deepEqual(validateRetainedGPGStatus(valid, primary), {
+    hashAlgorithm: "10",
+    primaryFingerprint: primary,
+    publicKeyAlgorithm: "1",
+    signingFingerprint: subkey,
+  });
+
+  for (const [name, mutate] of [
+    ["missing algorithm", (value) => { delete value.public_key_algorithm; }],
+    ["extra field", (value) => { value.unreviewed = true; }],
+    ["unapproved key algorithm", (value) => { value.public_key_algorithm = "17"; }],
+    ["unapproved hash algorithm", (value) => { value.hash_algorithm = "8"; }],
+    ["key algorithm substitution", (value) => { value.public_key_algorithm = "3"; }],
+  ]) {
+    const candidate = structuredClone(valid);
+    mutate(candidate);
+    assert.throws(() => validateRetainedGPGStatus(candidate, primary), undefined, name);
+  }
+});
+
+test("checked-out Android producer emits the exact retained GnuPG proof", async (context) => {
+  const verifierURL = new URL("../../latchway-android/scripts/verify-gpg-status.py", import.meta.url);
+  try {
+    await readFile(verifierURL, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      context.skip("canonical Android checkout is not present in this standalone SDK job");
+      return;
+    }
+    throw error;
+  }
+  const primary = "A".repeat(40);
+  const subkey = "B".repeat(40);
+  const directory = await mkdtemp(join(tmpdir(), "latchway-android-gpg-golden-"));
+  try {
+    const statusPath = join(directory, "status.txt");
+    await writeFile(statusPath, `${validGPGStatus(subkey, primary).join("\n")}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const output = execFileSync("python3", [
+      fileURLToPath(verifierURL),
+      "--status", statusPath,
+      "--expected-primary-fingerprint", primary,
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const produced = JSON.parse(output);
+    assert.deepEqual(Object.keys(produced).sort(), [...GPG_STATUS_RECORD_KEYS].sort());
+    assert.deepEqual(validateRetainedGPGStatus(produced, primary), {
+      hashAlgorithm: "10",
+      primaryFingerprint: primary,
+      publicKeyAlgorithm: "1",
+      signingFingerprint: subkey,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

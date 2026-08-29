@@ -20,7 +20,11 @@ import {
   verifyProvenanceStatement,
   verifyPublishStatement,
 } from "./npm-release-evidence.mjs";
-import { validateGPGStatus } from "./gpg-status.mjs";
+import {
+  GPG_STATUS_RECORD_KEYS,
+  validateGPGStatus,
+  validateRetainedGPGStatus,
+} from "./gpg-status.mjs";
 import { validateReleaseAttestation } from "./release-attestation.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 
@@ -429,29 +433,18 @@ async function verifyAndroid() {
     if (!hasExactKeys(file, [
       "path", "sha256", "bytes", "signature_sha256", "signature_bytes", "signature_armored", "gpg_status",
       "checksums", "checksums_byte_identical",
-    ]) || !hasExactKeys(file.gpg_status, [
-      "schema_version", "primary_fingerprint", "signing_fingerprint", "status_lines",
-    ]) || typeof file.path !== "string" || !/^[-A-Za-z0-9._/]+$/u.test(file.path) || seen.has(file.path)
+    ]) || !hasExactKeys(file.gpg_status, GPG_STATUS_RECORD_KEYS)
+        || typeof file.path !== "string" || !/^[-A-Za-z0-9._/]+$/u.test(file.path) || seen.has(file.path)
         || !expectedPrimaryPaths.has(file.path)
         || !/^[0-9a-f]{64}$/u.test(file.sha256) || !/^[0-9a-f]{64}$/u.test(file.signature_sha256)
         || !Number.isInteger(file.bytes) || file.bytes < 1 || !Number.isInteger(file.signature_bytes)
         || file.signature_bytes < 1 || typeof file.signature_armored !== "string"
         || digest(Buffer.from(file.signature_armored, "ascii")) !== file.signature_sha256
-        || file.gpg_status?.schema_version !== 1
-        || file.gpg_status?.primary_fingerprint !== proof.signing_fingerprint
-        || !/^[0-9A-F]{40}$/u.test(file.gpg_status?.signing_fingerprint)
-        || !Array.isArray(file.gpg_status?.status_lines)
         || file.checksums_byte_identical !== true || !Array.isArray(file.checksums)
         || file.checksums.length !== 4) {
       throw new Error("Maven Central evidence contains an invalid or duplicate signed file.");
     }
-    const retainedGPG = validateGPGStatus(
-      file.gpg_status.status_lines, proof.signing_fingerprint,
-    );
-    if (retainedGPG.primaryFingerprint !== file.gpg_status.primary_fingerprint
-        || retainedGPG.signingFingerprint !== file.gpg_status.signing_fingerprint) {
-      throw new Error(`Maven Central retained GnuPG proof differs for ${file.path}.`);
-    }
+    validateRetainedGPGStatus(file.gpg_status, proof.signing_fingerprint);
     seen.add(file.path);
     const live = await fetchBounded(`https://repo1.maven.org/maven2/dev/latchway/${file.path}`,
       20 * 1024 * 1024, new Set(["https://repo1.maven.org"]));
@@ -613,7 +606,9 @@ async function verifyDetachedSignature(home, index, artifactBytes, signatureByte
     signature, artifact], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1024 * 1024 });
   const verified = validateGPGStatus(status.split("\n").filter(Boolean), retainedStatus.primary_fingerprint);
   if (verified.signingFingerprint !== retainedStatus.signing_fingerprint
-      || verified.primaryFingerprint !== retainedStatus.primary_fingerprint) {
+      || verified.primaryFingerprint !== retainedStatus.primary_fingerprint
+      || verified.publicKeyAlgorithm !== retainedStatus.public_key_algorithm
+      || verified.hashAlgorithm !== retainedStatus.hash_algorithm) {
     throw new Error("Independent GnuPG verification differs from retained signature proof.");
   }
 }

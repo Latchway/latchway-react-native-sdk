@@ -1,7 +1,16 @@
 const fingerprintPattern = /^[0-9A-F]{40}$/u;
 const statusTagPattern = /^[A-Z][A-Z0-9_]*$/u;
-const approvedPublicKeyAlgorithms = new Set(["1", "3", "19", "22", "27"]);
-const requiredHashAlgorithm = "10";
+export const GPG_STATUS_RECORD_KEYS = Object.freeze([
+  "schema_version",
+  "primary_fingerprint",
+  "signing_fingerprint",
+  "public_key_algorithm",
+  "hash_algorithm",
+  "status_lines",
+]);
+export const APPROVED_PUBLIC_KEY_ALGORITHMS = Object.freeze(["1", "3", "19", "22", "27"]);
+export const REQUIRED_HASH_ALGORITHM = "10";
+const approvedPublicKeyAlgorithms = new Set(APPROVED_PUBLIC_KEY_ALGORITHMS);
 const allowedTags = new Set([
   "NEWSIG",
   "KEY_CONSIDERED",
@@ -76,7 +85,7 @@ export function validateGPGStatus(statusLines, expectedPrimaryFingerprint) {
   }
   const [signatureVersion, reserved, publicKeyAlgorithm, hashAlgorithm, signatureClass] = valid.slice(4, 9);
   if (!new Set(["4", "5", "6"]).has(signatureVersion) || reserved !== "0"
-      || !approvedPublicKeyAlgorithms.has(publicKeyAlgorithm) || hashAlgorithm !== requiredHashAlgorithm
+      || !approvedPublicKeyAlgorithms.has(publicKeyAlgorithm) || hashAlgorithm !== REQUIRED_HASH_ALGORITHM
       || signatureClass !== "00") {
     throw new Error("GnuPG VALIDSIG uses an unapproved algorithm, digest, or signature class.");
   }
@@ -104,11 +113,37 @@ export function validateGPGStatus(statusLines, expectedPrimaryFingerprint) {
   if (compliance.length > 1 || compliance.some((entry) => entry.length !== 1 || !/^\d+$/u.test(entry[0]))) {
     throw new Error("GnuPG verification compliance status is invalid.");
   }
-  return { primaryFingerprint, signingFingerprint };
+  return { primaryFingerprint, signingFingerprint, publicKeyAlgorithm, hashAlgorithm };
+}
+
+export function validateRetainedGPGStatus(record, expectedPrimaryFingerprint) {
+  if (!hasExactKeys(record, GPG_STATUS_RECORD_KEYS)
+      || record.schema_version !== 1
+      || record.primary_fingerprint !== expectedPrimaryFingerprint
+      || !fingerprintPattern.test(record.signing_fingerprint)
+      || !approvedPublicKeyAlgorithms.has(record.public_key_algorithm)
+      || record.hash_algorithm !== REQUIRED_HASH_ALGORITHM
+      || !Array.isArray(record.status_lines)) {
+    throw new Error("Retained GnuPG proof does not match the exact approved six-field schema.");
+  }
+  const parsed = validateGPGStatus(record.status_lines, expectedPrimaryFingerprint);
+  if (parsed.primaryFingerprint !== record.primary_fingerprint
+      || parsed.signingFingerprint !== record.signing_fingerprint
+      || parsed.publicKeyAlgorithm !== record.public_key_algorithm
+      || parsed.hashAlgorithm !== record.hash_algorithm) {
+    throw new Error("Retained GnuPG proof differs from its validated status stream.");
+  }
+  return parsed;
 }
 
 function requireCount(byTag, tag, expected) {
   if ((byTag.get(tag) ?? []).length !== expected) {
     throw new Error(`GnuPG did not report exactly ${expected} ${tag} status.`);
   }
+}
+
+function hasExactKeys(value, expected) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === expected.length
+    && expected.every((key) => Object.hasOwn(value, key));
 }
