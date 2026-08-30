@@ -47,8 +47,11 @@ Each platform run uses the real example application and verifies:
 The Android gate additionally requires the Play installer, a locked production
 device with green Verified Boot, a Play-recognized app, and a licensed account.
 Installing an APK with `adb` is deliberately insufficient. The iOS gate checks
-the exact signed `.app`, production App Attest entitlement, application
-identifier, team, signing certificate, and executable hash before launch.
+a private snapshot of the exact signed `.app`, production App Attest
+entitlement, application identifier, team, signing certificate, executable
+hash, canonical per-file manifest hash, and deterministic whole-bundle tree
+hash before inspection and again
+immediately before installing that same snapshot.
 
 ## Prepare immutable candidates
 
@@ -62,9 +65,83 @@ its evidence SHA-256 in the React Native environment. A React Native candidate
 must embed all physical-run values listed in `example/.env.example`, with
 `LATCHWAY_CONFORMANCE_AUTORUN=true`. Those values are release identifiers, not
 credentials, but the build configuration itself remains a protected release
-input. Identity-provider configuration and accounts must be supplied through
-the platform's normal protected application setup and must never be stored in
-evidence artifacts.
+input. Produce the candidate with
+`scripts/stage-physical-react-native-candidate.py ios|android`. The producer
+requires clean exact React Native, JavaScript SDK, native SDK, and core
+worktrees and checks their commits against `release-compatibility.json` and
+`contract.lock`. It materializes the exact React Native and JavaScript commits
+as fresh sibling worktrees, regenerates their dependencies and JavaScript build
+output from protected locks, uses external Firebase configuration, performs a
+Release build, inspects the result, and emits canonical source/candidate
+manifests plus `SHA256SUMS`. The platform candidate necessarily embeds only its
+non-secret Firebase client configuration. Provider credentials, provider
+secrets, and signing passwords are never included anywhere in candidate
+output. Its output directory must not already exist.
+
+Run the producer from the clean React Native repository. Common protected
+inputs are `LATCHWAY_SOURCE_COMMIT`, `LATCHWAY_CORE_COMMIT`,
+`LATCHWAY_CORE_SOURCE_PATH`, `LATCHWAY_JAVASCRIPT_SDK_PATH`,
+`LATCHWAY_CONTRACT_VERSION`,
+`LATCHWAY_CONTRACT_BUNDLE_SHA256`, `LATCHWAY_RN_SDK_VERSION`,
+`LATCHWAY_NATIVE_SDK_VERSION`, `LATCHWAY_NATIVE_EVIDENCE_PATH` and its
+`LATCHWAY_NATIVE_EVIDENCE_SHA256`, all gateway coordinates listed in
+`example/.env.example`, and a new `LATCHWAY_CANDIDATE_OUTPUT_DIR`. The producer
+requires the repository-pinned Node 24.19.0 and pnpm 10.15.0
+toolchain and records both versions in `source-inputs.json`. iOS also
+requires `LATCHWAY_IOS_SDK_PATH`, `LATCHWAY_IOS_COMMIT`,
+`LATCHWAY_BUNDLE_ID`, version/build/distribution pins,
+`LATCHWAY_FIREBASE_IOS_CONFIG_PATH`, `LATCHWAY_IOS_PODFILE_LOCK_PATH`,
+`LATCHWAY_TEAM_ID`, `LATCHWAY_IOS_APP_ID_PREFIX`,
+`LATCHWAY_IOS_CODE_SIGN_IDENTITY`,
+`LATCHWAY_IOS_PROVISIONING_PROFILE_UUID`,
+`LATCHWAY_IOS_APPINTENTS_BUNDLE_ID`,
+`LATCHWAY_IOS_APPINTENTS_PROVISIONING_PROFILE_UUID`,
+`LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP`, and the production App Attest and
+`LATCHWAY_SIGNING_CERTIFICATE_SHA256` pins. Android requires
+`LATCHWAY_ANDROID_SDK_PATH`, `LATCHWAY_ANDROID_COMMIT`,
+`LATCHWAY_PACKAGE_NAME`, `LATCHWAY_APP_VERSION`, `LATCHWAY_VERSION_CODE`,
+`LATCHWAY_PLAY_TRACK`, `LATCHWAY_REQUIRE_LICENSED`,
+`LATCHWAY_CLOUD_PROJECT_NUMBER`, `LATCHWAY_FIREBASE_ANDROID_CONFIG_PATH`, and
+the expected Play App Signing `LATCHWAY_SIGNING_CERTIFICATE_SHA256`. The
+checkout and Gradle are strictly unsigned-only and reject every
+keystore/password/alias/upload-certificate input. The repository producer emits
+only a closed unsigned AAB/APK handoff and a canonical pre-sign AAB payload
+manifest. A protected fresh signer job receives that data without a checkout or
+Gradle. Before any step receives key material it separately downloads the AAB
+verifier, checks its protected SHA-256, regenerates the canonical AAB payload
+manifest and byte-compares it with the carried manifest. It also strictly parses
+the unsigned APK, binds its package/version, embedded configuration and
+JavaScript bundle, rejects every `META-INF` signature control and requires
+`apksigner` to reject it as unsigned. The secret-bearing step invokes only
+system signing tools; APK signing fixes minimum SDK 24 and disables v1/JAR
+signatures. A second fresh job has no secret and no checkout; it accepts the
+verifier source only when its SHA-256 matches the same protected pin. The
+verifier independently parses local and central ZIP records,
+rejects structural mismatches, unsafe modes, overlaps, trailing/polyglot bytes,
+ambiguous names and extra signature metadata, fully reads every payload, pins
+one common leaf signer, and requires exact continuity with the separately
+carried pre-sign manifest. The exact independently verified AAB/APK bytes are
+the only publishable signed output. The signer also retains the source-built
+unsigned APK. The fresh verifier hash-binds it to the unsigned candidate
+manifest, rejects `META-INF` signature controls in both APKs, requires the
+signed APK's complete ZIP payload to be identical (only the v2/v3 APK signing
+block may differ outside the ZIP payload), and independently rechecks package,
+version, embedded Firebase and candidate-configuration hashes, JavaScript
+bundle, and upload signer. This
+prevents a correctly signed APK substituted inside the key-bearing boundary
+from becoming a release output. Passwords and keystores never enter the
+repository build or candidate output. Runtime identity grants are rejected if
+present during candidate production.
+
+Use `.github/workflows/react-native-android-candidate.yml` for the Android
+release handoff. Its build job is the only job with a checkout and emits only
+unsigned data; `sign-isolated` has no checkout or Gradle, and `verify-signed`
+has neither signing secrets nor a checkout. Configure the protected verifier
+environment with the exact SHA-256 of
+`scripts/VerifyReactNativeAabSignature.java`; changing the verifier therefore
+requires an explicit protected-coordinate review. Also set the protected
+`LATCHWAY_ANDROID_UPLOAD_SIGNATURE_ALGORITHM` coordinate to the upload key's
+exact `SHA256withRSA` or `SHA256withECDSA` algorithm.
 
 Before importing native-only proofs, the finalizer validates the native profile
 and report against its platform-authoritative checked-in schema, requires
@@ -84,20 +161,54 @@ exact reviewed snapshot at
 validator at `scripts/linked-ios-device-evidence.py`. This prevents genuine v2
 iOS evidence from being treated as v1 while preserving the v1 React Native
 output consumed by the current cross-repository release adapter.
+The imported native report may contain delegated Action-extension execution
+proof, but the React Native example does not reproduce or claim that operation:
+its App Intents target has no React Native runtime or component-request bridge
+and fails closed when invoked. The React Native iOS run proves the root App
+Attest path plus the exact linked-native evidence binding.
 
-For iOS, build a non-debug, production-signed New Architecture `.app` from the
-exact candidate commit. `LATCHWAY_IOS_INSTALL_MODE` must be `install`: the
-runner rejects preinstalled applications and installs the inspected candidate
-immediately before launch. The protected executable and `main.jsbundle`
-SHA-256 pins must both match. The physical device identifier is a secret and
-the remaining workflow inputs are protected environment variables.
+For iOS, the producer archives a non-debug, production-signed New Architecture
+`.app` from the exact candidate commit. It requires a protected `Podfile.lock`,
+Firebase plist, signing identity, distinct root and App Intents bundle IDs and
+provisioning-profile UUIDs, the protected shared Keychain access group,
+certificate hash, Team ID, and App ID Prefix. App ID Prefix is independently
+protected because it can differ from Team ID; it binds `application-identifier`
+and both Keychain access groups. The signed root target must have exactly the
+private app-ID group first and the shared component group second. The signed
+App Intents extension must have only the shared group, so it cannot read root
+default Keychain state. Each modern provisioning profile is verified with
+OpenSSL CMS, then its UUID, devices, Team ID, App ID Prefix, bundle ID, and
+App Attest/get-task-allow policy are checked. Every signed Keychain group must
+be authorized by an exact profile entry or a well-formed terminal `*` prefix;
+unrelated profile grants are allowed, while malformed wildcards and
+unauthorized signed groups fail closed. Root signing and its profile must both
+carry the exact App Attest `app-attest-opt-in=[CDhash]` value, and the profile
+must authorize the production environment. The App Intents extension and its
+profile must carry neither App Attest entitlement key.
+`LATCHWAY_IOS_INSTALL_MODE` must be `install`:
+the runner uninstalls any old application, verifies absence, and installs the
+inspected candidate immediately before launch. The executable and
+`main.jsbundle` SHA-256 pins must both match. The producer also emits a
+canonical per-file `ios-app-files.sha256` manifest and the native-compatible
+`latchway.ios-app-bundle-tree.v1` digest, which additionally binds directory
+and file modes. Both hashes are protected lease coordinates and are copied to
+the final profile/evidence. The collector copies the `.app` into a private
+snapshot, verifies both hashes there, re-verifies both immediately before
+handoff, and installs that exact snapshot. The bundle cannot contain its own
+JavaScript hash, so that non-secret, lease-bound digest is supplied at launch
+through the native child environment.
 
-For Android, publish the same Release candidate through the pinned Play track,
-install it from `com.android.vending` on the locked physical device, and sign in
-with the protected licensed test account. The serial is a secret. The package,
+For Android, publish the same Release AAB through the pinned Play track,
+install it from `com.android.vending` on the locked physical device, and keep a
+licensed Play account on that device. This Play licensing account is only for
+Play Integrity recognition; it is not the application's Firebase identity.
+The serial is a secret. The package,
 version, version code, canonical installed base/split APK-set manifest hash,
 certificate hash, Play track, and cloud project number are protected
 environment variables. Every split is signature/package/version-code checked;
+the complete installed split manifest is captured before launch and again
+after the observed run, and both the digest and byte-for-byte manifest must be
+identical before the observed digest is written to the evidence profile;
 an added, removed, or substituted split changes the protected set hash.
 
 The protected GitHub environments are:
@@ -110,30 +221,63 @@ The protected GitHub environments are:
   `Linux`, `latchway-physical-android`, and `latchway-ephemeral-jit`, and named
   exactly `latchway-rn-android-<run-id>-<run-attempt>`.
 
+The application identity bootstrap is a Firebase custom token minted for the
+protected run. It is not a Latchway session/admin grant and crosses only the
+example-specific `LatchwayEvidence` bridge; it never crosses the public
+`@latchway/react-native` SDK bridge. The token must be 32–65,536 bytes and exactly three
+non-empty base64url JWT segments. The signed collector lease and issuer record,
+not the Firebase JWT's provider-defined `aud` field, authoritatively bind its
+SHA-256, repository, source commit, run/attempt, exact Latchway
+`application_id`, exact iOS bundle ID or Android package name in
+`package_or_bundle_identifier`, `identity_provider="firebase"`, issuance,
+expiry, and collector audience. Both the source-free collector gate and the
+fresh candidate-code-free attestation signer revalidate all three
+identity/application fields.
+The example exchanges it exactly once with
+`signInWithCustomToken` to obtain a Firebase ID token; native Latchway code
+continues to own App Attest/Play Integrity, DPoP, session, and refresh state.
+
 Reusable runners, runners able to accept a second job, surviving workspaces,
 and shared devices are ineligible. Each environment configures the public
 collector trust root and SHA-256 plus its platform-specific one-use device
 grant SHA-256. The grant is provisioned after the run ID and attempt exist,
 records its issuance and expiry, remains valid for at most five minutes and no
 later than the runner lease, is accepted once, and is bound
-to repository, source commit, run/attempt, application, a unique `jti`, and
-audience `latchway-physical-evidence/rn-ios-app-attest` or
+to repository, source commit, run/attempt, application, and
+collector audience `latchway-physical-evidence/rn-ios-app-attest` or
 `latchway-physical-evidence/rn-android-play-integrity`. No reusable identity
 session, organization/admin token, PAT, registry/cloud credential, or OIDC
 authority may be present on a collector. If platform application setup cannot
-consume that one-use grant, the physical gate cannot run.
+consume that one-use Firebase custom token, the physical gate cannot run.
+
+Only the platform collection step receives the actual custom token. It first
+hash-verifies the value against the signed lease coordinate and removes it from
+the runner environment immediately after launch/staging. iOS inherits it
+through `DEVICECTL_CHILD_*`; the app captures it before React Native starts,
+unsets the process environment, and has one terminal in-memory read. This is a
+bounded lifetime, not a claim that immutable Swift string bytes are
+cryptographically zeroized; uninstall is authoritative. Android streams it on
+stdin through a shell-only `android.permission.DUMP` content provider into one
+process-memory slot—never an intent extra, argv value, log, or file—and clears
+the mutable byte buffers. Fresh install/app-data clear forbids a persisted
+Firebase `currentUser` from satisfying either platform run.
 
 The variable names are `LATCHWAY_COLLECTOR_TRUST_ROOT_PEM`,
-`LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256`, and respectively
-`LATCHWAY_IOS_DEVICE_GRANT_SHA256` or
-`LATCHWAY_ANDROID_DEVICE_GRANT_SHA256`. The public trust root and expected
-hashes are repeated in `physical-evidence-signing`; no private supervisor key,
-device selector, application credential, or grant value is present there.
+`LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256`, `LATCHWAY_APPLICATION_ID`, and
+respectively `LATCHWAY_IOS_BUNDLE_ID` plus
+`LATCHWAY_IOS_DEVICE_GRANT_SHA256` and the producer-emitted
+`LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256` and
+`LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256`, or `LATCHWAY_ANDROID_PACKAGE_NAME` plus
+`LATCHWAY_ANDROID_DEVICE_GRANT_SHA256`. The public trust root, expected hashes,
+and non-secret application identifiers are repeated in
+`physical-evidence-signing`; no private supervisor key, device selector,
+application credential, or grant value is present there.
 
 Create a third reviewed environment, `physical-evidence-signing`, in this
 repository. It must contain no device, identity, application, native-evidence,
-or runner credentials. Require independent reviewers and restrict deployments
-to `main`.
+or runner credentials; the exact application identifiers above are coordinates,
+not credentials. Require independent reviewers and restrict deployments to
+`main`.
 
 Environment protection should require an independent reviewer and prevent
 untrusted pull-request code from reaching the devices or application accounts.
@@ -154,9 +298,16 @@ root-owned client `/usr/local/libexec/latchway-physical-collector-finalize`.
 The ECDSA/SHA-256 lease is signed outside the candidate VM and binds repository,
 source commit and authorization hash, workflow run/attempt/job/audience,
 runner name/image/boot identity, one-job/fresh/JIT flags, the exact signed app
-or installed APK-set, JavaScript bundle and linked-native evidence hashes, and
-the one-use grant hash/`jti`/issuance/expiry. Its credential declaration must deny
+or installed APK-set, the iOS per-file manifest and whole-tree digests,
+JavaScript bundle and linked-native evidence hashes, and
+the one-use grant hash/issuance/expiry. Its credential declaration must deny
 long-lived, organization, administration, registry, and OIDC credentials.
+The signed lease uses `latchway.physical-collector-lease.v2`, requires the exact
+canonical grant key set, and asserts that the supervisor enforces the protected
+grant digest once. The signed `latchway.physical-collector-teardown.v2` must
+assert one consumption and gateway-receipt binding, and its
+`observations.identity_grant_sha256` must equal that protected digest. Both the
+collector and fresh signer enforce these fields for iOS and Android.
 
 The finalizer is a client for an authenticated privileged supervisor, not a
 general signing utility. The signing key and gateway observer capability stay
@@ -192,7 +343,11 @@ ECDSA/SHA-256 `.sig`. Statements last no more than 24 hours. Android policy
 requires `PLAY_RECOGNIZED` and `LICENSED`; both platforms deny testing/debug
 clients and require request-hash binding. The candidate embeds the origin,
 environment, key ID, statement digest, and public-key digest.
-Both environments also pin `LATCHWAY_ERROR_MAPPING_FEATURE` to a
+The iOS client policy pins the core-normalized App Attest trust level exactly
+to `app_verified`; the Android policy pins `device_verified` or
+`strong_device_verified` according to its protected device requirement. A
+provider's normalized trust level is never accepted as evidence for the other
+provider. Both environments also pin `LATCHWAY_ERROR_MAPPING_FEATURE` to a
 guaranteed-absent feature; the same non-secret value is embedded in the signed
 candidate.
 

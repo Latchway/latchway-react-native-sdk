@@ -33,6 +33,17 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
   const identityProvider = identifier(options.identityProvider ?? "custom_jwt", "identityProvider");
   const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
   const getIdentityToken = tokenProvider(options);
+  const rootKeychainAccessGroup = options.apple?.rootKeychainAccessGroup;
+  if (options.apple !== undefined && rootKeychainAccessGroup === undefined) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "apple.rootKeychainAccessGroup is required for an Apple configuration.",
+    );
+  }
+  const legacySharedKeychainAccessGroups = options.apple?.legacySharedKeychainAccessGroups ?? [];
+  if (rootKeychainAccessGroup !== undefined) {
+    validateRootKeychainAccessGroups(rootKeychainAccessGroup, legacySharedKeychainAccessGroups);
+  }
   const storageNamespace = options.apple?.storageNamespace;
   if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
   const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
@@ -65,6 +76,10 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     apple: {
       appAttestEnabled: options.apple?.appAttestEnabled ?? true,
       softwareKeyFallbackPolicy: appleFallback,
+      ...(rootKeychainAccessGroup === undefined ? {} : {
+        rootKeychainAccessGroup,
+        legacySharedKeychainAccessGroups: Array.from(legacySharedKeychainAccessGroups),
+      }),
       ...(storageNamespace === undefined ? {} : { storageNamespace }),
     },
     android: {
@@ -92,6 +107,22 @@ export function configureComponent(options: LatchwayComponentOptions): RuntimeCo
   const environment = identifier(options.environment, "environment");
   const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
   const component = validateDirectAttestationComponent(options.component);
+  if (options.apple === undefined) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "apple root Keychain configuration is required for an iOS component.",
+    );
+  }
+  validateRootKeychainAccessGroups(
+    options.apple.rootKeychainAccessGroup,
+    options.apple.legacySharedKeychainAccessGroups,
+  );
+  if (!options.apple.legacySharedKeychainAccessGroups.includes(component.keychainAccessGroup)) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "The component Keychain group must be an explicit shared group of the containing root application.",
+    );
+  }
   const storageNamespace = options.apple?.storageNamespace;
   if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
   const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
@@ -108,6 +139,8 @@ export function configureComponent(options: LatchwayComponentOptions): RuntimeCo
     protocolVersion: PROTOCOL_VERSION,
     allowInsecureLoopback: options.allowInsecureLoopback === true,
     apple: {
+      rootKeychainAccessGroup: options.apple.rootKeychainAccessGroup,
+      legacySharedKeychainAccessGroups: Array.from(options.apple.legacySharedKeychainAccessGroups),
       softwareKeyFallbackPolicy: appleFallback,
       ...(storageNamespace === undefined ? {} : { storageNamespace }),
     },
@@ -187,13 +220,33 @@ function boundedString(value: string, field: string, maximum: number): string {
   return value;
 }
 
+function validateRootKeychainAccessGroups(root: string, legacy: readonly string[]): void {
+  if (!concreteKeychainAccessGroup(root)) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "apple.rootKeychainAccessGroup must be a fully resolved concrete dotted access group.",
+    );
+  }
+  if (!Array.isArray(legacy) || !legacy.every(concreteKeychainAccessGroup) ||
+      legacy.includes(root) || new Set(legacy).size !== legacy.length) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "apple.legacySharedKeychainAccessGroups must contain distinct concrete groups other than the root group.",
+    );
+  }
+}
+
+function concreteKeychainAccessGroup(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 3 && value.length <= 255 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/u.test(value);
+}
+
 function validateDirectAttestationComponent(value: ReactNativeDirectAttestationComponent): ReactNativeDirectAttestationComponent {
   if (!isRecord(value) ||
       !hasOnlyKeys(value, ["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"]) ||
       typeof value.definitionID !== "string" || !validIdentifier(value.definitionID) ||
       (value.kind !== "action_extension" && value.kind !== "sso_extension") ||
-      typeof value.keychainAccessGroup !== "string" ||
-      !/^[A-Za-z0-9._-]{1,255}$/u.test(value.keychainAccessGroup) ||
+      !concreteKeychainAccessGroup(value.keychainAccessGroup) ||
       !Array.isArray(value.requestedFeatures) || value.requestedFeatures.length === 0 ||
       value.requestedFeatures.length > 256 ||
       !value.requestedFeatures.every((feature) => typeof feature === "string" && validIdentifier(feature)) ||

@@ -27,7 +27,12 @@ Configure these values in the host's uncommitted environment:
 `LATCHWAY_APPLICATION_ID` is the generated `app_` resource ID returned by the
 Latchway Admin API, not the package/bundle identifier or a name/slug.
 
-Add the normal Firebase iOS/Android configuration files through the provider's protected application setup. Do not commit service-account credentials, identity tokens, App Attest evidence, Play Integrity tokens, session credentials, or provider keys.
+Add the normal Firebase iOS/Android configuration files through the provider's
+protected application setup. The physical producer accepts them only as
+external paths, validates their exact application/project coordinates, and
+embeds their SHA-256 in the signed candidate. Do not commit those files,
+service-account credentials, identity tokens, App Attest evidence, Play
+Integrity tokens, session credentials, or provider keys.
 Copy `.env.example` to the ignored `.env` file and replace only its non-secret
 deployment identifiers; provider credentials never belong there.
 
@@ -79,3 +84,29 @@ mutate DPoP credentials or hash refresh tokens. The protected finalizer verifies
 the exact hash-pinned, release-eligible native iOS/Android report and imports its
 replay, tamper, refresh-rotation, protocol-rejection, and revocation tests. Raw
 JavaScript attempts to claim those native-only proofs are rejected.
+
+For a protected Release build, run
+`scripts/stage-physical-react-native-candidate.py ios|android`. The producer
+requires clean, exact React Native, JavaScript SDK, native SDK, and core source
+worktrees; the locked contract; a hash-pinned native report; external Firebase
+configuration; and external platform signing. It materializes the pinned React
+Native and JavaScript commits into fresh sibling worktrees, regenerates both
+dependency trees from their protected locks, and builds the JavaScript SDK
+before installing the React Native workspace. iOS additionally requires a protected
+`Podfile.lock`, App ID Prefix, Team ID, distinct root/App Intents bundle and
+profile pins, an exact private-first/shared-second signed Keychain entitlement
+on the root, a shared-only entitlement on App Intents, and an installable ad hoc
+profile that authorizes each target's signed groups. Android's separate signer requires the upload
+keystore and upload certificate pin while the unsigned candidate embeds the
+expected Play App Signing certificate. The repository/Gradle phase is unsigned-only; the keystore is
+handed only to a closed no-checkout signer, destroyed from that boundary, and
+then the exact AAB/APK bytes are checked in a fresh secret-free boundary with
+the full-entry Java AAB verifier and a retained-unsigned-APK payload comparison.
+The iOS handoff binds both the
+canonical `ios-app-files.sha256` list and the native-compatible whole-`.app`
+tree digest. It stages `candidate-manifest.json`, `source-inputs.json`,
+platform binaries, JavaScript/dependency manifests, and `SHA256SUMS` into a new
+output directory. It rejects identity grants and never writes signing
+passwords, provider credentials, or provider secrets into that output. The
+platform application necessarily retains only its non-secret Firebase client
+configuration.

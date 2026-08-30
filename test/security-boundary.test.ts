@@ -29,9 +29,12 @@ describe("JavaScript security boundary", () => {
     expect(spec).toContain("componentJSON: string");
     expect(types).toContain("LatchwayComponentClient");
     expect(types).toContain('"delegated_direct_attested"');
-    expect(ios).toContain("componentDefinitionID: input.definitionID");
+    expect(ios).toContain("definitionID: input.definitionID");
     expect(ios).toContain("isApplicationExtensionProcess()");
     expect(ios).toContain("clientRuntime: .reactNativeIOS");
+    expect(ios).toContain("rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup");
+    expect(ios).toContain("legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups");
+    expect(android).toContain('"rootKeychainAccessGroup", "legacySharedKeychainAccessGroups"');
     expect(ios).toContain("runComponent(clientID:");
     expect(android).toContain("Direct component attestation is not supported by this Android SDK");
     expect(ios).not.toMatch(/"(?:authorization|dpop|accessToken|refreshToken|privateKey)"\s*:/gu);
@@ -65,6 +68,15 @@ describe("JavaScript security boundary", () => {
     expect(ios).toContain('object(forInfoDictionaryKey: "NSExtension")');
     expect(ios).toContain("private var componentClients:");
     expect(ios).toContain("clientRuntime: .reactNativeIOS");
+    const componentContext = ios.match(
+      /private final class NativeComponentContext[\s\S]*?private func isApplicationExtensionProcess/u,
+    )?.[0] ?? "";
+    expect(componentContext).not.toContain("directAttestationProvider:");
+    expect(componentContext).not.toContain("LatchwayAppAttestProvider(");
+    expect(componentContext).toContain("rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup");
+    expect(componentContext).toContain("keychainAccessGroup: input.keychainAccessGroup");
+    expect(types).toContain("Retained for API compatibility");
+    expect(types).toContain("attestation_unsupported");
   });
 });
 

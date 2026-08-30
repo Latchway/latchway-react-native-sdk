@@ -28,6 +28,7 @@ PLATFORM_POLICY = {
     "ios_app_attest": {
         "repository": "Latchway/latchway-ios-sdk",
         "provider": "app_attest",
+        "trust": {"app_verified"},
         "security": {"secure_enclave"},
         "distribution": {"ad_hoc", "testflight", "app_store"},
         "pins": {
@@ -71,6 +72,7 @@ PLATFORM_POLICY = {
     "android_play_integrity": {
         "repository": "Latchway/latchway-android",
         "provider": "play_integrity",
+        "trust": {"device_verified", "strong_device_verified"},
         "security": {"strongbox", "tee", "unknown_secure_hardware"},
         "distribution": {"play_internal", "play_closed", "play_open", "play_production"},
         "pins": {
@@ -115,6 +117,7 @@ PLATFORM_POLICY = {
     "react_native_ios_app_attest": {
         "repository": "Latchway/latchway-react-native-sdk",
         "provider": "app_attest",
+        "trust": {"app_verified"},
         "security": {"secure_enclave"},
         "distribution": {"ad_hoc", "testflight", "app_store"},
         "pins": {
@@ -160,6 +163,7 @@ PLATFORM_POLICY = {
     "react_native_android_play_integrity": {
         "repository": "Latchway/latchway-react-native-sdk",
         "provider": "play_integrity",
+        "trust": {"device_verified", "strong_device_verified"},
         "security": {"strongbox", "tee", "unknown_secure_hardware"},
         "distribution": {"play_internal", "play_closed", "play_open", "play_production"},
         "pins": {
@@ -346,11 +350,14 @@ def validate_profile(profile: Any) -> list[str]:
     allowed = {
         "schema_version", "platform", "repository", "source", "toolchain",
         "expected_pins", "application_binary_sha256", "device_inventory_sha256",
+        "application_files_manifest_sha256", "application_bundle_tree_sha256",
     }
     extras = sorted(set(profile) - allowed)
     if extras:
         errors.append(f"profile: unexpected properties: {', '.join(extras)}")
-    required = allowed
+    required = allowed - {
+        "application_files_manifest_sha256", "application_bundle_tree_sha256",
+    }
     missing = sorted(required - set(profile))
     if missing:
         errors.append(f"profile: missing properties: {', '.join(missing)}")
@@ -364,6 +371,18 @@ def validate_profile(profile: Any) -> list[str]:
         return errors
     if profile.get("repository") != policy["repository"]:
         errors.append("profile.repository: does not match platform owner")
+    tree_hash = profile.get("application_bundle_tree_sha256")
+    files_manifest_hash = profile.get("application_files_manifest_sha256")
+    if platform == "react_native_ios_app_attest":
+        if re.fullmatch(r"[0-9a-f]{64}", str(files_manifest_hash)) is None:
+            errors.append("profile.application_files_manifest_sha256: expected protected lowercase SHA-256")
+        if re.fullmatch(r"[0-9a-f]{64}", str(tree_hash)) is None:
+            errors.append("profile.application_bundle_tree_sha256: expected protected lowercase SHA-256")
+    else:
+        if "application_files_manifest_sha256" in profile:
+            errors.append("profile.application_files_manifest_sha256: only React Native iOS may bind an app files manifest")
+        if "application_bundle_tree_sha256" in profile:
+            errors.append("profile.application_bundle_tree_sha256: only React Native iOS may bind an app tree")
     source = profile.get("source")
     if not isinstance(source, dict):
         errors.append("profile.source: expected object")
@@ -526,6 +545,8 @@ def semantic_errors(evidence: dict[str, Any], profile: dict[str, Any]) -> list[s
     provider = evidence.get("provider", {})
     if provider.get("name") != policy["provider"]:
         errors.append("attestation provider does not match platform")
+    if provider.get("trust_level") not in policy["trust"]:
+        errors.append("attestation trust level does not match platform provider normalization")
     if provider.get("environment") != "production":
         errors.append("debug/development attestation cannot be release evidence")
     if provider.get("request_hash_bound") is not True:
@@ -615,6 +636,16 @@ def semantic_errors(evidence: dict[str, Any], profile: dict[str, Any]) -> list[s
     artifacts = evidence.get("artifacts", {})
     if artifacts.get("profile_sha256") != canonical_sha256(profile):
         errors.append("profile hash does not match protected profile")
+    if profile.get("platform") == "react_native_ios_app_attest":
+        if artifacts.get("application_files_manifest_sha256") != profile.get("application_files_manifest_sha256"):
+            errors.append("application files-manifest hash does not match protected profile")
+        if artifacts.get("application_bundle_tree_sha256") != profile.get("application_bundle_tree_sha256"):
+            errors.append("application bundle-tree hash does not match protected profile")
+    else:
+        if "application_files_manifest_sha256" in artifacts:
+            errors.append("unexpected application files-manifest artifact binding")
+        if "application_bundle_tree_sha256" in artifacts:
+            errors.append("unexpected application bundle-tree artifact binding")
     return errors
 
 
@@ -656,6 +687,13 @@ def build_evidence(observation: dict[str, Any], profile: dict[str, Any], schema:
             "schema_sha256": canonical_sha256(schema),
         },
     }
+    if profile["platform"] == "react_native_ios_app_attest":
+        evidence["artifacts"]["application_files_manifest_sha256"] = profile[
+            "application_files_manifest_sha256"
+        ]
+        evidence["artifacts"]["application_bundle_tree_sha256"] = profile[
+            "application_bundle_tree_sha256"
+        ]
     evidence["release_eligible"] = not (
         schema_errors(evidence, schema) + semantic_errors(evidence, profile)
     )

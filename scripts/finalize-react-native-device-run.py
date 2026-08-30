@@ -408,7 +408,11 @@ def build(
     if not isinstance(linked_provider, dict):
         raise ValueError("linked native provider is invalid")
     linked_trust_level = linked_provider.get("trust_level")
-    trusted_levels = {"device_verified", "strong_device_verified"}
+    android = platform.endswith("android_play_integrity")
+    trusted_levels = (
+        {"device_verified", "strong_device_verified"}
+        if android else {"app_verified"}
+    )
     linked_trusted = (
         linked_provider.get("name") == expected_provider
         and linked_provider.get("environment") == "production"
@@ -419,14 +423,16 @@ def build(
         raise ValueError("linked native SDK version differs from the runtime")
     key_ok = native.get("key_storage") in (
         {"strongbox", "trusted_execution_environment", "unknown_secure_hardware"}
-        if platform.endswith("android_play_integrity") else {"secure_enclave"}
+        if android else {"secure_enclave"}
     )
-    session_test = "play_integrity_session" if platform.endswith("android_play_integrity") else "app_attest_session"
-    key_test = "hardware_backed_key" if platform.endswith("android_play_integrity") else "secure_enclave_key"
+    session_test = "play_integrity_session" if android else "app_attest_session"
+    key_test = "hardware_backed_key" if android else "secure_enclave_key"
     trust_rank = {"device_verified": 1, "strong_device_verified": 2}
     current_policy_trust = (
         trust_rank.get(native.get("trust_level"), 0)
         >= trust_rank.get(client_policy.get("minimum_trust_level"), 3)
+        if android else
+        native.get("trust_level") == client_policy.get("minimum_trust_level") == "app_verified"
     )
     trusted = (
         native.get("provider") == expected_provider and native.get("trust_level") in trusted_levels and

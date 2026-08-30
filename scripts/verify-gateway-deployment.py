@@ -82,7 +82,7 @@ ANDROID_CLIENT_FIELDS = {
 
 IOS_PLATFORMS = {"ios_app_attest", "react_native_ios_app_attest"}
 ANDROID_PLATFORMS = {"android_play_integrity", "react_native_android_play_integrity"}
-TRUST_LEVELS = {"device_verified", "strong_device_verified"}
+ANDROID_TRUST_LEVELS = {"device_verified", "strong_device_verified"}
 PLAY_TRACKS = {"internal", "closed", "open", "production"}
 
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -283,6 +283,8 @@ def validate_client(value: Any) -> dict[str, Any]:
             raise Rejected("client_team_id_invalid")
         if value.get("require_play_recognized") is not False or value.get("require_licensed") is not False:
             raise Rejected("client_play_policy_invalid")
+        if value.get("minimum_trust_level") != "app_verified":
+            raise Rejected("client_trust_policy_invalid")
     elif platform in ANDROID_PLATFORMS:
         if set(value) != ANDROID_CLIENT_FIELDS:
             raise Rejected("client_fields_invalid")
@@ -297,6 +299,8 @@ def validate_client(value: Any) -> dict[str, Any]:
             raise Rejected("client_play_track_invalid")
         if value.get("require_play_recognized") is not True or value.get("require_licensed") is not True:
             raise Rejected("client_play_policy_invalid")
+        if value.get("minimum_trust_level") not in ANDROID_TRUST_LEVELS:
+            raise Rejected("client_trust_policy_invalid")
     else:
         raise Rejected("client_platform_invalid")
 
@@ -308,8 +312,6 @@ def validate_client(value: Any) -> dict[str, Any]:
     signing_certificate = value.get("signing_certificate_sha256")
     if not isinstance(signing_certificate, str) or SHA256.fullmatch(signing_certificate) is None:
         raise Rejected("client_signing_certificate_invalid")
-    if value.get("minimum_trust_level") not in TRUST_LEVELS:
-        raise Rejected("client_trust_policy_invalid")
     if value.get("require_request_hash") is not True:
         raise Rejected("client_request_hash_policy_invalid")
     if value.get("allow_testing") is not False or value.get("allow_debug") is not False:

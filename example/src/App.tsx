@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import Config from "react-native-config";
+import firebaseApp from "@react-native-firebase/app";
 import firebaseAuth from "@react-native-firebase/auth";
 import {
   createLatchwayClient,
@@ -23,6 +24,7 @@ import { freshClientAfterRevocation } from "./evidence-client";
 const deployment = {
   baseURL: required("LATCHWAY_BASE_URL"),
   applicationID: required("LATCHWAY_APPLICATION_ID"),
+  packageOrBundleIdentifier: required("LATCHWAY_PACKAGE_OR_BUNDLE_IDENTIFIER"),
   environment: required("LATCHWAY_ENVIRONMENT"),
   feature: required("LATCHWAY_FEATURE"),
   errorMappingFeature: required("LATCHWAY_ERROR_MAPPING_FEATURE"),
@@ -30,7 +32,16 @@ const deployment = {
   googleCloudProjectNumber: Platform.OS === "android"
     ? required("LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER")
     : undefined,
+  rootKeychainAccessGroup: Platform.OS === "ios"
+    ? required("LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP")
+    : undefined,
+  legacySharedKeychainAccessGroups: Platform.OS === "ios"
+    ? configuredKeychainAccessGroups("LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS")
+    : [],
 };
+
+let physicalIdentityBootstrap: Promise<void> | undefined;
+let firebaseInitialization: Promise<void> | undefined;
 
 function makeClient(): LatchwayClient {
   return createLatchwayClient({
@@ -38,13 +49,22 @@ function makeClient(): LatchwayClient {
     applicationID: deployment.applicationID,
     environment: deployment.environment,
     identityProvider: "firebase",
-    getIdentityToken: async () => {
-      const user = firebaseAuth().currentUser;
-      if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
-      return user.getIdToken();
-    },
+    getIdentityToken: physicalConformanceEnabled()
+      ? physicalIdentityToken
+      : async () => {
+        await ensureFirebaseApp();
+        const user = firebaseAuth().currentUser;
+        if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
+        return user.getIdToken();
+      },
     ...(deployment.googleCloudProjectNumber === undefined ? {} : {
       android: { playIntegrityCloudProjectNumber: deployment.googleCloudProjectNumber },
+    }),
+    ...(deployment.rootKeychainAccessGroup === undefined ? {} : {
+      apple: {
+        rootKeychainAccessGroup: deployment.rootKeychainAccessGroup,
+        legacySharedKeychainAccessGroups: deployment.legacySharedKeychainAccessGroups,
+      },
     }),
   });
 }
@@ -111,18 +131,25 @@ export default function App(): React.JSX.Element {
     const tests: EvidenceTest[] = [];
     let diagnostics: Awaited<ReturnType<typeof client.diagnostics>> | undefined;
     let measuredClient: LatchwayClient | undefined;
+    let physicalCleanupComplete = false;
     try {
       const sink = evidenceSink();
       const runID = await sink.runID();
-      const pins = physicalPins();
-      // A dedicated evidence installation is intentionally retired before the
-      // measured run. Revocation is terminal in both native SDKs, so dispose
-      // that native client and configure a new one before any measured call.
-      // The next authorization must execute App Attest / Play Integrity for
-      // this candidate; an older build's active session cannot satisfy the gate.
+      const pins = await physicalPins();
+      if (physicalConformanceEnabled()) {
+        // The collector removes ordinary application state before this launch,
+        // but iOS uninstall does not guarantee Keychain or Secure Enclave
+        // removal. Require a fresh Firebase state first, then explicitly revoke
+        // any prior native Latchway installation before measuring a replacement.
+        // The one-use custom-token grant is consumed only if revocation or the
+        // replacement needs identity.
+        await ensureFirebaseApp();
+        if (firebaseAuth().currentUser !== null) {
+          throw new Error("Protected physical evidence requires a fresh Firebase identity state.");
+        }
+      }
       measuredClient = await freshClientAfterRevocation(client, makeClient);
       setClient(measuredClient);
-      tests.push(booleanTest("react_native_bridge", true));
 
       const firstResponse = await measuredClient.fetch("/v1/chat/completions", {
         method: "POST",
@@ -189,8 +216,13 @@ export default function App(): React.JSX.Element {
       const hardware = Platform.OS === "ios"
         ? diagnostics.keyStorage === "secure_enclave"
         : ["strongbox", "trusted_execution_environment", "unknown_secure_hardware"].includes(diagnostics.keyStorage);
-      const trustedLevel = diagnostics.attestation.trustLevel === "device_verified" ||
-        diagnostics.attestation.trustLevel === "strong_device_verified";
+      // Core normalizes App Attest to the application-scoped `app_verified`
+      // level. Play Integrity retains its device strength. Do not accept one
+      // provider's normalized level as evidence for the other provider.
+      const trustedLevel = Platform.OS === "ios"
+        ? diagnostics.attestation.trustLevel === "app_verified"
+        : diagnostics.attestation.trustLevel === "device_verified" ||
+          diagnostics.attestation.trustLevel === "strong_device_verified";
       tests.push(booleanTest(
         Platform.OS === "ios" ? "app_attest_session" : "play_integrity_session",
         diagnostics.platform === expectedPlatform && diagnostics.attestation.provider === expectedProvider &&
@@ -200,6 +232,19 @@ export default function App(): React.JSX.Element {
         Platform.OS === "ios" ? "secure_enclave_key" : "hardware_backed_key",
         hardware,
       ));
+
+      if (physicalConformanceEnabled()) {
+        // A passing record must not leave the measured installation or its
+        // derived Firebase identity reusable. Revoke Latchway first because
+        // revocation may require the current identity token.
+        await measuredClient.revokeCurrentInstallation();
+        await firebaseAuth().signOut();
+        physicalIdentityBootstrap = undefined;
+        physicalCleanupComplete = true;
+      }
+      // Defer this required marker until terminal cleanup succeeds. Any cleanup
+      // error therefore produces a bounded record with a failed bridge check.
+      tests.push(booleanTest("react_native_bridge", true));
 
       const requiredTests = rawEvidenceTests().map((identifier) =>
         tests.find((test) => test.id === identifier) ?? booleanTest(identifier, false)
@@ -240,7 +285,7 @@ export default function App(): React.JSX.Element {
       try {
         const sink = evidenceSink();
         const runID = await sink.runID();
-        const pins = physicalPins();
+        const pins = await physicalPins();
         const requiredTests = rawEvidenceTests().map((identifier) =>
           tests.find((test) => test.id === identifier) ?? booleanTest(identifier, false)
         );
@@ -269,6 +314,15 @@ export default function App(): React.JSX.Element {
       }
       setStatus(safeError(error));
     } finally {
+      if (physicalConformanceEnabled() && !physicalCleanupComplete) {
+        // Retry terminal cleanup best-effort after a failed run, preserving the
+        // identity-dependent Latchway-revoke-before-Firebase-sign-out order.
+        if (measuredClient !== undefined) {
+          try { await measuredClient.revokeCurrentInstallation(); } catch { /* failure record is already terminal */ }
+        }
+        try { await firebaseAuth().signOut(); } catch { /* protected wipe remains authoritative */ }
+        physicalIdentityBootstrap = undefined;
+      }
       setBusy(false);
     }
   };
@@ -319,6 +373,12 @@ function required(name: keyof typeof Config): string {
 }
 
 interface EvidenceSink {
+  consumeIdentityGrant(
+    applicationID: string,
+    packageOrBundleIdentifier: string,
+    identityProvider: "firebase",
+  ): Promise<string>;
+  javascriptBundleSHA256(): Promise<string>;
   runID(): Promise<string>;
   write(encoded: string): Promise<void>;
 }
@@ -342,10 +402,73 @@ interface SafeHTTPResult {
 
 function evidenceSink(): EvidenceSink {
   const value = NativeModules.LatchwayEvidence as EvidenceSink | undefined;
-  if (value === undefined || typeof value.runID !== "function" || typeof value.write !== "function") {
+  if (value === undefined || typeof value.consumeIdentityGrant !== "function" ||
+      typeof value.javascriptBundleSHA256 !== "function" ||
+      typeof value.runID !== "function" || typeof value.write !== "function") {
     throw new Error("The physical-evidence native sink is unavailable.");
   }
   return value;
+}
+
+function physicalConformanceEnabled(): boolean {
+  return configuredOptional("LATCHWAY_CONFORMANCE_AUTORUN") === "true";
+}
+
+async function physicalIdentityToken(): Promise<string> {
+  await ensureFirebaseApp();
+  let user = firebaseAuth().currentUser;
+  if (user === null) {
+    const bootstrap = physicalIdentityBootstrap ?? bootstrapPhysicalIdentity();
+    physicalIdentityBootstrap = bootstrap;
+    try {
+      await bootstrap;
+    } finally {
+      if (physicalIdentityBootstrap === bootstrap) physicalIdentityBootstrap = undefined;
+    }
+    user = firebaseAuth().currentUser;
+  }
+  if (user === null) throw new Error("The protected one-use identity grant did not establish Firebase identity.");
+  return user.getIdToken();
+}
+
+async function bootstrapPhysicalIdentity(): Promise<void> {
+  // `grant` exists only in this stack frame. The example-native handoff clears
+  // its reusable slot before resolving and refuses a second read. Platform app
+  // uninstall/data wipe remains the authoritative cleanup boundary.
+  const grant = await evidenceSink().consumeIdentityGrant(
+    deployment.applicationID,
+    deployment.packageOrBundleIdentifier,
+    "firebase",
+  );
+  try {
+    await firebaseAuth().signInWithCustomToken(grant);
+  } catch {
+    // Do not pass a provider error through the UI/evidence path: a third-party
+    // diagnostic is not trusted to avoid reflecting credential material.
+    throw new Error("Protected one-use Firebase identity bootstrap failed.");
+  }
+}
+
+async function ensureFirebaseApp(): Promise<void> {
+  if (firebaseApp.apps.length > 0) return;
+  const initialization = firebaseInitialization ?? initializePhysicalFirebase();
+  firebaseInitialization = initialization;
+  try {
+    await initialization;
+  } finally {
+    if (firebaseInitialization === initialization) firebaseInitialization = undefined;
+  }
+}
+
+async function initializePhysicalFirebase(): Promise<void> {
+  if (!physicalConformanceEnabled()) {
+    throw new Error("Configure the host's default Firebase application before signing in.");
+  }
+  await firebaseApp.initializeApp({
+    apiKey: configured("LATCHWAY_FIREBASE_API_KEY"),
+    appId: configured("LATCHWAY_FIREBASE_APP_ID"),
+    projectId: configured("LATCHWAY_FIREBASE_PROJECT_ID"),
+  });
 }
 
 function configured(name: string): string {
@@ -358,7 +481,17 @@ function configuredOptional(name: string): string | undefined {
   return (Config as Record<string, string | undefined>)[name];
 }
 
-function physicalPins(): Record<string, string> & { native_evidence_sha256: string } {
+function configuredKeychainAccessGroups(name: string): string[] {
+  const value = configuredOptional(name);
+  if (value === undefined || value.length === 0) return [];
+  const groups = value.split(",");
+  if (groups.some((group) => group.length === 0 || group.trim() !== group)) {
+    throw new Error(`${name} must be a comma-separated list without whitespace.`);
+  }
+  return groups;
+}
+
+async function physicalPins(): Promise<Record<string, string> & { native_evidence_sha256: string }> {
   const common = {
     source_commit: configured("LATCHWAY_SOURCE_COMMIT"),
     core_commit: configured("LATCHWAY_CORE_COMMIT"),
@@ -380,7 +513,10 @@ function physicalPins(): Record<string, string> & { native_evidence_sha256: stri
   }
   return Platform.OS === "ios" ? {
     ...common,
-    javascript_bundle_sha256: configured("LATCHWAY_JAVASCRIPT_BUNDLE_SHA256"),
+    // The JavaScript bundle cannot contain its own SHA-256. The collector
+    // verifies the signed app first and injects that non-secret digest through
+    // the example-native launch boundary.
+    javascript_bundle_sha256: await evidenceSink().javascriptBundleSHA256(),
     team_id: configured("LATCHWAY_IOS_TEAM_ID"),
     app_attest_environment: configured("LATCHWAY_APP_ATTEST_ENVIRONMENT"),
   } : {

@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
+
+# Capture the fresh-install Firebase custom token in a shell-only slot before
+# any child process can inherit the exported workflow variable.
+latchway_device_grant="${LATCHWAY_ONE_TIME_DEVICE_GRANT:-}"
+unset LATCHWAY_ONE_TIME_DEVICE_GRANT
+export -n latchway_device_grant
+
+for environment_name in "${!LATCHWAY_@}"; do
+  case "$environment_name" in
+    LATCHWAY_DEVICE_GRANT_SHA256)
+      ;;
+    *TOKEN*|*GRANT*)
+      echo "unexpected ambient identity or device grant is forbidden" >&2
+      exit 2
+      ;;
+  esac
+done
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 schema="$repository_root/Conformance/physical-device-evidence.schema.json"
@@ -15,13 +33,16 @@ required=(
   LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256 LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_PATH
   LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256 LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL
   LATCHWAY_ENVIRONMENT LATCHWAY_ERROR_MAPPING_FEATURE
+  LATCHWAY_APPLICATION_ID
   LATCHWAY_NATIVE_EVIDENCE_PATH LATCHWAY_NATIVE_PROFILE_PATH LATCHWAY_RUN_ID
+  LATCHWAY_DEVICE_GRANT_SHA256
 )
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "required protected variable is missing: $name" >&2; exit 2; }; done
 for tool in adb apksigner apkanalyzer cmp curl install java openssl python3 shasum; do command -v "$tool" >/dev/null || { echo "required tool is unavailable: $tool" >&2; exit 2; }; done
 # shellcheck source=scripts/gateway-deployment-evidence.sh
 source "$repository_root/scripts/gateway-deployment-evidence.sh"
 [[ "$LATCHWAY_PACKAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,254}$ ]] || { echo "invalid package pin" >&2; exit 2; }
+[[ "$LATCHWAY_APPLICATION_ID" =~ ^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$ ]] || { echo "invalid application ID pin" >&2; exit 2; }
 [[ "$LATCHWAY_APP_VERSION" =~ ^[^[:space:]]{1,64}$ ]] || { echo "invalid version pin" >&2; exit 2; }
 [[ "$LATCHWAY_VERSION_CODE" =~ ^[1-9][0-9]{0,17}$ && "$LATCHWAY_CLOUD_PROJECT_NUMBER" =~ ^[1-9][0-9]{0,18}$ ]] || { echo "invalid build/cloud pin" >&2; exit 2; }
 [[ "$LATCHWAY_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ && "$LATCHWAY_CORE_COMMIT" =~ ^[0-9a-f]{40}$ && "$LATCHWAY_ANDROID_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit pin" >&2; exit 2; }
@@ -29,6 +50,10 @@ source "$repository_root/scripts/gateway-deployment-evidence.sh"
 [[ "$LATCHWAY_CONTRACT_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ && "$LATCHWAY_GATEWAY_CONFIGURATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid configuration pin" >&2; exit 2; }
 [[ "$LATCHWAY_GATEWAY_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "invalid image pin" >&2; exit 2; }
 [[ "$LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256" =~ ^[0-9a-f]{64}$ && "$LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid gateway deployment hash pin" >&2; exit 2; }
+[[ "$LATCHWAY_DEVICE_GRANT_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid one-use identity grant pin" >&2; exit 2; }
+(( ${#latchway_device_grant} >= 32 && ${#latchway_device_grant} <= 65536 )) || { echo "invalid one-use identity grant length" >&2; exit 2; }
+[[ "$latchway_device_grant" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]] || { echo "one-use identity grant is not a Firebase custom-token JWT" >&2; exit 2; }
+[[ "$(printf '%s' "$latchway_device_grant" | shasum -a 256 | awk '{print $1}')" == "$LATCHWAY_DEVICE_GRANT_SHA256" ]] || { echo "one-use identity grant hash mismatch" >&2; exit 1; }
 case "$LATCHWAY_GATEWAY_MINIMUM_TRUST_LEVEL" in device_verified|strong_device_verified) ;; *) echo "invalid gateway minimum trust level" >&2; exit 2;; esac
 [[ "$LATCHWAY_RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$ ]] || { echo "invalid run ID" >&2; exit 2; }
 case "$LATCHWAY_PLAY_TRACK" in internal|closed|open|production) ;; *) echo "invalid Play track" >&2; exit 2;; esac
@@ -37,7 +62,11 @@ case "$LATCHWAY_PLAY_TRACK" in internal|closed|open|production) ;; *) echo "inva
 mkdir -p "$LATCHWAY_EVIDENCE_OUTPUT_DIR"
 output="$(cd "$LATCHWAY_EVIDENCE_OUTPUT_DIR" && pwd -P)"
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/latchway-rn-android.XXXXXX")"
-cleanup() { if [[ -d "$temporary" && "$temporary" == */latchway-rn-android.* ]]; then rm -rf "$temporary"; fi; }
+cleanup() {
+  latchway_device_grant=""
+  unset latchway_device_grant
+  if [[ -d "$temporary" && "$temporary" == */latchway-rn-android.* ]]; then rm -rf "$temporary"; fi
+}
 trap cleanup EXIT
 [[ "$(git -C "$repository_root" rev-parse HEAD)" == "$LATCHWAY_SOURCE_COMMIT" ]] || { echo "source commit mismatch" >&2; exit 1; }
 [[ -z "$(git -C "$repository_root" status --porcelain=v1 --untracked-files=all)" ]] || { echo "physical evidence requires a clean source tree" >&2; exit 1; }
@@ -67,12 +96,18 @@ qemu="$(adb_device shell getprop ro.kernel.qemu | tr -d '\r')"
 boot="$(adb_device shell getprop ro.boot.verifiedbootstate | tr -d '\r')"
 locked="$(adb_device shell getprop ro.boot.flash.locked | tr -d '\r')"
 [[ "$build_type" == user && "$debuggable" == 0 && "$secure" == 1 && "$qemu" != 1 && "$tags" != *test-keys* && "$boot" == green && "$locked" == 1 ]] || { echo "emulator/debug/unlocked device rejected" >&2; exit 1; }
-source_info="$(adb_device shell cmd package get-install-source "$LATCHWAY_PACKAGE_NAME" | tr -d '\r')"
-[[ "$source_info" == *com.android.vending* ]] || { echo "candidate is not Play installed" >&2; exit 1; }
-remote_paths_raw="$temporary/remote-apk-paths.raw"
-remote_paths="$temporary/remote-apk-paths.txt"
-adb_device shell pm path "$LATCHWAY_PACKAGE_NAME" >"$remote_paths_raw"
-python3 - "$remote_paths_raw" "$remote_paths" <<'PY'
+capture_installed_apk_set() {
+  local phase="$1"
+  local output_manifest="$2"
+  [[ "$phase" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "invalid installed APK capture phase" >&2; return 1; }
+  local source_info
+  source_info="$(adb_device shell cmd package get-install-source "$LATCHWAY_PACKAGE_NAME" | tr -d '\r')"
+  [[ "$source_info" == *com.android.vending* ]] || { echo "candidate is not Play installed" >&2; return 1; }
+
+  local remote_paths_raw="$temporary/$phase-remote-apk-paths.raw"
+  local remote_paths="$temporary/$phase-remote-apk-paths.txt"
+  adb_device shell pm path "$LATCHWAY_PACKAGE_NAME" >"$remote_paths_raw"
+  python3 - "$remote_paths_raw" "$remote_paths" <<'PY'
 import pathlib, re, sys
 raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 paths = []
@@ -86,32 +121,38 @@ if sum(path.endswith("/base.apk") for path in paths) != 1: raise SystemExit("exa
 if len({path.rsplit("/", 1)[-1] for path in paths}) != len(paths): raise SystemExit("ambiguous APK names")
 pathlib.Path(sys.argv[2]).write_text("".join(path + "\n" for path in sorted(paths)), encoding="utf-8")
 PY
-apk_set_dir="$temporary/apk-set"
-mkdir "$apk_set_dir"
-manifest_unsorted="$temporary/installed-apk-set.unsorted"
-while IFS= read -r remote_apk; do
-  apk_name="${remote_apk##*/}"
-  apk="$apk_set_dir/$apk_name"
-  adb_device exec-out cat "$remote_apk" >"$apk"
-  [[ -s "$apk" && ! -L "$apk" ]] || { echo "installed APK could not be collected safely" >&2; exit 1; }
-  apksigner verify --verbose --print-certs "$apk" >/dev/null
-  actual_certificate="$(apksigner verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr '[:upper:]' '[:lower:]')"
-  actual_package="$(apkanalyzer manifest application-id "$apk")"
-  actual_code="$(apkanalyzer manifest version-code "$apk")"
-  [[ "$actual_certificate" == "$LATCHWAY_SIGNING_CERTIFICATE_SHA256" && "$actual_package" == "$LATCHWAY_PACKAGE_NAME" && "$actual_code" == "$LATCHWAY_VERSION_CODE" ]] || { echo "signed split identity mismatch" >&2; exit 1; }
-  actual_version="$(apkanalyzer manifest version-name "$apk" 2>/dev/null || true)"
-  if [[ "$apk_name" == base.apk ]]; then
-    [[ "$actual_version" == "$LATCHWAY_APP_VERSION" ]] || { echo "installed base APK version name mismatch" >&2; exit 1; }
-  else
-    [[ -z "$actual_version" || "$actual_version" == "$LATCHWAY_APP_VERSION" ]] || { echo "signed split version name mismatch" >&2; exit 1; }
-  fi
-  apk_sha256="$(shasum -a 256 "$apk" | awk '{print $1}')"
-  printf '%s\t%s\n' "$apk_name" "$apk_sha256" >>"$manifest_unsorted"
-done <"$remote_paths"
+  local apk_set_dir="$temporary/$phase-apk-set"
+  local manifest_unsorted="$temporary/$phase-installed-apk-set.unsorted"
+  mkdir "$apk_set_dir"
+  while IFS= read -r remote_apk; do
+    local apk_name="${remote_apk##*/}"
+    local apk="$apk_set_dir/$apk_name"
+    adb_device exec-out cat "$remote_apk" >"$apk"
+    [[ -s "$apk" && ! -L "$apk" ]] || { echo "installed APK could not be collected safely" >&2; return 1; }
+    local apksigner_report="$temporary/$phase-$apk_name-apksigner.txt"
+    apksigner verify --verbose --print-certs "$apk" >"$apksigner_report"
+    python3 "$repository_root/scripts/verify-apksigner-report.py" \
+      "$LATCHWAY_SIGNING_CERTIFICATE_SHA256" <"$apksigner_report"
+    local actual_package actual_code actual_version apk_sha256
+    actual_package="$(apkanalyzer manifest application-id "$apk")"
+    actual_code="$(apkanalyzer manifest version-code "$apk")"
+    [[ "$actual_package" == "$LATCHWAY_PACKAGE_NAME" && "$actual_code" == "$LATCHWAY_VERSION_CODE" ]] || { echo "signed split identity mismatch" >&2; return 1; }
+    actual_version="$(apkanalyzer manifest version-name "$apk" 2>/dev/null || true)"
+    if [[ "$apk_name" == base.apk ]]; then
+      [[ "$actual_version" == "$LATCHWAY_APP_VERSION" ]] || { echo "installed base APK version name mismatch" >&2; return 1; }
+    else
+      [[ -z "$actual_version" || "$actual_version" == "$LATCHWAY_APP_VERSION" ]] || { echo "signed split version name mismatch" >&2; return 1; }
+    fi
+    apk_sha256="$(shasum -a 256 "$apk" | awk '{print $1}')"
+    printf '%s\t%s\n' "$apk_name" "$apk_sha256" >>"$manifest_unsorted"
+  done <"$remote_paths"
+  LC_ALL=C sort "$manifest_unsorted" >"$output_manifest"
+  shasum -a 256 "$output_manifest" | awk '{print $1}'
+}
+
 apk_set_manifest="$output/installed-apk-set.sha256"
-LC_ALL=C sort "$manifest_unsorted" >"$apk_set_manifest"
-actual_apk_set="$(shasum -a 256 "$apk_set_manifest" | awk '{print $1}')"
-[[ "$actual_apk_set" == "$LATCHWAY_INSTALLED_APK_SET_SHA256" ]] || { echo "installed APK set mismatch" >&2; exit 1; }
+pre_run_apk_set_sha256="$(capture_installed_apk_set pre-run "$apk_set_manifest")"
+[[ "$pre_run_apk_set_sha256" == "$LATCHWAY_INSTALLED_APK_SET_SHA256" ]] || { echo "installed APK set mismatch" >&2; exit 1; }
 
 client_policy="$temporary/gateway-client-policy.json"
 python3 - "$client_policy" <<'PY'
@@ -127,8 +168,13 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps(policy, allow_nan=False, ensure_
 PY
 latchway_capture_gateway_deployment "$output" "$client_policy"
 
-adb_device shell am force-stop "$LATCHWAY_PACKAGE_NAME"
+[[ "$(adb_device shell pm clear "$LATCHWAY_PACKAGE_NAME" | tr -d '\r')" == Success ]] || { echo "failed to clear candidate application data" >&2; exit 1; }
+[[ -z "$(adb_device shell pidof "$LATCHWAY_PACKAGE_NAME" | tr -d '\r')" ]] || { echo "candidate process survived app-data clear" >&2; exit 1; }
 adb_device shell am start -n "$LATCHWAY_PACKAGE_NAME/com.latchwayexample.MainActivity" --es dev.latchway.RUN_ID "$LATCHWAY_RUN_ID" >/dev/null
+grant_uri="content://$LATCHWAY_PACKAGE_NAME.device-evidence/v1/identity-grant/$LATCHWAY_DEVICE_GRANT_SHA256/$LATCHWAY_RUN_ID/$LATCHWAY_APPLICATION_ID/$LATCHWAY_PACKAGE_NAME/firebase"
+printf '%s' "$latchway_device_grant" | adb_device shell content write --uri "$grant_uri" >/dev/null
+latchway_device_grant=""
+unset latchway_device_grant
 raw="$output/react-native-android-run.json"
 ready=false
 for _ in {1..180}; do
@@ -145,6 +191,18 @@ PY
   sleep 5
 done
 [[ "$ready" == true ]] || { echo "React Native Android run was not produced" >&2; exit 1; }
+
+post_run_apk_set_manifest="$temporary/installed-apk-set-post-run.sha256"
+post_run_apk_set_sha256="$(capture_installed_apk_set post-run "$post_run_apk_set_manifest")"
+[[ "$post_run_apk_set_sha256" == "$pre_run_apk_set_sha256" && "$post_run_apk_set_sha256" == "$LATCHWAY_INSTALLED_APK_SET_SHA256" ]] || {
+  echo "installed APK set changed during physical evidence collection" >&2
+  exit 1
+}
+cmp --silent "$apk_set_manifest" "$post_run_apk_set_manifest" || {
+  echo "installed APK manifest changed during physical evidence collection" >&2
+  exit 1
+}
+export LATCHWAY_OBSERVED_INSTALLED_APK_SET_SHA256="$post_run_apk_set_sha256"
 
 inventory="$output/device-inventory.json"
 collection="$output/react-native-android-collection.json"
@@ -198,7 +256,7 @@ profile = {"schema_version": "latchway.physical-device-profile.v1", "platform": 
  "gateway_deployment_public_key_sha256": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256"]},
  "toolchain": {"runner_os": os.environ["LATCHWAY_RUNNER_OS"], "runner_arch": os.environ["LATCHWAY_RUNNER_ARCH"], "compiler": os.environ["LATCHWAY_COMPILER"],
  "build_tool": os.environ["LATCHWAY_BUILD_TOOL"], "collector_version": "1"}, "expected_pins": expected,
- "application_binary_sha256": os.environ["LATCHWAY_INSTALLED_APK_SET_SHA256"], "device_inventory_sha256": os.environ["LATCHWAY_DEVICE_INVENTORY_SHA256"]}
+ "application_binary_sha256": os.environ["LATCHWAY_OBSERVED_INSTALLED_APK_SET_SHA256"], "device_inventory_sha256": os.environ["LATCHWAY_DEVICE_INVENTORY_SHA256"]}
 pathlib.Path(sys.argv[1]).write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 observation="$output/react-native-android-observation.json"

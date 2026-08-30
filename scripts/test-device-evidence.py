@@ -150,7 +150,7 @@ def observation() -> dict:
         "provider": {
             "name": "app_attest",
             "environment": "production",
-            "trust_level": "strong_device_verified",
+            "trust_level": "app_verified",
             "request_hash_bound": True,
             "app_recognition": "not_applicable",
             "account_licensing": "not_applicable",
@@ -232,6 +232,9 @@ def react_native_case(platform: str) -> tuple[dict, dict]:
         "application_binary_sha256": "6" * 64,
         "device_inventory_sha256": "8" * 64,
     }
+    if platform == "react_native_ios_app_attest":
+        current_profile["application_files_manifest_sha256"] = "c" * 64
+        current_profile["application_bundle_tree_sha256"] = "d" * 64
     tests = []
     for name in sorted(device_evidence.PLATFORM_POLICY[platform]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
@@ -286,7 +289,7 @@ def react_native_case(platform: str) -> tuple[dict, dict]:
         "provider": {
             "name": "play_integrity" if android else "app_attest",
             "environment": "production",
-            "trust_level": "strong_device_verified",
+            "trust_level": "strong_device_verified" if android else "app_verified",
             "request_hash_bound": True,
             "app_recognition": "PLAY_RECOGNIZED" if android else "not_applicable",
             "account_licensing": "LICENSED" if android else "not_applicable",
@@ -360,6 +363,19 @@ class DeviceEvidenceTest(unittest.TestCase):
         result = device_evidence.build_evidence(current, profile(), self.schema)
         self.assertFalse(result["release_eligible"])
 
+    def test_provider_trust_normalization_is_platform_exact(self) -> None:
+        ios = observation()
+        ios["provider"]["trust_level"] = "device_verified"
+        self.assertFalse(
+            device_evidence.build_evidence(ios, profile(), self.schema)["release_eligible"]
+        )
+
+        android_profile, android = react_native_case("react_native_android_play_integrity")
+        android["provider"]["trust_level"] = "app_verified"
+        self.assertFalse(
+            device_evidence.build_evidence(android, android_profile, self.schema)["release_eligible"]
+        )
+
     def test_pin_mismatch_fails_closed(self) -> None:
         current = observation()
         current["observed_pins"]["team_id"] = "ZZZZZZZZZZ"
@@ -427,7 +443,28 @@ class DeviceEvidenceTest(unittest.TestCase):
         current_profile, current_observation = react_native_case("react_native_ios_app_attest")
         result = device_evidence.build_evidence(current_observation, current_profile, self.schema)
         self.assertTrue(result["release_eligible"])
+        self.assertEqual(
+            result["artifacts"]["application_files_manifest_sha256"],
+            current_profile["application_files_manifest_sha256"],
+        )
+        self.assertEqual(
+            result["artifacts"]["application_bundle_tree_sha256"],
+            current_profile["application_bundle_tree_sha256"],
+        )
         self.assertEqual(device_evidence.verify(result, current_profile, self.schema), [])
+
+        result["artifacts"]["application_bundle_tree_sha256"] = "0" * 64
+        self.assertIn(
+            "application bundle-tree hash does not match protected profile",
+            device_evidence.verify(result, current_profile, self.schema),
+        )
+
+        result = device_evidence.build_evidence(current_observation, current_profile, self.schema)
+        result["artifacts"]["application_files_manifest_sha256"] = "0" * 64
+        self.assertIn(
+            "application files-manifest hash does not match protected profile",
+            device_evidence.verify(result, current_profile, self.schema),
+        )
 
     def test_react_native_android_release_evidence_passes(self) -> None:
         current_profile, current_observation = react_native_case("react_native_android_play_integrity")

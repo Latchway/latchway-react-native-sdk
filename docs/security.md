@@ -13,21 +13,38 @@
 
 iOS defaults to Secure Enclave with software fallback disallowed. Android defaults to StrongBox preferred with software-backed keys disallowed. Relaxation is explicit (`apple.softwareKeyFallbackPolicy: "allow"` or `android.keyPolicy: "software_allowed"`) and changes the trust properties reported by the server. Do not silently enable fallback after a native failure.
 
+The iOS root client and App Attest provider receive the same explicit private
+Keychain group and the same bounded list of extension-shared groups. Root
+keys, sessions, and App Attest state never use an implicit shared group. The
+App Intents/component path continues to use only its exact shared component
+group and constructs no root App Attest provider.
+
+On iOS, sign the root target with its private app-ID Keychain group first and
+the shared component group second. Keychain calls without an explicit access
+group therefore default to root-private storage. Sign an extension with only
+the shared group: it may use explicitly component-scoped handoff/session state,
+but it cannot read the root's private keys, credentials, or sessions. Candidate
+verification rejects any other signed ordering or membership and requires each
+signed group to be authorized by the target's provisioning profile.
+
 ## Attestation
 
 App Attest and Play Integrity run entirely in their native SDK providers. Server `client_data_hash`/request-hash bindings are consumed internally. JavaScript cannot provide evidence or claim a trust result. Disabling App Attest or omitting the Android cloud project fails closed when the server requires that provider.
 
-The direct iOS component step-up uses a distinct client created only inside the
-signed extension process; a containing-app process fails configuration and a
-root native lease is never reused. It accepts only a public component
-descriptor and selects `react_native_ios`, which the iOS SDK checks against the
-stored and rotated component grants before network or state replacement. The
-component-scoped provider, version-2 challenge, evidence, exchange, and session
-rotation remain in the iOS SDK; only redacted diagnostics, including the
-server-validated `delegated_direct_attested` source, can return. Do not add an
-evidence/token escape hatch for Android while its native SDK lacks the same
-operation: the React Native bridge deliberately returns
-`attestation_unsupported`.
+An iOS application extension cannot call `DCAppAttestService.generateKey`.
+Only the containing root application establishes App Attest for itself, and it
+must never attest on an extension's behalf. The separate extension-process
+client therefore constructs no App Attest provider and cannot acquire the root
+lease; it retains independently keyed, component-scoped delegated sessions and
+returns only redacted diagnostics. Direct-attestation entry points and trust
+source decoders remain for API/wire compatibility, but invocation fails closed
+with `attestation_unsupported` on both platforms and must not be treated as a
+reachable trust result.
+
+React Native v1 has no delegated component request API. The example App
+Intents target does not host React Native or call the component bridge and its
+intent fails closed; do not treat its build, installation, or invocation as
+delegated-request evidence.
 
 ## Dispatch, replay, and redirects
 

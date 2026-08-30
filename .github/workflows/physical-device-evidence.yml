@@ -102,7 +102,11 @@ jobs:
           COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
           COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
           DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
+          APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
+          PACKAGE_OR_BUNDLE_IDENTIFIER: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
           APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          APP_FILES_MANIFEST_SHA256: ${{ vars.LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256 }}
+          APP_BUNDLE_TREE_SHA256: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256 }}
           JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
           NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -138,10 +142,12 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --arg application_id "$APPLICATION_ID" --arg package_or_bundle "$PACKAGE_OR_BUNDLE_IDENTIFIER" \
             --arg grant "$DEVICE_GRANT_SHA256" --arg app "$APP_BINARY_SHA256" \
+            --arg files "$APP_FILES_MANIFEST_SHA256" --arg tree "$APP_BUNDLE_TREE_SHA256" \
             --arg js "$JAVASCRIPT_BUNDLE_SHA256" --arg native "$NATIVE_EVIDENCE_SHA256" \
             --argjson now "$now" '
-              .schema_version == "latchway.physical-collector-lease.v1" and
+              .schema_version == "latchway.physical-collector-lease.v2" and
               .repository == $repository and .source_commit == $commit and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-ios-app-attest"} and
               .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
@@ -150,18 +156,22 @@ jobs:
               .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
               .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,identity_grant_digest_one_use_enforced:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              (.grant | keys) == ["application_id","audience","expires_at_unix","identity_provider","issued_at_unix","package_or_bundle_identifier","run_attempt","run_id","sha256","single_use","source_commit"] and
               .grant.audience == "latchway-physical-evidence/rn-ios-app-attest" and
+              .grant.application_id == $application_id and
+              .grant.package_or_bundle_identifier == $package_or_bundle and
+              .grant.identity_provider == "firebase" and
               .grant.source_commit == $commit and .grant.run_id == $run_id and
               .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and
-              .grant.single_use == true and (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              .grant.single_use == true and
               (.grant.issued_at_unix | type == "number") and
               (.grant.expires_at_unix | type == "number") and
               .grant.issued_at_unix >= .issued_at_unix and .grant.issued_at_unix <= $now and
               .grant.expires_at_unix >= $now and .grant.expires_at_unix <= .expires_at_unix and
               .grant.expires_at_unix > .grant.issued_at_unix and
               (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
-              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
+              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_app_files_manifest_sha256:$files,ios_app_bundle_tree_sha256:$tree,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
               .issued_at_unix <= $now and .expires_at_unix >= $now and
               (.expires_at_unix - .issued_at_unix) <= 3600
             ' "$lease" >/dev/null
@@ -232,11 +242,16 @@ jobs:
           LATCHWAY_IOS_APP_BUNDLE_PATH: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_PATH }}
           LATCHWAY_IOS_INSTALL_MODE: ${{ vars.LATCHWAY_IOS_INSTALL_MODE }}
           LATCHWAY_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
+          LATCHWAY_IOS_APPINTENTS_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_APPINTENTS_BUNDLE_ID }}
+          LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP: ${{ vars.LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP }}
           LATCHWAY_APP_VERSION: ${{ vars.LATCHWAY_IOS_APP_VERSION }}
           LATCHWAY_BUILD_NUMBER: ${{ vars.LATCHWAY_IOS_BUILD_NUMBER }}
           LATCHWAY_TEAM_ID: ${{ vars.LATCHWAY_IOS_TEAM_ID }}
+          LATCHWAY_IOS_APP_ID_PREFIX: ${{ vars.LATCHWAY_IOS_APP_ID_PREFIX }}
           LATCHWAY_SIGNING_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_IOS_SIGNING_CERTIFICATE_SHA256 }}
           LATCHWAY_APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256: ${{ vars.LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256 }}
+          LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256 }}
           LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
           LATCHWAY_DISTRIBUTION: ${{ vars.LATCHWAY_IOS_DISTRIBUTION }}
           LATCHWAY_SOURCE_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
@@ -259,6 +274,8 @@ jobs:
           LATCHWAY_NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
           LATCHWAY_NATIVE_EVIDENCE_PATH: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_PATH }}
           LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_IOS_NATIVE_PROFILE_PATH }}
+          LATCHWAY_ONE_TIME_DEVICE_GRANT: ${{ secrets.LATCHWAY_ONE_TIME_DEVICE_GRANT }}
+          LATCHWAY_DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
           LATCHWAY_RUN_ID: rn-ios-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/run-physical-react-native-ios.sh
       - name: Wipe iOS app data even when collection fails
@@ -297,6 +314,7 @@ jobs:
         env:
           LATCHWAY_IOS_DEVICE_ID: ${{ secrets.LATCHWAY_IOS_DEVICE_ID }}
           LATCHWAY_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -Eeuo pipefail
@@ -330,18 +348,20 @@ jobs:
             --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" --arg auth "$auth_sha" \
             --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
             --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --arg grant "$DEVICE_GRANT_SHA256" \
             --argjson now "$now" '
-              .schema_version == "latchway.physical-collector-teardown.v1" and
+              .schema_version == "latchway.physical-collector-teardown.v2" and
               .repository == $repository and .source_commit == $commit and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-ios-app-attest"} and
               .runner.name == $runner and .runner.deregistered == true and
               .runner.accepts_more_jobs == false and .runner.destroy_scheduled == true and
               .runner.destroy_deadline_unix >= $now and .runner.destroy_deadline_unix <= ($now + 600) and
               .evidence_eligible == true and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,gateway_run_receipt_binds_identity_grant_digest:true,identity_grant_digest_consumed_once:true,one_use_invocation:true,watchdog_armed:true} and
               .observations.device_inventory_sha256 == $device and
               .observations.provider_observation_sha256 == $provider and
               .observations.gateway_deployment_verification_sha256 == $deployment and
+              .observations.identity_grant_sha256 == $grant and
               (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
               .device == {app_data_wiped:true,method:"ios-uninstall",receipt_sha256:$wipe} and
               .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
@@ -385,6 +405,8 @@ jobs:
           COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
           COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
           DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
+          APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
+          PACKAGE_OR_BUNDLE_IDENTIFIER: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
           APK_SET_SHA256: ${{ vars.LATCHWAY_ANDROID_INSTALLED_APK_SET_SHA256 }}
           NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -420,9 +442,10 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --arg application_id "$APPLICATION_ID" --arg package_or_bundle "$PACKAGE_OR_BUNDLE_IDENTIFIER" \
             --arg grant "$DEVICE_GRANT_SHA256" --arg apk "$APK_SET_SHA256" \
             --arg native "$NATIVE_EVIDENCE_SHA256" --argjson now "$now" '
-              .schema_version == "latchway.physical-collector-lease.v1" and
+              .schema_version == "latchway.physical-collector-lease.v2" and
               .repository == $repository and .source_commit == $commit and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-android-play-integrity"} and
               .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
@@ -431,11 +454,15 @@ jobs:
               .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
               .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,identity_grant_digest_one_use_enforced:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              (.grant | keys) == ["application_id","audience","expires_at_unix","identity_provider","issued_at_unix","package_or_bundle_identifier","run_attempt","run_id","sha256","single_use","source_commit"] and
               .grant.audience == "latchway-physical-evidence/rn-android-play-integrity" and
+              .grant.application_id == $application_id and
+              .grant.package_or_bundle_identifier == $package_or_bundle and
+              .grant.identity_provider == "firebase" and
               .grant.source_commit == $commit and .grant.run_id == $run_id and
               .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and
-              .grant.single_use == true and (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              .grant.single_use == true and
               (.grant.issued_at_unix | type == "number") and
               (.grant.expires_at_unix | type == "number") and
               .grant.issued_at_unix >= .issued_at_unix and .grant.issued_at_unix <= $now and
@@ -513,6 +540,7 @@ jobs:
           LATCHWAY_EVIDENCE_OUTPUT_DIR: ${{ runner.temp }}/latchway-rn-android-evidence
           LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
           LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          LATCHWAY_APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
           LATCHWAY_APP_VERSION: ${{ vars.LATCHWAY_ANDROID_APP_VERSION }}
           LATCHWAY_VERSION_CODE: ${{ vars.LATCHWAY_ANDROID_VERSION_CODE }}
           LATCHWAY_SIGNING_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_ANDROID_SIGNING_CERTIFICATE_SHA256 }}
@@ -539,6 +567,8 @@ jobs:
           LATCHWAY_NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
           LATCHWAY_NATIVE_EVIDENCE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_PATH }}
           LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_PROFILE_PATH }}
+          LATCHWAY_ONE_TIME_DEVICE_GRANT: ${{ secrets.LATCHWAY_ONE_TIME_DEVICE_GRANT }}
+          LATCHWAY_DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
           LATCHWAY_RUN_ID: rn-android-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/run-physical-react-native-android.sh
       - name: Wipe Android app data even when collection fails
@@ -570,6 +600,7 @@ jobs:
         env:
           LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
           LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -Eeuo pipefail
@@ -603,18 +634,20 @@ jobs:
             --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" --arg auth "$auth_sha" \
             --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
             --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --arg grant "$DEVICE_GRANT_SHA256" \
             --argjson now "$now" '
-              .schema_version == "latchway.physical-collector-teardown.v1" and
+              .schema_version == "latchway.physical-collector-teardown.v2" and
               .repository == $repository and .source_commit == $commit and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-android-play-integrity"} and
               .runner.name == $runner and .runner.deregistered == true and
               .runner.accepts_more_jobs == false and .runner.destroy_scheduled == true and
               .runner.destroy_deadline_unix >= $now and .runner.destroy_deadline_unix <= ($now + 600) and
               .evidence_eligible == true and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,gateway_run_receipt_binds_identity_grant_digest:true,identity_grant_digest_consumed_once:true,one_use_invocation:true,watchdog_armed:true} and
               .observations.device_inventory_sha256 == $device and
               .observations.provider_observation_sha256 == $provider and
               .observations.gateway_deployment_verification_sha256 == $deployment and
+              .observations.identity_grant_sha256 == $grant and
               (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
               .device == {app_data_wiped:true,method:"android-pm-clear",receipt_sha256:$wipe} and
               .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
@@ -673,7 +706,11 @@ jobs:
           COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
           COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
           DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
+          APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
+          PACKAGE_OR_BUNDLE_IDENTIFIER: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
           APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          APP_FILES_MANIFEST_SHA256: ${{ vars.LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256 }}
+          APP_BUNDLE_TREE_SHA256: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256 }}
           JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
           NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -723,9 +760,11 @@ jobs:
           jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg runner "$runner" --arg auth "$auth_sha" --arg grant "$DEVICE_GRANT_SHA256" \
-            --arg app "$APP_BINARY_SHA256" --arg js "$JAVASCRIPT_BUNDLE_SHA256" \
+            --arg application_id "$APPLICATION_ID" --arg package_or_bundle "$PACKAGE_OR_BUNDLE_IDENTIFIER" \
+            --arg app "$APP_BINARY_SHA256" --arg files "$APP_FILES_MANIFEST_SHA256" \
+            --arg tree "$APP_BUNDLE_TREE_SHA256" --arg js "$JAVASCRIPT_BUNDLE_SHA256" \
             --arg native "$NATIVE_EVIDENCE_SHA256" '
-              .schema_version == "latchway.physical-collector-lease.v1" and
+              .schema_version == "latchway.physical-collector-lease.v2" and
               .repository == $repository and .source_commit == $commit and .source_authorization_sha256 == $auth and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"ios",audience:"rn-ios-app-attest"} and
               .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
@@ -734,17 +773,20 @@ jobs:
               .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
               .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,identity_grant_digest_one_use_enforced:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              (.grant | keys) == ["application_id","audience","expires_at_unix","identity_provider","issued_at_unix","package_or_bundle_identifier","run_attempt","run_id","sha256","single_use","source_commit"] and
               .grant.audience == "latchway-physical-evidence/rn-ios-app-attest" and
+              .grant.application_id == $application_id and
+              .grant.package_or_bundle_identifier == $package_or_bundle and
+              .grant.identity_provider == "firebase" and
               .grant.source_commit == $commit and .grant.run_id == $run_id and
               .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and .grant.single_use == true and
-              (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
               (.grant.issued_at_unix | type == "number") and (.grant.expires_at_unix | type == "number") and
               .grant.issued_at_unix >= .issued_at_unix and
               .grant.expires_at_unix > .grant.issued_at_unix and
               (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
               .grant.expires_at_unix <= .expires_at_unix and
-              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
+              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_app_files_manifest_sha256:$files,ios_app_bundle_tree_sha256:$tree,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
               (.expires_at_unix - .issued_at_unix) <= 3600
             ' "$root/collector-lease.json" >/dev/null
           jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
@@ -757,16 +799,18 @@ jobs:
           jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" \
             --arg auth "$auth_sha" --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
-            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" '
-              .schema_version == "latchway.physical-collector-teardown.v1" and .repository == $repository and
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --arg grant "$DEVICE_GRANT_SHA256" '
+              .schema_version == "latchway.physical-collector-teardown.v2" and .repository == $repository and
               .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"ios",audience:"rn-ios-app-attest"} and
               .runner.name == $runner and .runner.deregistered == true and .runner.accepts_more_jobs == false and
               .runner.destroy_scheduled == true and .runner.destroy_deadline_unix >= .finished_at_unix and
               .runner.destroy_deadline_unix <= (.finished_at_unix + 600) and .evidence_eligible == true and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,gateway_run_receipt_binds_identity_grant_digest:true,identity_grant_digest_consumed_once:true,one_use_invocation:true,watchdog_armed:true} and
               .observations.device_inventory_sha256 == $device and
               .observations.provider_observation_sha256 == $provider and
               .observations.gateway_deployment_verification_sha256 == $deployment and
+              .observations.identity_grant_sha256 == $grant and
               (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
               .device == {app_data_wiped:true,method:"ios-uninstall",receipt_sha256:$wipe} and
               .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
@@ -781,14 +825,17 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg auth "$auth_sha" --arg lease "$lease_sha" \
             --arg teardown "$(sha256sum "$root/collector-teardown.json" | awk '{print $1}')" \
-            --arg evidence "$evidence_sha" \
-            '{schema_version:"latchway.physical-collector-isolation-validation.v1",valid:true,repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,audience:"rn-ios-app-attest"},source_authorization_sha256:$auth,lease_sha256:$lease,teardown_sha256:$teardown,evidence_manifest_sha256:$evidence}' \
+            --arg evidence "$evidence_sha" --arg files "$APP_FILES_MANIFEST_SHA256" \
+            --arg tree "$APP_BUNDLE_TREE_SHA256" \
+            '{schema_version:"latchway.physical-collector-isolation-validation.v1",valid:true,repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,audience:"rn-ios-app-attest"},source_authorization_sha256:$auth,lease_sha256:$lease,teardown_sha256:$teardown,evidence_manifest_sha256:$evidence,application_files_manifest_sha256:$files,application_bundle_tree_sha256:$tree}' \
             > "$root/collector-isolation-validation.json"
       - name: Validate the fixed iOS receipt, hashes, and coordinates without candidate code
         shell: bash
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           EXPECTED_RUN_ID: rn-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          APP_FILES_MANIFEST_SHA256: ${{ vars.LATCHWAY_IOS_APP_FILES_MANIFEST_SHA256 }}
+          APP_BUNDLE_TREE_SHA256: ${{ vars.LATCHWAY_IOS_APP_BUNDLE_TREE_SHA256 }}
         run: |
           set -Eeuo pipefail
           root="$RUNNER_TEMP/latchway-rn-ios-evidence"
@@ -845,13 +892,17 @@ jobs:
           cmp --silent "$payloads" "$checksum_names"
           for document in "$root"/*.json; do jq --exit-status . "$document" >/dev/null; done
           evidence_sha=$(sha256sum "$root/react-native-ios-evidence.json" | awk '{print $1}')
-          jq --exit-status --arg commit "$SOURCE_COMMIT" '
+          jq --exit-status --arg commit "$SOURCE_COMMIT" \
+            --arg files "$APP_FILES_MANIFEST_SHA256" --arg tree "$APP_BUNDLE_TREE_SHA256" '
             .schema_version == "latchway.physical-device-profile.v1" and
             .platform == "react_native_ios_app_attest" and
             .repository == "Latchway/latchway-react-native-sdk" and
-            .source.commit == $commit and .source.worktree_clean == true
+            .source.commit == $commit and .source.worktree_clean == true and
+            .application_files_manifest_sha256 == $files and
+            .application_bundle_tree_sha256 == $tree
           ' "$root/react-native-ios-profile.json" >/dev/null
-          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" '
+          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" \
+            --arg files "$APP_FILES_MANIFEST_SHA256" --arg tree "$APP_BUNDLE_TREE_SHA256" '
             .schema_version == "latchway.physical-device-evidence.v1" and
             .release_eligible == true and .platform == "react_native_ios_app_attest" and
             .run.id == $run and .run.mode == "release" and
@@ -861,6 +912,8 @@ jobs:
             .device.emulator == false and .device.testing == false and
             .device.debugger_attached == false and
             .provider.name == "app_attest" and .provider.environment == "production" and
+            .artifacts.application_files_manifest_sha256 == $files and
+            .artifacts.application_bundle_tree_sha256 == $tree and
             (.tests | type == "array" and length > 0 and all(.[]; .status == "passed")) and
             (.redaction | type == "object" and all(.[]; . == false))
           ' "$root/react-native-ios-evidence.json" >/dev/null
@@ -943,6 +996,8 @@ jobs:
           COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
           COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
           DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
+          APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
+          PACKAGE_OR_BUNDLE_IDENTIFIER: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
           APK_SET_SHA256: ${{ vars.LATCHWAY_ANDROID_INSTALLED_APK_SET_SHA256 }}
           NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -992,8 +1047,9 @@ jobs:
           jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg runner "$runner" --arg auth "$auth_sha" --arg grant "$DEVICE_GRANT_SHA256" \
+            --arg application_id "$APPLICATION_ID" --arg package_or_bundle "$PACKAGE_OR_BUNDLE_IDENTIFIER" \
             --arg apk "$APK_SET_SHA256" --arg native "$NATIVE_EVIDENCE_SHA256" '
-              .schema_version == "latchway.physical-collector-lease.v1" and
+              .schema_version == "latchway.physical-collector-lease.v2" and
               .repository == $repository and .source_commit == $commit and .source_authorization_sha256 == $auth and
               .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"android",audience:"rn-android-play-integrity"} and
               .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
@@ -1002,11 +1058,14 @@ jobs:
               .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
               (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
               .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,identity_grant_digest_one_use_enforced:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              (.grant | keys) == ["application_id","audience","expires_at_unix","identity_provider","issued_at_unix","package_or_bundle_identifier","run_attempt","run_id","sha256","single_use","source_commit"] and
               .grant.audience == "latchway-physical-evidence/rn-android-play-integrity" and
+              .grant.application_id == $application_id and
+              .grant.package_or_bundle_identifier == $package_or_bundle and
+              .grant.identity_provider == "firebase" and
               .grant.source_commit == $commit and .grant.run_id == $run_id and
               .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and .grant.single_use == true and
-              (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
               (.grant.issued_at_unix | type == "number") and (.grant.expires_at_unix | type == "number") and
               .grant.issued_at_unix >= .issued_at_unix and
               .grant.expires_at_unix > .grant.issued_at_unix and
@@ -1025,16 +1084,18 @@ jobs:
           jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" \
             --arg auth "$auth_sha" --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
-            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" '
-              .schema_version == "latchway.physical-collector-teardown.v1" and .repository == $repository and
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --arg grant "$DEVICE_GRANT_SHA256" '
+              .schema_version == "latchway.physical-collector-teardown.v2" and .repository == $repository and
               .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"android",audience:"rn-android-play-integrity"} and
               .runner.name == $runner and .runner.deregistered == true and .runner.accepts_more_jobs == false and
               .runner.destroy_scheduled == true and .runner.destroy_deadline_unix >= .finished_at_unix and
               .runner.destroy_deadline_unix <= (.finished_at_unix + 600) and .evidence_eligible == true and
-              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,gateway_run_receipt_binds_identity_grant_digest:true,identity_grant_digest_consumed_once:true,one_use_invocation:true,watchdog_armed:true} and
               .observations.device_inventory_sha256 == $device and
               .observations.provider_observation_sha256 == $provider and
               .observations.gateway_deployment_verification_sha256 == $deployment and
+              .observations.identity_grant_sha256 == $grant and
               (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
               .device == {app_data_wiped:true,method:"android-pm-clear",receipt_sha256:$wipe} and
               .source_authorization_sha256 == $auth and .lease_sha256 == $lease and

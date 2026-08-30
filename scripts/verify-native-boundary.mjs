@@ -51,6 +51,15 @@ const android = await readFile(
 if (!ios.includes(".reactNativeIOS")) throw new Error("iOS bridge does not select react_native_ios runtime identity.");
 if (!android.includes("REACT_NATIVE_ANDROID")) throw new Error("Android bridge does not select react_native_android runtime identity.");
 for (const marker of [
+  "rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup",
+  "legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups",
+]) {
+  if (!ios.includes(marker)) throw new Error(`iOS bridge omits explicit root Keychain boundary: ${marker}`);
+}
+if (!android.includes('"rootKeychainAccessGroup", "legacySharedKeychainAccessGroups"')) {
+  throw new Error("Android strict decoding does not accept the cross-platform Apple Keychain fields.");
+}
+for (const marker of [
   "client.transport(feature: input.feature).bytes(for: preparedRequest)",
   "LatchwayAsyncBytes.AsyncIterator",
   "stream.bytes.makeAsyncIterator()",
@@ -70,14 +79,25 @@ for (const [label, source, marker] of [
 }
 for (const marker of [
   "LatchwayExtensionClient(",
-  "componentDefinitionID: input.definitionID",
+  "definitionID: input.definitionID",
   "establishDirectAttestation()",
   "isApplicationExtensionProcess()",
   "clientRuntime: .reactNativeIOS",
   '"delegated_direct_attested"',
 ]) {
   const source = marker === '"delegated_direct_attested"' ? joined : ios;
-  if (!source.includes(marker)) throw new Error(`React Native direct component-attestation boundary is incomplete: ${marker}`);
+  if (!source.includes(marker)) throw new Error(`React Native component compatibility boundary is incomplete: ${marker}`);
+}
+const componentContext = ios.match(/private final class NativeComponentContext[\s\S]*?private func isApplicationExtensionProcess/u)?.[0] ?? "";
+if (componentContext.includes("LatchwayAppAttestProvider(")) {
+  throw new Error("The iOS extension component must not construct App Attest; generateKey is unavailable in iOS app extensions.");
+}
+if (componentContext.includes("directAttestationProvider:")) {
+    throw new Error("The iOS extension component must use the delegated-only public initializer.");
+}
+if (!componentContext.includes("rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup") ||
+    !componentContext.includes("keychainAccessGroup: input.keychainAccessGroup")) {
+  throw new Error("The iOS extension component confuses the root-private and exact shared access groups.");
 }
 if (!android.includes("Direct component attestation is not supported by this Android SDK")) {
   throw new Error("Android must fail closed until its native SDK exposes direct component attestation.");

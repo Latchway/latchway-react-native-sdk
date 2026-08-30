@@ -11,11 +11,18 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <meta-data
+            android:name="dev.latchway.firebase_configuration_sha256"
+            android:value="${latchwayFirebaseConfigurationSHA256}" />
+        <meta-data
+            android:name="dev.latchway.candidate_configuration_sha256"
+            android:value="${latchwayCandidateConfigurationSHA256}" />
         <provider
             android:name=".LatchwayEvidenceProvider"
             android:authorities="${applicationId}.device-evidence"
             android:exported="true"
-            android:readPermission="android.permission.DUMP" />
+            android:readPermission="android.permission.DUMP"
+            android:writePermission="android.permission.DUMP" />
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"

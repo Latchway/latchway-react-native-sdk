@@ -420,6 +420,9 @@ jobs:
         run: |
           python3 scripts/test-locked-sources-workflow.py
           python3 scripts/test-device-evidence.py
+          python3 scripts/test-physical-evidence-workflow.py
+          python3 scripts/test-physical-example-host.py
+          python3 scripts/test-physical-candidate-producer.py
           python3 scripts/test-finalize-react-native-device-run.py
           python3 scripts/test-export-core-physical-evidence.py
           python3 scripts/test-verify-gateway-deployment.py

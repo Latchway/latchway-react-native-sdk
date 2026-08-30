@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -13,7 +13,32 @@
 		7A11C0042F00000100A11C04 /* LatchwayEvidence.m in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0032F00000100A11C03 /* LatchwayEvidence.m */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		84C89F4AED2405273504E122 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		FF789BA430449C140077F795 /* AppIntents.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = FF789B9B30449C130077F795 /* AppIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		FF789BA230449C140077F795 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FF789B9A30449C130077F795;
+			remoteInfo = AppIntents;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		FF789BA530449C140077F795 /* Embed ExtensionKit Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(EXTENSIONS_FOLDER_PATH)";
+			dstSubfolderSpec = 16;
+			files = (
+				FF789BA430449C140077F795 /* AppIntents.appex in Embed ExtensionKit Extensions */,
+			);
+			name = "Embed ExtensionKit Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		13B07F961A680F5B00A75B9A /* LatchwayExample.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LatchwayExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -28,7 +53,33 @@
 		7A11C0032F00000100A11C03 /* LatchwayEvidence.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = LatchwayEvidence.m; path = LatchwayExample/LatchwayEvidence.m; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = LatchwayExample/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		FF789B9B30449C130077F795 /* AppIntents.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = AppIntents.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		FF789BA830449C140077F795 /* Exceptions for "AppIntents" folder in "AppIntents" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = FF789B9A30449C130077F795 /* AppIntents */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		FF789B9C30449C130077F795 /* AppIntents */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				FF789BA830449C140077F795 /* Exceptions for "AppIntents" folder in "AppIntents" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		13B07F8C1A680F5B00A75B9A /* Frameworks */ = {
@@ -36,6 +87,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				64A6E7B4DA266128136C422F /* Pods_LatchwayExample.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF789B9830449C130077F795 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -77,6 +135,7 @@
 			children = (
 				13B07FAE1A68108700A75B9A /* LatchwayExample */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
+				FF789B9C30449C130077F795 /* AppIntents */,
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
@@ -90,6 +149,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* LatchwayExample.app */,
+				FF789B9B30449C130077F795 /* AppIntents.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -114,19 +174,42 @@
 				13B07F871A680F5B00A75B9A /* Sources */,
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
+				FF789BA530449C140077F795 /* Embed ExtensionKit Extensions */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
 				D2AD1B037FBFD53E094C8616 /* [CP-User] [RNFB] Core Configuration */,
+				7A11C0052F00000100A11C05 /* Copy protected Firebase configuration */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				FF789BA330449C140077F795 /* PBXTargetDependency */,
 			);
 			name = LatchwayExample;
 			productName = LatchwayExample;
 			productReference = 13B07F961A680F5B00A75B9A /* LatchwayExample.app */;
 			productType = "com.apple.product-type.application";
+		};
+		FF789B9A30449C130077F795 /* AppIntents */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF789BA930449C140077F795 /* Build configuration list for PBXNativeTarget "AppIntents" */;
+			buildPhases = (
+				FF789B9730449C130077F795 /* Sources */,
+				FF789B9830449C130077F795 /* Frameworks */,
+				FF789B9930449C130077F795 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FF789B9C30449C130077F795 /* AppIntents */,
+			);
+			name = AppIntents;
+			productName = AppIntents;
+			productReference = FF789B9B30449C130077F795 /* AppIntents.appex */;
+			productType = "com.apple.product-type.extensionkit-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -134,10 +217,14 @@
 		83CBB9F71A601CBA00E9B192 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 1210;
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
 						LastSwiftMigration = 1120;
+					};
+					FF789B9A30449C130077F795 = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -155,6 +242,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* LatchwayExample */,
+				FF789B9A30449C130077F795 /* AppIntents */,
 			);
 		};
 /* End PBXProject section */
@@ -167,6 +255,13 @@
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				84C89F4AED2405273504E122 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF789B9930449C130077F795 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -204,6 +299,22 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-LatchwayExample/Pods-LatchwayExample-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		7A11C0052F00000100A11C05 /* Copy protected Firebase configuration */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Copy protected Firebase configuration";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/../../scripts/copy-protected-firebase-ios-config.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 		C38B50BA6285516D6DCD4F65 /* [CP] Check Pods Manifest.lock */ = {
@@ -270,7 +381,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FF789B9730449C130077F795 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		FF789BA330449C140077F795 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FF789B9A30449C130077F795 /* AppIntents */;
+			targetProxy = FF789BA230449C140077F795 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		13B07F941A680F5B00A75B9A /* Debug */ = {
@@ -282,9 +408,12 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = LatchwayExample/LatchwayExample.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = PFK5S2E4H5;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = LatchwayExample/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LATCHWAY_ROOT_BUNDLE_IDENTIFIER = dev.latchway;
+				LATCHWAY_ROOT_PROVISIONING_PROFILE_SPECIFIER = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -295,8 +424,10 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(LATCHWAY_ROOT_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = LatchwayExample;
+				PROVISIONING_PROFILE_SPECIFIER = "$(LATCHWAY_ROOT_PROVISIONING_PROFILE_SPECIFIER)";
+				REGISTER_APP_GROUPS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -312,8 +443,11 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = LatchwayExample/LatchwayExample.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = PFK5S2E4H5;
 				INFOPLIST_FILE = LatchwayExample/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LATCHWAY_ROOT_BUNDLE_IDENTIFIER = dev.latchway;
+				LATCHWAY_ROOT_PROVISIONING_PROFILE_SPECIFIER = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -324,8 +458,10 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(LATCHWAY_ROOT_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = LatchwayExample;
+				PROVISIONING_PROFILE_SPECIFIER = "$(LATCHWAY_ROOT_PROVISIONING_PROFILE_SPECIFIER)";
+				REGISTER_APP_GROUPS = YES;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -501,6 +637,105 @@
 			};
 			name = Release;
 		};
+		FF789BA630449C140077F795 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = AppIntents/AppIntents.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = PFK5S2E4H5;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppIntents/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppIntents;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LATCHWAY_APPINTENTS_BUNDLE_IDENTIFIER = dev.latchway.AppIntents;
+				LATCHWAY_APPINTENTS_PROVISIONING_PROFILE_SPECIFIER = "";
+				LATCHWAY_ROOT_BUNDLE_IDENTIFIER = dev.latchway;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(LATCHWAY_APPINTENTS_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = LatchwayExampleAppIntents;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(LATCHWAY_APPINTENTS_PROVISIONING_PROFILE_SPECIFIER)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FF789BA730449C140077F795 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = AppIntents/AppIntents.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = PFK5S2E4H5;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AppIntents/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AppIntents;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LATCHWAY_APPINTENTS_BUNDLE_IDENTIFIER = dev.latchway.AppIntents;
+				LATCHWAY_APPINTENTS_PROVISIONING_PROFILE_SPECIFIER = "";
+				LATCHWAY_ROOT_BUNDLE_IDENTIFIER = dev.latchway;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(LATCHWAY_APPINTENTS_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = LatchwayExampleAppIntents;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(LATCHWAY_APPINTENTS_PROVISIONING_PROFILE_SPECIFIER)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -518,6 +753,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FF789BA930449C140077F795 /* Build configuration list for PBXNativeTarget "AppIntents" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF789BA630449C140077F795 /* Debug */,
+				FF789BA730449C140077F795 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

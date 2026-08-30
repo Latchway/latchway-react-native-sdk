@@ -2,6 +2,13 @@
 
 ## iOS
 
+Configure `apple.rootKeychainAccessGroup` with the fully resolved private app-ID
+group that appears first in the signed root target. List every explicit
+extension-shared group in `apple.legacySharedKeychainAccessGroups`; the native
+SDK scans only exact root-record coordinates in those groups. Missing,
+wildcard, duplicate, or root-equal groups fail closed, and stale root records
+require an explicit migration.
+
 The podspec pins `Latchway/AppAttest` 1.0.0 and React Native codegen dependencies. Run CocoaPods from the host application after installing the npm package. Enable App Attest for the application identifier and use a real device for conformance; simulators report attestation unsupported.
 
 The Firebase Authentication example pins React Native Firebase 25.1.0 and
@@ -24,7 +31,26 @@ substituted by a simulator build:
 - a real application identity token plus the exact gateway/core release named
   by the synchronized contract lock.
 
-The bridge constructs `LatchwayAppAttestProvider(applicationID:environment:clientRuntime:.reactNativeIOS)`, selects `.reactNativeIOS`, and sets the independent React Native SDK version. Keychain, Secure Enclave, session, and accepted App Attest key state are runtime-isolated.
+The root-application bridge constructs the App Attest provider with the exact
+`rootKeychainAccessGroup`, `legacySharedKeychainAccessGroups`, and
+`.reactNativeIOS` runtime, then passes the same groups to
+`LatchwayConfiguration`. Keychain, Secure Enclave, session, and accepted App
+Attest key state are runtime-isolated. An extension bridge constructs no App
+Attest provider: iOS app extensions cannot call
+`DCAppAttestService.generateKey`, so extension sessions remain independently
+keyed and delegated from the already attested root application.
+
+The checked-in App Intents target is an archive/signing fixture, not a
+delegated-request implementation. Candidate production requires a distinct
+child bundle ID and provisioning profile for it. The signed root target lists
+its private app-ID Keychain group first and the shared component group second;
+the first position keeps implicit root Keychain writes private. The signed
+extension lists only the shared group and therefore cannot read root-private
+key, credential, or session state. Each provisioning profile must authorize
+every group its target signs, either exactly or with a well-formed terminal
+wildcard. The extension must not carry App Attest. Its intent fails closed
+because React Native v1 exposes diagnostics but no delegated component request
+operation.
 
 For local native SDK work, declare the sibling `Latchway.podspec` by path in the example/host Podfile before `use_react_native!`:
 

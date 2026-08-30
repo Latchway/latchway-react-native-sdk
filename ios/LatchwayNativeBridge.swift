@@ -285,6 +285,13 @@ private actor LatchwayBridgeStore {
         }
         let configuration = try NativeComponentConfiguration.decode(encodedConfiguration)
         let component = try NativeComponentInput.decode(encodedComponent)
+        guard configuration.apple.legacySharedKeychainAccessGroups.contains(
+            component.keychainAccessGroup
+        ) else {
+            throw LatchwayError.invalidConfiguration(
+                "component Keychain access group is not shared by the containing root application"
+            )
+        }
         componentClients[clientID] = try NativeComponentContext(
             configuration: configuration,
             component: component
@@ -367,11 +374,17 @@ private final class NativeClientContext: @unchecked Sendable {
         let attestation: (any LatchwayAttestationProvider)?
         if configuration.apple.appAttestEnabled {
             if let namespace = configuration.apple.storageNamespace {
-                attestation = LatchwayAppAttestProvider(storageNamespace: "\(namespace).react_native_ios")
+                attestation = LatchwayAppAttestProvider(
+                    rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup,
+                    legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups,
+                    storageNamespace: "\(namespace).react_native_ios"
+                )
             } else {
                 attestation = LatchwayAppAttestProvider(
                     applicationID: configuration.applicationID,
                     environment: configuration.environment,
+                    rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup,
+                    legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups,
                     clientRuntime: .reactNativeIOS
                 )
             }
@@ -385,6 +398,8 @@ private final class NativeClientContext: @unchecked Sendable {
             baseURL: baseURL,
             applicationID: configuration.applicationID,
             environment: configuration.environment,
+            rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup,
+            legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups,
             identityProvider: configuration.identityProvider,
             clientRuntime: .reactNativeIOS,
             clientSDKVersion: configuration.sdkVersion,
@@ -566,6 +581,8 @@ private final class NativeComponentContext: @unchecked Sendable {
             baseURL: baseURL,
             applicationID: configuration.applicationID,
             environment: configuration.environment,
+            rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup,
+            legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups,
             identityProvider: "custom_jwt",
             clientRuntime: .reactNativeIOS,
             clientSDKVersion: configuration.sdkVersion,
@@ -578,27 +595,13 @@ private final class NativeComponentContext: @unchecked Sendable {
             keychainAccessGroup: input.keychainAccessGroup,
             requestedFeatures: input.requestedFeatures
         )
-        let provider: (any LatchwayAttestationProvider)?
-#if canImport(LatchwayAppAttest)
-        if let callerStorageNamespace = configuration.apple.storageNamespace {
-            provider = LatchwayAppAttestProvider(
-                storageNamespace: "\(callerStorageNamespace).react_native_ios.component.\(input.definitionID)"
-            )
-        } else {
-            provider = LatchwayAppAttestProvider(
-                applicationID: configuration.applicationID,
-                environment: configuration.environment,
-                clientRuntime: .reactNativeIOS,
-                componentDefinitionID: input.definitionID
-            )
-        }
-#else
-        provider = nil
-#endif
+        // DCAppAttestService.generateKey is unavailable to iOS application
+        // extensions. Use the delegated-only public initializer so the .appex
+        // cannot construct a direct App Attest provider or let its containing
+        // application attest on its behalf.
         client = try LatchwayExtensionClient(
             configuration: native,
-            component: component,
-            directAttestationProvider: provider
+            component: component
         )
     }
 
@@ -761,6 +764,8 @@ private actor NativeResponseHandle {
 private struct NativeConfiguration: Decodable {
     struct Apple: Decodable {
         let appAttestEnabled: Bool
+        let rootKeychainAccessGroup: String
+        let legacySharedKeychainAccessGroups: [String]
         let storageNamespace: String?
         let softwareKeyFallbackPolicy: String
     }
@@ -789,14 +794,22 @@ private struct NativeConfiguration: Decodable {
         else { throw LatchwayError.invalidConfiguration("native configuration is invalid") }
         let value = try decodeStrict(Self.self, encoded: encoded)
         guard value.contractVersion == LatchwayVersion.contract,
-              value.protocolVersion == LatchwayVersion.protocolVersion
+              value.protocolVersion == LatchwayVersion.protocolVersion,
+              value.apple.softwareKeyFallbackPolicy == "allow"
+                || value.apple.softwareKeyFallbackPolicy == "disallow"
         else { throw LatchwayError.invalidConfiguration("contract version is incompatible") }
+        try LatchwayRootKeychainPreflight.validateAccessGroups(
+            rootKeychainAccessGroup: value.apple.rootKeychainAccessGroup,
+            legacySharedKeychainAccessGroups: value.apple.legacySharedKeychainAccessGroups
+        )
         return value
     }
 }
 
 private struct NativeComponentConfiguration: Decodable {
     struct Apple: Decodable {
+        let rootKeychainAccessGroup: String
+        let legacySharedKeychainAccessGroups: [String]
         let storageNamespace: String?
         let softwareKeyFallbackPolicy: String
     }
@@ -825,6 +838,10 @@ private struct NativeComponentConfiguration: Decodable {
               value.apple.softwareKeyFallbackPolicy == "allow"
                 || value.apple.softwareKeyFallbackPolicy == "disallow"
         else { throw LatchwayError.invalidConfiguration("component contract version is incompatible") }
+        try LatchwayRootKeychainPreflight.validateAccessGroups(
+            rootKeychainAccessGroup: value.apple.rootKeychainAccessGroup,
+            legacySharedKeychainAccessGroups: value.apple.legacySharedKeychainAccessGroups
+        )
         return value
     }
 }
@@ -843,12 +860,14 @@ private struct NativeComponentInput: Decodable, Equatable {
         let value = try decodeStrict(Self.self, encoded: encoded)
         guard matches(value.definitionID, pattern: "^[a-z][a-z0-9_-]{0,62}$"),
               reactNativeDirectAttestationComponentKinds.contains(value.kind),
-              matches(value.keychainAccessGroup, pattern: "^[A-Za-z0-9._-]{1,255}$"),
               !value.requestedFeatures.isEmpty,
               value.requestedFeatures.count <= 256,
               Set(value.requestedFeatures).count == value.requestedFeatures.count,
               value.requestedFeatures.allSatisfy(validFeature)
         else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+        try LatchwayRootKeychainPreflight.validateAccessGroups(
+            rootKeychainAccessGroup: value.keychainAccessGroup
+        )
         return value
     }
 }
@@ -1061,7 +1080,10 @@ private let nativeConfigurationKeys = Set([
     "baseURL", "applicationID", "environment", "identityProvider", "appVersion", "sdkVersion",
     "contractVersion", "protocolVersion", "allowInsecureLoopback", "apple", "android",
 ])
-private let nativeAppleConfigurationRequiredKeys = Set(["appAttestEnabled", "softwareKeyFallbackPolicy"])
+private let nativeAppleConfigurationRequiredKeys = Set([
+    "appAttestEnabled", "rootKeychainAccessGroup", "legacySharedKeychainAccessGroups",
+    "softwareKeyFallbackPolicy",
+])
 private let nativeAppleConfigurationKeys = nativeAppleConfigurationRequiredKeys.union(["storageNamespace"])
 private let nativeAndroidConfigurationRequiredKeys = Set(["keyPolicy"])
 private let nativeAndroidConfigurationKeys = nativeAndroidConfigurationRequiredKeys.union([
@@ -1071,7 +1093,9 @@ private let nativeComponentConfigurationKeys = Set([
     "baseURL", "applicationID", "environment", "appVersion", "sdkVersion", "contractVersion",
     "protocolVersion", "allowInsecureLoopback", "apple",
 ])
-private let nativeComponentAppleConfigurationRequiredKeys = Set(["softwareKeyFallbackPolicy"])
+private let nativeComponentAppleConfigurationRequiredKeys = Set([
+    "rootKeychainAccessGroup", "legacySharedKeychainAccessGroups", "softwareKeyFallbackPolicy",
+])
 private let nativeComponentAppleConfigurationKeys = nativeComponentAppleConfigurationRequiredKeys.union([
     "storageNamespace",
 ])
@@ -1182,6 +1206,9 @@ private struct NativeFailure {
                 requestID = nil; operationID = nil; status = nil; retryable = false
             case .keyStorageFailure:
                 code = "secure_state_unavailable"; message = "Secure Latchway state is unavailable."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .rootKeychainMigrationRequired:
+                code = "secure_state_unavailable"; message = "Legacy root Keychain state requires explicit migration."
                 requestID = nil; operationID = nil; status = nil; retryable = false
             case .attestationUnavailable:
                 code = "attestation_unsupported"; message = "Required application attestation is unavailable."

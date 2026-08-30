@@ -50,6 +50,10 @@ local.properties
 *.p8
 *.mobileprovision
 
+# Externally injected physical-candidate Firebase configuration
+example/android/app/google-services.json
+example/ios/LatchwayExample/GoogleService-Info.plist
+
 # Optional repository-local agent tooling is not an SDK input.
 /.agents/
 /.claude/skills/

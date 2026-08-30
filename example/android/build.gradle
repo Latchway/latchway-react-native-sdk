@@ -16,6 +16,9 @@ buildscript {
     dependencies {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
+        // Applied by the physical Release producer only when its externally
+        // supplied, ignored google-services.json is present.
+        classpath("com.google.gms:google-services:4.5.0")
         // RN 0.82 embeds Kotlin 2.1, but the locked native AARs publish 2.3 metadata.
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
     }

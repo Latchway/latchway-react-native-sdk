@@ -16,6 +16,10 @@ export type AndroidKeyPolicy =
   | "software_allowed";
 
 export interface AppleSecurityOptions {
+  /** Fully resolved private app-ID Keychain group; required on iOS and first in the signed root app. */
+  rootKeychainAccessGroup: string;
+  /** Every explicit extension-shared group, scanned at exact root coordinates but never mutated. */
+  legacySharedKeychainAccessGroups?: readonly string[];
   /** App Attest is enabled by default. Disabling it fails closed unless the server accepts another provider. */
   appAttestEnabled?: boolean;
   /** A non-secret namespace for caller-managed App Attest accepted-key state. */
@@ -99,7 +103,7 @@ export interface ReactNativeDiagnostics {
   lastErrorCode?: string;
 }
 
-/** iOS component kinds whose native extension runtime can perform App Attest step-up. */
+/** iOS component kinds retained for delegated-session protocol compatibility. */
 export type ReactNativeDirectAttestationComponentKind =
   | "action_extension"
   | "sso_extension";
@@ -118,7 +122,11 @@ export interface ReactNativeDirectAttestationComponent {
 }
 
 export interface ReactNativeComponentAppleOptions {
-  /** A non-secret namespace for caller-managed, component-scoped App Attest accepted-key state. */
+  /** The containing application's fully resolved private root Keychain group. */
+  rootKeychainAccessGroup: string;
+  /** Shared groups scanned for legacy root state; must include this component's exact group. */
+  legacySharedKeychainAccessGroups: readonly string[];
+  /** A non-secret namespace retained for component state compatibility. */
   storageNamespace?: string;
   softwareKeyFallbackPolicy?: AppleSoftwareKeyFallbackPolicy;
 }
@@ -130,7 +138,7 @@ export interface LatchwayComponentOptions {
   environment: string;
   component: ReactNativeDirectAttestationComponent;
   appVersion?: string;
-  apple?: ReactNativeComponentAppleOptions;
+  apple: ReactNativeComponentAppleOptions;
   /** Limited to loopback HTTP origins for local conformance. */
   allowInsecureLoopback?: boolean;
 }
@@ -165,6 +173,11 @@ export interface ReactNativeComponentDiagnostics {
  */
 export interface LatchwayComponentClient {
   readonly ready: Promise<void>;
+  /**
+   * Retained for API compatibility. iOS application extensions cannot call
+   * the platform App Attest key-generation API, so this fails closed with
+   * `attestation_unsupported`; use independently keyed delegated sessions.
+   */
   establishDirectAttestation(): Promise<void>;
   diagnostics(): Promise<ReactNativeComponentDiagnostics>;
   dispose(): Promise<void>;

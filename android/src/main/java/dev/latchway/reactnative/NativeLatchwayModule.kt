@@ -703,7 +703,9 @@ private val NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS = setOf("keyPolicy")
 private val NATIVE_ANDROID_CONFIGURATION_KEYS = NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS +
     setOf("playIntegrityCloudProjectNumber")
 private val NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS = setOf("appAttestEnabled", "softwareKeyFallbackPolicy")
-private val NATIVE_APPLE_CONFIGURATION_KEYS = NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS + setOf("storageNamespace")
+private val NATIVE_APPLE_CONFIGURATION_KEYS = NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS + setOf(
+    "storageNamespace", "rootKeychainAccessGroup", "legacySharedKeychainAccessGroups",
+)
 
 private val METHOD_PATTERN = Regex("^[A-Z][A-Z0-9!#$%&'*+.^_`|~-]{0,31}$")
 private val FEATURE_PATTERN = Regex("^[a-z][a-z0-9_-]{0,62}$")

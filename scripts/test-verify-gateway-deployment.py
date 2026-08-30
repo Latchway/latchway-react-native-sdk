@@ -56,7 +56,7 @@ def ios_client() -> dict[str, Any]:
         "signing_certificate_sha256": CERTIFICATE,
         "app_attest_environment": "production",
         "provider": "app_attest",
-        "minimum_trust_level": "device_verified",
+        "minimum_trust_level": "app_verified",
         "require_request_hash": True,
         "require_play_recognized": False,
         "require_licensed": False,
@@ -335,6 +335,12 @@ class GatewayDeploymentVerifierTest(unittest.TestCase):
         permissive = ios_client()
         permissive["allow_debug"] = True
         self.assert_rejected(self.invoke(statement([permissive]), client=permissive))
+
+        wrong_provider_trust = ios_client()
+        wrong_provider_trust["minimum_trust_level"] = "device_verified"
+        self.assert_rejected(
+            self.invoke(statement([wrong_provider_trust]), client=wrong_provider_trust)
+        )
 
     def test_symlink_and_oversized_statement_are_rejected(self) -> None:
         current = canonical(statement())

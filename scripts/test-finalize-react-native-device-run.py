@@ -45,6 +45,7 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
             "definition_id": expected[f"{role}_definition_id"],
             "bundle_identifier": expected[f"{role}_bundle_identifier"],
             "binary_sha256": expected[f"{role}_binary_sha256"],
+            "attestation_mode": "root_app_attest" if role == "host" else "delegated_only",
             "principal_id_sha256": principal * 64,
             "dpop_key_id_sha256": key * 64,
             "session_id_sha256": session * 64,
@@ -68,18 +69,15 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
         "completed_at": run["completed_at"],
         "runtime": {
             "identities": identities,
-            "direct_step_up": {
+            "delegated_execution": {
                 "role": "action",
                 "definition_id": expected["action_definition_id"],
                 "component_id_sha256": "f" * 64,
                 "dpop_key_id_sha256": "3" * 64,
-                "session_before_sha256": "a" * 64,
-                "session_after_sha256": "7" * 64,
-                "app_attest_key_id_sha256": "8" * 64,
-                "trust_source_before": "delegated_from_attested_root",
-                "trust_source_after": "delegated_direct_attested",
-                "binding_version": 2,
-                "request_hash_bound": True,
+                "session_id_sha256": "7" * 64,
+                "trust_source": "delegated_from_attested_root",
+                "http_status": 200,
+                "request_id": "request-action-1234",
             },
             "sibling_denial": {
                 "requesting_role": "action",
@@ -90,7 +88,7 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
                 "request_id": "request-sibling-1234",
             },
             "lifecycle": {
-                "host_process_running_during_step_up": False,
+                "host_process_running_during_action_request": False,
                 "background_execution_observed": True,
                 "host_termination_observed": True,
                 "user_presence_prompt_observed": False,
@@ -115,7 +113,7 @@ def raw_case(platform: str):
     device = {name: value for name, value in full["device"].items() if name != "security_level"}
     native = {
         "provider": "play_integrity" if android else "app_attest",
-        "trust_level": "strong_device_verified",
+        "trust_level": "strong_device_verified" if android else "app_verified",
         "key_storage": "strongbox" if android else "secure_enclave",
         "native_sdk_version": full["application"]["native_sdk_version"],
         "native_evidence_sha256": full["application"]["native_evidence_sha256"],
@@ -157,6 +155,11 @@ def raw_case(platform: str):
         native_profile["expected_pins"].pop(name)
     if not android:
         native_profile["expected_pins"].pop("javascript_bundle_sha256")
+        # The React Native candidate binds its whole staged .app tree in the
+        # outer profile. The linked native SDK report has its own authoritative
+        # profile and therefore must not inherit this wrapper-only coordinate.
+        native_profile.pop("application_files_manifest_sha256", None)
+        native_profile.pop("application_bundle_tree_sha256", None)
         native_profile["schema_version"] = finalizer.ios_native_evidence.PROFILE_VERSION
         native_profile["toolchain"]["collector_version"] = "2"
         native_profile["expected_pins"].update({
@@ -217,7 +220,7 @@ def raw_case(platform: str):
         "app_version": full["application"]["version"],
         "application_identifier": full["application"]["identifier"],
         "build_number": full["application"]["build"],
-        "minimum_trust_level": "device_verified",
+        "minimum_trust_level": "device_verified" if android else "app_verified",
         "platform": platform,
         "provider": "play_integrity" if android else "app_attest",
         "require_licensed": android,
@@ -562,11 +565,11 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
         evidence = validator.build_evidence(observation, profile, self.schema)
         self.assertFalse(evidence["release_eligible"])
 
-    def test_app_only_trust_cannot_be_upgraded_to_device_verified(self) -> None:
+    def test_ios_rejects_device_scoped_trust_instead_of_app_attest_normalization(self) -> None:
         profile, raw, collection, native_profile, native_evidence, client_policy = raw_case(
             "react_native_ios_app_attest",
         )
-        raw["native"]["trust_level"] = "app_verified"
+        raw["native"]["trust_level"] = "device_verified"
         observation = finalize_case(
             profile, raw, collection, native_profile, native_evidence, client_policy, self.schema,
         )

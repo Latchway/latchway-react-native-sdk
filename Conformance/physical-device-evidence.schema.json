@@ -306,7 +306,7 @@
           "const": "production"
         },
         "trust_level": {
-          "enum": ["device_verified", "strong_device_verified"]
+          "enum": ["app_verified", "device_verified", "strong_device_verified"]
         },
         "request_hash_bound": {
           "type": "boolean"
@@ -441,6 +441,14 @@
           "pattern": "^[0-9a-f]{64}$"
         },
         "application_binary_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "application_files_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "application_bundle_tree_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
         },

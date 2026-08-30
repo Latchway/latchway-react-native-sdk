@@ -33,6 +33,10 @@ const latchway = createLatchwayClient({
     if (token === undefined) throw new Error("The user must sign in before calling Latchway.");
     return token;
   },
+  apple: {
+    rootKeychainAccessGroup: applicationConfiguration.rootPrivateKeychainAccessGroup,
+    legacySharedKeychainAccessGroups: applicationConfiguration.extensionSharedKeychainAccessGroups,
+  },
   android: {
     playIntegrityCloudProjectNumber: applicationConfiguration.googleCloudProjectNumber,
   },
@@ -55,12 +59,18 @@ const habitAssistantFetch = latchway.fetchFor("habit_assistant");
 
 `applicationID` is the generated application resource ID returned by the
 Admin API, not an app name, package/bundle identifier, or user-chosen slug.
+On iOS, `apple.rootKeychainAccessGroup` is required, fully resolved, and must
+be the first access group in the signed root application. Put every explicit
+extension-shared group in `legacySharedKeychainAccessGroups`; native code scans
+only exact root-record coordinates and surfaces `storage_unavailable` if stale
+implicit root state requires an explicit migration.
 
 Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them. `revokeCurrentInstallation()` removes only the current installation; `revokeCurrentInstallationFamily()` revokes the full wire-v2 family and retires the root native key and session state.
 
-An independently executing iOS action or SSO extension whose containing
-app has already provisioned its component descriptor can perform the contract's
-component-scoped App Attest step-up without moving evidence through JavaScript:
+An independently executing iOS action or SSO extension whose containing app
+has already provisioned its component descriptor can inspect its isolated,
+independently keyed delegated-session state without moving credentials through
+JavaScript:
 
 ```ts
 import { createLatchwayComponentClient } from "@latchway/react-native";
@@ -79,24 +89,40 @@ const componentClient = createLatchwayComponentClient({
   applicationID: "app_01J00000000000000000000000",
   environment: "production",
   component,
+  apple: {
+    rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+    legacySharedKeychainAccessGroups: [component.keychainAccessGroup],
+  },
 });
 
-await componentClient.establishDirectAttestation();
 const componentState = await componentClient.diagnostics();
-// componentState.trustSource may now be "delegated_direct_attested".
+// This is diagnostics only; RN v1 exposes no component request operation.
 ```
 
 The access group must be fully resolved and present in both signed entitlement
 sets; build-setting expressions such as `$(AppIdentifierPrefix)` are rejected.
-Configuration fails unless the current process is an iOS `.appex`; the
-containing React Native application cannot use its root lease to attest an
-extension bundle. The component client has no identity callback or root API and
-selects the contract-owned `react_native_ios` platform. It creates the
-component-namespaced provider, challenge, App Attest evidence, exchange, and
-rotating component session inside the pinned iOS SDK. Only redacted component
-diagnostics return. Android v1 has delegated component sessions but no
-equivalent direct-attestation endpoint, so component configuration fails closed
-with `attestation_unsupported` there instead of imitating the iOS flow.
+Configuration fails unless the current process is an iOS `.appex`. The root
+application may establish App Attest only for itself; it must not attest for an
+extension, and an iOS application extension cannot call
+`DCAppAttestService.generateKey`. The extension client therefore constructs no
+App Attest provider. It has no identity callback or root API and retains only
+component-key and delegated-session isolation inside the pinned iOS SDK. The
+legacy `establishDirectAttestation()` entry point and direct-attestation trust
+source decoders remain for wire/API compatibility, but invocation fails closed
+with `attestation_unsupported`; their presence is not a claim that iOS can
+produce that state. Only redacted component diagnostics return. Android also
+fails closed for direct component attestation.
+
+The example's `AppIntents.appex` is a signing, bundle-identity, and shared
+Keychain-entitlement fixture. The root's signed groups are exactly its private
+app-ID group first and the shared component group second; App Intents signs only
+the shared group. Consequently, implicit root Keychain writes remain private
+and the extension cannot access root key, credential, or session state. It does not host a React Native JavaScript runtime or expose a delegated request
+operation; its sample intent fails closed with an
+unsupported error. Consequently, building or invoking that intent is not
+delegated-component execution evidence. The React Native v1 physical gate
+claims root App Attest only and imports separately validated native iOS
+component evidence without re-attributing it to this App Intents target.
 
 Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. JavaScript never clones or replays an authenticated request; any bounded pre-dispatch retry is exclusively a native transport decision. Android installs the locked Latchway OkHttp interceptor, origin guard, and authenticator. iOS uses the locked feature transport, whose private redirect-rejecting URL session classifies at most 64 KiB of one canonical pre-dispatch rejection before its single safe retry.
 

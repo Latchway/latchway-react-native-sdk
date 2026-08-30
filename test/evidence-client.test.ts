@@ -46,4 +46,19 @@ describe("physical evidence client rotation", () => {
     }))).rejects.toThrow("incompatible");
     expect(disposed).toBe(true);
   });
+
+  it("does not create a replacement when revocation fails", async () => {
+    let created = false;
+    const current = {
+      ready: Promise.resolve(),
+      async revokeCurrentInstallation(): Promise<void> { throw new Error("revoke failed"); },
+      async dispose(): Promise<void> {},
+    };
+
+    await expect(freshClientAfterRevocation(current, () => {
+      created = true;
+      return current;
+    })).rejects.toThrow("revoke failed");
+    expect(created).toBe(false);
+  });
 });

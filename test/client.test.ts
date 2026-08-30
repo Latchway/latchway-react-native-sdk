@@ -501,6 +501,28 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.componentConfigureInputs).toHaveLength(0);
   });
 
+  it("requires one consistent root-private and component-shared Keychain boundary", () => {
+    const options = componentOptions();
+    expect(() => createLatchwayComponentClient({
+      ...options,
+      apple: {
+        rootKeychainAccessGroup: options.apple.rootKeychainAccessGroup,
+        legacySharedKeychainAccessGroups: [],
+      },
+    })).toThrow(/component Keychain group/iu);
+    expect(() => createLatchwayComponentClient({
+      ...options,
+      apple: {
+        rootKeychainAccessGroup: DIRECT_COMPONENT.keychainAccessGroup,
+        legacySharedKeychainAccessGroups: [DIRECT_COMPONENT.keychainAccessGroup],
+      },
+    })).toThrow(/other than the root group/iu);
+    expect(() => createLatchwayComponentClient({
+      ...options,
+      apple: undefined,
+    } as never)).toThrow(/root Keychain configuration is required/iu);
+  });
+
   it("fails closed if component diagnostics contain credential material", async () => {
     const native = new FakeNativeModule();
     native.componentDiagnosticsExtra = { attestationEvidence: "synthetic-secret" };
@@ -572,6 +594,16 @@ describe("React Native Latchway native-owned fetch", () => {
     }
   });
 
+  it("maps explicit root Keychain migration failures to bounded storage unavailability", () => {
+    expect(fromNativeError({
+      code: "secure_state_unavailable",
+      message: "Legacy root Keychain state requires explicit migration.",
+    })).toMatchObject({
+      code: "storage_unavailable",
+      message: "Legacy root Keychain state requires explicit migration.",
+    });
+  });
+
   it("fails closed if a native rejection envelope contains credential fields", async () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error("synthetic failure"), {
@@ -640,6 +672,36 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(() => createLatchwayClient(baseOptions({
       android: { playIntegrityCloudProjectNumber: "not-a-project-number" },
     }))).toThrow(/Google Cloud project number/iu);
+    for (const apple of [
+      { rootKeychainAccessGroup: "$(AppIdentifierPrefix).unsafe" },
+      {
+        rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+        legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app"],
+      },
+      {
+        rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+        legacySharedKeychainAccessGroups: [
+          "ABCDE12345.com.example.app.shared",
+          "ABCDE12345.com.example.app.shared",
+        ],
+      },
+    ]) {
+      expect(() => createLatchwayClient(baseOptions({ apple }))).toThrow(/Keychain|access group/iu);
+    }
+  });
+
+  it("serializes the exact root and legacy Keychain groups to native", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    await client.ready;
+    const apple = (JSON.parse(native.configureInputs[0] ?? "null") as {
+      apple: Record<string, unknown>;
+    }).apple;
+    expect(apple).toMatchObject({
+      rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+      legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
+    });
   });
 
   it("consumes the pinned canonical protocol and cryptographic vectors", async () => {
@@ -740,6 +802,10 @@ function componentOptions(
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
     component,
+    apple: {
+      rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+      legacySharedKeychainAccessGroups: [component.keychainAccessGroup],
+    },
   };
 }
 
@@ -751,6 +817,10 @@ function baseOptions(
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
     getIdentityToken: async () => "app-owned-identity-token",
+    apple: {
+      rootKeychainAccessGroup: "ABCDE12345.com.example.app",
+      legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
+    },
     ...overrides,
   };
 }
@@ -777,6 +847,7 @@ class FakeNativeModule {
   directAttestationCalls = 0;
   componentConfigureError: Error | undefined;
   readonly componentConfigureInputs: Array<{ configurationJSON: string; componentJSON: string }> = [];
+  readonly configureInputs: string[] = [];
   readonly configuredComponents = new Map<string, typeof DIRECT_COMPONENT>();
   readonly cancelCalls: string[] = [];
   readonly closeCalls: string[] = [];
@@ -793,6 +864,7 @@ class FakeNativeModule {
 
   async configure(_clientID: string, configurationJSON: string): Promise<string> {
     this.configureCalls += 1;
+    this.configureInputs.push(configurationJSON);
     const config = JSON.parse(configurationJSON) as { contractVersion: string; protocolVersion: number };
     return JSON.stringify({
       platform: "react_native_ios",

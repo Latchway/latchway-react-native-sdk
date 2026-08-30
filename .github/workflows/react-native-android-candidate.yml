@@ -1,0 +1,592 @@
+name: Build and isolate the React Native Android candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full latchway-react-native-sdk commit to build
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: react-native-android-candidate
+  cancel-in-progress: false
+
+jobs:
+  build-unsigned:
+    name: Build the closed unsigned Android handoff
+    if: github.repository == 'Latchway/latchway-react-native-sdk' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, latchway-release-builder]
+    timeout-minutes: 60
+    environment: react-native-android-candidate-build
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact React Native source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Validate the authorized source and signing-free environment
+        shell: bash
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ vars.LATCHWAY_SOURCE_COMMIT }}
+          REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUESTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$REQUESTED_SOURCE_COMMIT" = "$EXPECTED_SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$REQUESTED_SOURCE_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          for name in \
+            LATCHWAY_ANDROID_KEYSTORE_PATH \
+            LATCHWAY_ANDROID_KEYSTORE_PASSWORD \
+            LATCHWAY_ANDROID_KEY_ALIAS \
+            LATCHWAY_ANDROID_KEY_PASSWORD \
+            LATCHWAY_ANDROID_UPLOAD_CERTIFICATE_SHA256; do
+            test -z "${!name:-}"
+          done
+      - name: Configure Java 17
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Configure Node 24.19.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.19.0"
+      - name: Produce only unsigned repository artifacts
+        env:
+          LATCHWAY_CANDIDATE_OUTPUT_DIR: ${{ runner.temp }}/react-native-android-unsigned
+          LATCHWAY_SOURCE_COMMIT: ${{ inputs.source_commit }}
+          LATCHWAY_CORE_COMMIT: ${{ vars.LATCHWAY_CORE_COMMIT }}
+          LATCHWAY_CORE_SOURCE_PATH: ${{ vars.LATCHWAY_CORE_SOURCE_PATH }}
+          LATCHWAY_JAVASCRIPT_SDK_PATH: ${{ vars.LATCHWAY_JAVASCRIPT_SDK_PATH }}
+          LATCHWAY_ANDROID_COMMIT: ${{ vars.LATCHWAY_ANDROID_COMMIT }}
+          LATCHWAY_ANDROID_SDK_PATH: ${{ vars.LATCHWAY_ANDROID_SDK_PATH }}
+          LATCHWAY_CONTRACT_VERSION: ${{ vars.LATCHWAY_CONTRACT_VERSION }}
+          LATCHWAY_CONTRACT_BUNDLE_SHA256: ${{ vars.LATCHWAY_CONTRACT_BUNDLE_SHA256 }}
+          LATCHWAY_RN_SDK_VERSION: ${{ vars.LATCHWAY_RN_SDK_VERSION }}
+          LATCHWAY_NATIVE_SDK_VERSION: ${{ vars.LATCHWAY_ANDROID_SDK_VERSION }}
+          LATCHWAY_NATIVE_EVIDENCE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_PATH }}
+          LATCHWAY_NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
+          LATCHWAY_GATEWAY_IMAGE_DIGEST: ${{ vars.LATCHWAY_GATEWAY_IMAGE_DIGEST }}
+          LATCHWAY_GATEWAY_CONFIGURATION_SHA256: ${{ vars.LATCHWAY_GATEWAY_CONFIGURATION_SHA256 }}
+          LATCHWAY_GATEWAY_ORIGIN: ${{ vars.LATCHWAY_GATEWAY_ORIGIN }}
+          LATCHWAY_BASE_URL: ${{ vars.LATCHWAY_GATEWAY_ORIGIN }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256 }}
+          LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256: ${{ vars.LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256 }}
+          LATCHWAY_APPLICATION_ID: ${{ vars.LATCHWAY_APPLICATION_ID }}
+          LATCHWAY_ENVIRONMENT: ${{ vars.LATCHWAY_ENVIRONMENT }}
+          LATCHWAY_FEATURE: ${{ vars.LATCHWAY_FEATURE }}
+          LATCHWAY_ERROR_MAPPING_FEATURE: ${{ vars.LATCHWAY_ERROR_MAPPING_FEATURE }}
+          LATCHWAY_MODEL: ${{ vars.LATCHWAY_MODEL }}
+          LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          LATCHWAY_APP_VERSION: ${{ vars.LATCHWAY_ANDROID_APP_VERSION }}
+          LATCHWAY_VERSION_CODE: ${{ vars.LATCHWAY_ANDROID_VERSION_CODE }}
+          LATCHWAY_PLAY_TRACK: ${{ vars.LATCHWAY_ANDROID_PLAY_TRACK }}
+          LATCHWAY_REQUIRE_LICENSED: "true"
+          LATCHWAY_CLOUD_PROJECT_NUMBER: ${{ vars.LATCHWAY_ANDROID_CLOUD_PROJECT_NUMBER }}
+          LATCHWAY_FIREBASE_ANDROID_CONFIG_PATH: ${{ vars.LATCHWAY_FIREBASE_ANDROID_CONFIG_PATH }}
+          LATCHWAY_SIGNING_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_ANDROID_SIGNING_CERTIFICATE_SHA256 }}
+        run: python3 scripts/stage-physical-react-native-candidate.py android
+      - name: Stage the verifier source separately
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/react-native-aab-verifier"
+          install -d -m 0700 "$root"
+          install -m 0600 scripts/VerifyReactNativeAabSignature.java "$root/"
+          (cd "$root" && shasum -a 256 VerifyReactNativeAabSignature.java > SHA256SUMS)
+      - name: Transfer the unsigned data handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-android-unsigned/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Transfer verifier source without signing material
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-aab-verifier-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-aab-verifier/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  sign-isolated:
+    name: Sign the closed handoff without checkout or Gradle
+    needs: build-unsigned
+    if: github.repository == 'Latchway/latchway-react-native-sdk' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: react-native-android-upload-signing
+    permissions:
+      actions: read
+    steps:
+      - name: Configure Java 17
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Configure Android system tools before secrets exist
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          cmdline-tools-version: "14742923"
+          packages: "build-tools;36.0.0"
+      - name: Download only the unsigned candidate data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-android-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-android-unsigned
+      - name: Download the independently pinned verifier source
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-aab-verifier-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-aab-verifier
+      - name: Validate the exact closed unsigned set before secrets exist
+        id: unsigned
+        shell: bash
+        env:
+          EXPECTED_VERIFIER_SHA256: ${{ vars.LATCHWAY_REACT_NATIVE_AAB_VERIFIER_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/react-native-android-unsigned"
+          verifier="$RUNNER_TEMP/react-native-aab-verifier"
+          test -d "$root" && test ! -L "$root"
+          test -d "$verifier" && test ! -L "$verifier"
+          printf '%s\n' \
+            LatchwayExample-release-unsigned.aab \
+            LatchwayExample-release-unsigned.apk \
+            SHA256SUMS \
+            android-aab-presign-payload.manifest \
+            android-index.android.bundle \
+            android-native-publication.sha256 \
+            candidate-manifest.json \
+            source-inputs.json \
+            | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          find "$root" -mindepth 1 -maxdepth 1 -type f -print \
+            | sed "s#^$root/##" \
+            | LC_ALL=C sort > "$RUNNER_TEMP/actual"
+          cmp --silent "$RUNNER_TEMP/expected" "$RUNNER_TEMP/actual"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          total=0
+          while IFS= read -r name; do
+            bytes=$(stat -c '%s' "$root/$name")
+            (( bytes > 0 && bytes <= 2147483648 ))
+            total=$((total + bytes))
+          done < "$RUNNER_TEMP/expected"
+          (( total <= 3221225472 ))
+          (cd "$root" && sha256sum --check --strict SHA256SUMS)
+          python3 - "$root" "$SOURCE_COMMIT" "$GITHUB_OUTPUT" <<'PY'
+          import hashlib, json, pathlib, re, subprocess, sys, unicodedata, zipfile
+          import xml.etree.ElementTree as ET
+          root, commit, output = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
+          value = json.loads((root / "candidate-manifest.json").read_text("utf-8"))
+          app = value.get("candidate", {}).get("application", {})
+          source = value.get("source", {}).get("source", {})
+          binding = app.get("presign_payload_manifest", {})
+          digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          if value.get("schema_version") != "latchway.react-native-physical-candidate.v1" or value.get("repository") != "Latchway/latchway-react-native-sdk" or source.get("commit") != commit:
+              raise SystemExit("unsigned candidate source binding is invalid")
+          if app.get("signing_mode") != "unsigned" or app.get("upload_certificate_sha256") is not None:
+              raise SystemExit("repository producer emitted a signed artifact")
+          if binding != {"file":"android-aab-presign-payload.manifest","schema_version":"latchway.react-native-android-aab-presign-payload.v1","sha256":digest(root / "android-aab-presign-payload.manifest")}:
+              raise SystemExit("pre-sign payload binding is invalid")
+          aab = root / "LatchwayExample-release-unsigned.aab"
+          apk = root / "LatchwayExample-release-unsigned.apk"
+          if app.get("aab_sha256") != digest(aab) or app.get("apk_sha256") != digest(apk):
+              raise SystemExit("unsigned artifact hash is invalid")
+
+          signature_control = re.compile(r"META-INF/(?:MANIFEST\.MF|[A-Z0-9_-]{1,32}\.(?:SF|RSA|DSA|EC))", re.IGNORECASE)
+          def apk_payload(path, allow_signature_controls):
+              records, folded, normalized, expanded = {}, set(), set(), 0
+              try:
+                  with zipfile.ZipFile(path) as archive:
+                      for entry in archive.infolist():
+                          name = entry.filename
+                          if signature_control.fullmatch(name):
+                              if not allow_signature_controls:
+                                  raise SystemExit("unsigned APK contains signature controls")
+                              continue
+                          parts = name.split("/")
+                          if entry.is_dir() or not name or name.startswith("/") or "\\" in name or "\x00" in name or any(part in {"", ".", ".."} for part in parts):
+                              raise SystemExit("APK payload contains an unsafe entry")
+                          fold = name.casefold(); normalize = unicodedata.normalize("NFC", name).casefold()
+                          if name in records or fold in folded or normalize in normalized:
+                              raise SystemExit("APK payload contains an ambiguous entry")
+                          content = archive.read(entry)
+                          expanded += len(content)
+                          if len(records) >= 100000 or expanded > 2147483648:
+                              raise SystemExit("APK payload exceeds reviewed bounds")
+                          records[name] = (entry.file_size, entry.CRC, entry.compress_type, hashlib.sha256(content).hexdigest())
+                          folded.add(fold); normalized.add(normalize)
+              except zipfile.BadZipFile as failure:
+                  raise SystemExit("APK payload is not a valid ZIP") from failure
+              if not records:
+                  raise SystemExit("APK payload is empty")
+              return records
+
+          unsigned_payload = apk_payload(apk, False)
+          javascript = unsigned_payload.get("assets/index.android.bundle")
+          if javascript is None or javascript[3] != app.get("javascript_bundle_sha256") or javascript[3] != digest(root / "android-index.android.bundle"):
+              raise SystemExit("unsigned APK JavaScript bundle is not source-bound")
+
+          def command(*arguments):
+              return subprocess.run(arguments, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60).stdout.strip()
+          expected_identity = (app.get("package_name"), app.get("version"), app.get("version_code"))
+          observed_identity = (
+              command("apkanalyzer", "manifest", "application-id", str(apk)),
+              command("apkanalyzer", "manifest", "version-name", str(apk)),
+              command("apkanalyzer", "manifest", "version-code", str(apk)),
+          )
+          if observed_identity != expected_identity:
+              raise SystemExit("unsigned APK package/version identity is not bound to the audited candidate")
+          manifest = ET.fromstring(command("apkanalyzer", "manifest", "print", str(apk)))
+          namespace = "{http://schemas.android.com/apk/res/android}"
+          application = manifest.find("application")
+          if application is None:
+              raise SystemExit("unsigned APK has no application manifest")
+          metadata = {item.attrib.get(namespace + "name"): item.attrib.get(namespace + "value") for item in application.findall("meta-data")}
+          if metadata.get("dev.latchway.firebase_configuration_sha256") != value.get("candidate", {}).get("firebase_configuration_sha256") or metadata.get("dev.latchway.candidate_configuration_sha256") != value.get("candidate", {}).get("candidate_configuration_sha256"):
+              raise SystemExit("unsigned APK embedded configuration hashes are not source-bound")
+          if subprocess.run(
+              ("apksigner", "verify", "--min-sdk-version", "24", str(apk)),
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+              timeout=60,
+              check=False,
+          ).returncode == 0:
+              raise SystemExit("unsigned APK unexpectedly passed apksigner verification")
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"unsigned_aab_sha256={digest(aab)}\n")
+              stream.write(f"unsigned_apk_sha256={digest(apk)}\n")
+              stream.write(f"unsigned_manifest_sha256={digest(root / 'candidate-manifest.json')}\n")
+              stream.write(f"presign_sha256={digest(root / 'android-aab-presign-payload.manifest')}\n")
+          PY
+          [[ "$EXPECTED_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s\n' SHA256SUMS VerifyReactNativeAabSignature.java | LC_ALL=C sort > "$RUNNER_TEMP/signer-verifier-expected"
+          find "$verifier" -mindepth 1 -maxdepth 1 -type f -print \
+            | sed "s#^$verifier/##" | LC_ALL=C sort > "$RUNNER_TEMP/signer-verifier-actual"
+          cmp --silent "$RUNNER_TEMP/signer-verifier-expected" "$RUNNER_TEMP/signer-verifier-actual"
+          test -z "$(find "$verifier" -mindepth 1 ! -type f -print -quit)"
+          (cd "$verifier" && sha256sum --check --strict SHA256SUMS)
+          test "$(sha256sum "$verifier/VerifyReactNativeAabSignature.java" | awk '{print $1}')" = "$EXPECTED_VERIFIER_SHA256"
+          classes="$RUNNER_TEMP/react-native-aab-verifier-signer-classes"
+          install -d -m 0700 "$classes"
+          javac -d "$classes" "$verifier/VerifyReactNativeAabSignature.java"
+          java -cp "$classes" VerifyReactNativeAabSignature --emit-presign-manifest \
+            "$root/LatchwayExample-release-unsigned.aab" \
+            "$RUNNER_TEMP/signer-observed-presign.manifest"
+          cmp --silent "$root/android-aab-presign-payload.manifest" \
+            "$RUNNER_TEMP/signer-observed-presign.manifest"
+      - name: Sign only the validated AAB and APK with isolated key material
+        id: signing
+        shell: bash
+        env:
+          EXPECTED_UPLOAD_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_ANDROID_UPLOAD_CERTIFICATE_SHA256 }}
+          SIGNATURE_ALGORITHM: ${{ vars.LATCHWAY_ANDROID_UPLOAD_SIGNATURE_ALGORITHM }}
+          KEYSTORE_BASE64: ${{ secrets.LATCHWAY_ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.LATCHWAY_ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.LATCHWAY_ANDROID_UPLOAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.LATCHWAY_ANDROID_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          set +x
+          umask 077
+          [[ "$EXPECTED_UPLOAD_CERTIFICATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$KEY_ALIAS" =~ ^[A-Za-z0-9._-]{1,128}$ ]]
+          case "$SIGNATURE_ALGORITHM" in
+            SHA256withRSA|SHA256withECDSA) ;;
+            *) echo "unsupported Android upload-key signature algorithm" >&2; exit 2 ;;
+          esac
+          test -n "$KEYSTORE_BASE64" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_PASSWORD"
+          key_material=$KEYSTORE_BASE64
+          store_password=$KEYSTORE_PASSWORD
+          key_password=$KEY_PASSWORD
+          key_alias=$KEY_ALIAS
+          unset KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_PASSWORD KEY_ALIAS
+          keystore=$(mktemp "$RUNNER_TEMP/latchway-rn-upload.XXXXXX")
+          certificate=$(mktemp "$RUNNER_TEMP/latchway-rn-cert.XXXXXX")
+          cleanup() { rm -f -- "$keystore" "$certificate"; }
+          trap cleanup EXIT HUP INT TERM
+          printf '%s' "$key_material" | base64 --decode > "$keystore"
+          key_material=""
+          test -s "$keystore" && test "$(wc -c < "$keystore")" -le 1048576
+          export LATCHWAY_SIGNER_STORE_PASSWORD="$store_password"
+          export LATCHWAY_SIGNER_KEY_PASSWORD="$key_password"
+          keytool -exportcert -keystore "$keystore" \
+            -storepass:env LATCHWAY_SIGNER_STORE_PASSWORD \
+            -alias "$key_alias" \
+            -keypass:env LATCHWAY_SIGNER_KEY_PASSWORD > "$certificate"
+          certificate_sha256=$(sha256sum "$certificate" | awk '{print $1}')
+          test "$certificate_sha256" = "$EXPECTED_UPLOAD_CERTIFICATE_SHA256"
+          root="$RUNNER_TEMP/react-native-android-unsigned"
+          jarsigner -keystore "$keystore" \
+            -storepass:env LATCHWAY_SIGNER_STORE_PASSWORD \
+            -keypass:env LATCHWAY_SIGNER_KEY_PASSWORD \
+            -digestalg SHA-256 \
+            -sigalg "$SIGNATURE_ALGORITHM" \
+            -sigfile LATCHWAY \
+            "$root/LatchwayExample-release-unsigned.aab" "$key_alias" >/dev/null
+          apksigner sign \
+            --min-sdk-version 24 \
+            --v1-signing-enabled false \
+            --ks "$keystore" \
+            --ks-key-alias "$key_alias" \
+            --ks-pass env:LATCHWAY_SIGNER_STORE_PASSWORD \
+            --key-pass env:LATCHWAY_SIGNER_KEY_PASSWORD \
+            --out "$root/LatchwayExample-release.apk" \
+            "$root/LatchwayExample-release-unsigned.apk"
+          unset LATCHWAY_SIGNER_STORE_PASSWORD LATCHWAY_SIGNER_KEY_PASSWORD
+          store_password=""; key_password=""; key_alias=""
+          rm -f -- "$keystore" "$certificate"
+          trap - EXIT HUP INT TERM
+          mv "$root/LatchwayExample-release-unsigned.aab" "$root/LatchwayExample-release.aab"
+          {
+            printf 'signed_aab_sha256=%s\n' "$(sha256sum "$root/LatchwayExample-release.aab" | awk '{print $1}')"
+            printf 'signed_apk_sha256=%s\n' "$(sha256sum "$root/LatchwayExample-release.apk" | awk '{print $1}')"
+            printf 'upload_certificate_sha256=%s\n' "$certificate_sha256"
+            printf 'signature_algorithm=%s\n' "$SIGNATURE_ALGORITHM"
+          } >> "$GITHUB_OUTPUT"
+      - name: Seal signed bytes after all key material is removed
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          UNSIGNED_AAB_SHA256: ${{ steps.unsigned.outputs.unsigned_aab_sha256 }}
+          UNSIGNED_APK_SHA256: ${{ steps.unsigned.outputs.unsigned_apk_sha256 }}
+          UNSIGNED_MANIFEST_SHA256: ${{ steps.unsigned.outputs.unsigned_manifest_sha256 }}
+          PRESIGN_SHA256: ${{ steps.unsigned.outputs.presign_sha256 }}
+          SIGNED_AAB_SHA256: ${{ steps.signing.outputs.signed_aab_sha256 }}
+          SIGNED_APK_SHA256: ${{ steps.signing.outputs.signed_apk_sha256 }}
+          UPLOAD_CERTIFICATE_SHA256: ${{ steps.signing.outputs.upload_certificate_sha256 }}
+          SIGNATURE_ALGORITHM: ${{ steps.signing.outputs.signature_algorithm }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/react-native-android-unsigned"
+          rm -f -- "$root/SHA256SUMS"
+          mv "$root/candidate-manifest.json" "$root/unsigned-candidate-manifest.json"
+          python3 - "$root/signed-candidate.json" <<'PY'
+          import json, os, pathlib, re, sys
+          hashes = ("UNSIGNED_AAB_SHA256","UNSIGNED_APK_SHA256","UNSIGNED_MANIFEST_SHA256","PRESIGN_SHA256","SIGNED_AAB_SHA256","SIGNED_APK_SHA256","UPLOAD_CERTIFICATE_SHA256")
+          if any(re.fullmatch(r"[0-9a-f]{64}", os.environ[name]) is None for name in hashes):
+              raise SystemExit("invalid signed-candidate digest")
+          if os.environ["SIGNATURE_ALGORITHM"] not in {"SHA256withRSA", "SHA256withECDSA"}:
+              raise SystemExit("invalid signed-candidate signature algorithm")
+          value = {"schema_version":"latchway.react-native-android-signed-candidate.v1",
+            "repository":"Latchway/latchway-react-native-sdk","source_commit":os.environ["SOURCE_COMMIT"],
+            "unsigned_aab_sha256":os.environ["UNSIGNED_AAB_SHA256"],
+            "unsigned_apk_sha256":os.environ["UNSIGNED_APK_SHA256"],
+            "unsigned_candidate_manifest_sha256":os.environ["UNSIGNED_MANIFEST_SHA256"],
+            "presign_payload_manifest_sha256":os.environ["PRESIGN_SHA256"],
+            "signed_aab_sha256":os.environ["SIGNED_AAB_SHA256"],
+            "signed_apk_sha256":os.environ["SIGNED_APK_SHA256"],
+            "upload_certificate_sha256":os.environ["UPLOAD_CERTIFICATE_SHA256"],
+            "signing_boundary":{"checkout":False,"gradle":False,"candidate_code_executed_with_key_material":False,"signature_file":"LATCHWAY","signature_algorithm":os.environ["SIGNATURE_ALGORITHM"]}}
+          pathlib.Path(sys.argv[1]).write_bytes(json.dumps(value, separators=(",",":"), sort_keys=True).encode())
+          PY
+          (cd "$root" && sha256sum \
+            LatchwayExample-release.aab \
+            LatchwayExample-release.apk \
+            LatchwayExample-release-unsigned.apk \
+            android-aab-presign-payload.manifest \
+            android-index.android.bundle \
+            android-native-publication.sha256 \
+            signed-candidate.json \
+            source-inputs.json \
+            unsigned-candidate-manifest.json > SHA256SUMS)
+          test "$(find "$root" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 10
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+      - name: Transfer unverified signed bytes to a fresh verifier
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-signed-unverified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-android-unsigned/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  verify-signed:
+    name: Verify signed bytes without checkout or secrets
+    needs: sign-isolated
+    if: github.repository == 'Latchway/latchway-react-native-sdk' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: react-native-android-candidate-verification
+    permissions:
+      actions: read
+    steps:
+      - name: Configure Java 17
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Configure Android verification tools
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          cmdline-tools-version: "14742923"
+          packages: "build-tools;36.0.0"
+      - name: Download signed candidate data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-android-signed-unverified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-android-signed
+      - name: Download verifier source without a checkout
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-aab-verifier-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-aab-verifier
+      - name: Validate the closed set and exact signature coverage
+        shell: bash
+        env:
+          EXPECTED_UPLOAD_CERTIFICATE_SHA256: ${{ vars.LATCHWAY_ANDROID_UPLOAD_CERTIFICATE_SHA256 }}
+          EXPECTED_VERIFIER_SHA256: ${{ vars.LATCHWAY_REACT_NATIVE_AAB_VERIFIER_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/react-native-android-signed"
+          verifier="$RUNNER_TEMP/react-native-aab-verifier"
+          test -z "$(find "$root" "$verifier" -mindepth 1 ! -type f -print -quit)"
+          [[ "$EXPECTED_UPLOAD_CERTIFICATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          (cd "$root" && sha256sum --check --strict SHA256SUMS)
+          (cd "$verifier" && sha256sum --check --strict SHA256SUMS)
+          test "$(sha256sum "$verifier/VerifyReactNativeAabSignature.java" | awk '{print $1}')" = "$EXPECTED_VERIFIER_SHA256"
+          python3 - "$root" "$SOURCE_COMMIT" "$EXPECTED_UPLOAD_CERTIFICATE_SHA256" <<'PY'
+          import hashlib, json, pathlib, re, subprocess, sys, unicodedata, zipfile
+          import xml.etree.ElementTree as ET
+          root, commit, certificate = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          expected = {"LatchwayExample-release.aab","LatchwayExample-release.apk","LatchwayExample-release-unsigned.apk","SHA256SUMS",
+            "android-aab-presign-payload.manifest","android-index.android.bundle",
+            "android-native-publication.sha256","signed-candidate.json",
+            "source-inputs.json","unsigned-candidate-manifest.json"}
+          children = list(root.iterdir())
+          if {p.name for p in children} != expected or any(not p.is_file() or p.is_symlink() for p in children):
+              raise SystemExit("signed candidate is not the exact ten-file set")
+          digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          signed = json.loads((root / "signed-candidate.json").read_text("utf-8"))
+          unsigned = json.loads((root / "unsigned-candidate-manifest.json").read_text("utf-8"))
+          app = unsigned.get("candidate", {}).get("application", {})
+          source = unsigned.get("source", {}).get("source", {})
+          if unsigned.get("schema_version") != "latchway.react-native-physical-candidate.v1" or unsigned.get("repository") != "Latchway/latchway-react-native-sdk" or source.get("commit") != commit:
+              raise SystemExit("unsigned candidate source binding is invalid")
+          signed_keys = {"schema_version","repository","source_commit","unsigned_aab_sha256","unsigned_apk_sha256",
+            "unsigned_candidate_manifest_sha256","presign_payload_manifest_sha256","signed_aab_sha256",
+            "signed_apk_sha256","upload_certificate_sha256","signing_boundary"}
+          if set(signed) != signed_keys or signed.get("schema_version") != "latchway.react-native-android-signed-candidate.v1" or signed.get("repository") != "Latchway/latchway-react-native-sdk" or signed.get("source_commit") != commit:
+              raise SystemExit("signed metadata binding is invalid")
+          if signed.get("signed_aab_sha256") != digest(root / "LatchwayExample-release.aab") or signed.get("signed_apk_sha256") != digest(root / "LatchwayExample-release.apk"):
+              raise SystemExit("signed artifact digest is invalid")
+          if signed.get("upload_certificate_sha256") != certificate or app.get("signing_mode") != "unsigned":
+              raise SystemExit("signing continuity is invalid")
+          if signed.get("unsigned_candidate_manifest_sha256") != digest(root / "unsigned-candidate-manifest.json"):
+              raise SystemExit("unsigned candidate manifest continuity is invalid")
+          if signed.get("unsigned_aab_sha256") != app.get("aab_sha256") or signed.get("unsigned_apk_sha256") != app.get("apk_sha256"):
+              raise SystemExit("unsigned artifact continuity is invalid")
+          if signed.get("unsigned_apk_sha256") != digest(root / "LatchwayExample-release-unsigned.apk"):
+              raise SystemExit("retained unsigned APK continuity is invalid")
+          if signed.get("presign_payload_manifest_sha256") != digest(root / "android-aab-presign-payload.manifest"):
+              raise SystemExit("pre-sign continuity is invalid")
+          binding = app.get("presign_payload_manifest")
+          if binding != {"file":"android-aab-presign-payload.manifest","schema_version":"latchway.react-native-android-aab-presign-payload.v1","sha256":signed["presign_payload_manifest_sha256"]}:
+              raise SystemExit("unsigned pre-sign binding is invalid")
+          if signed.get("signing_boundary") not in (
+              {"checkout":False,"gradle":False,"candidate_code_executed_with_key_material":False,"signature_file":"LATCHWAY","signature_algorithm":"SHA256withRSA"},
+              {"checkout":False,"gradle":False,"candidate_code_executed_with_key_material":False,"signature_file":"LATCHWAY","signature_algorithm":"SHA256withECDSA"},
+          ):
+              raise SystemExit("signing-boundary claim is invalid")
+
+          signature_control = re.compile(r"META-INF/(?:MANIFEST\.MF|[A-Z0-9_-]{1,32}\.(?:SF|RSA|DSA|EC))", re.IGNORECASE)
+          def apk_payload(path, allow_signature_controls):
+              records, folded, normalized, expanded = {}, set(), set(), 0
+              try:
+                  with zipfile.ZipFile(path) as archive:
+                      for entry in archive.infolist():
+                          name = entry.filename
+                          if signature_control.fullmatch(name):
+                              if not allow_signature_controls:
+                                  raise SystemExit("APK contains prohibited META-INF signature controls")
+                              continue
+                          parts = name.split("/")
+                          if entry.is_dir() or not name or name.startswith("/") or "\\" in name or "\x00" in name or any(part in {"", ".", ".."} for part in parts):
+                              raise SystemExit("APK payload contains an unsafe entry")
+                          fold = name.casefold(); normalize = unicodedata.normalize("NFC", name).casefold()
+                          if name in records or fold in folded or normalize in normalized:
+                              raise SystemExit("APK payload contains an ambiguous entry")
+                          content = archive.read(entry)
+                          expanded += len(content)
+                          if len(records) >= 100000 or expanded > 2147483648:
+                              raise SystemExit("APK payload exceeds reviewed bounds")
+                          records[name] = (entry.file_size, entry.CRC, entry.compress_type, hashlib.sha256(content).hexdigest())
+                          folded.add(fold); normalized.add(normalize)
+              except zipfile.BadZipFile as failure:
+                  raise SystemExit("APK payload is not a valid ZIP") from failure
+              if not records:
+                  raise SystemExit("APK payload is empty")
+              return records
+
+          unsigned_apk = root / "LatchwayExample-release-unsigned.apk"
+          signed_apk = root / "LatchwayExample-release.apk"
+          unsigned_payload = apk_payload(unsigned_apk, False)
+          signed_payload = apk_payload(signed_apk, False)
+          if signed_payload != unsigned_payload:
+              raise SystemExit("signed APK payload does not match the retained source-built unsigned APK")
+          javascript = unsigned_payload.get("assets/index.android.bundle")
+          if javascript is None or javascript[3] != app.get("javascript_bundle_sha256") or javascript[3] != digest(root / "android-index.android.bundle"):
+              raise SystemExit("signed APK JavaScript bundle is not source-bound")
+
+          expected_identity = (app.get("package_name"), app.get("version"), app.get("version_code"))
+          def command(*arguments):
+              return subprocess.run(arguments, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60).stdout.strip()
+          def single_apk_signer_certificate(report):
+              lines = [line.strip() for line in report.splitlines()]
+              signer_counts = [line for line in lines if line.startswith("Number of signers:")]
+              if signer_counts != ["Number of signers: 1"]:
+                  raise SystemExit("signed APK must declare exactly one signer")
+              certificate_lines = [line for line in lines if line.startswith("Signer #") and " certificate SHA-256 digest:" in line]
+              if len(certificate_lines) != 1:
+                  raise SystemExit("signed APK must contain exactly one SHA-256 certificate digest")
+              match = re.fullmatch(r"Signer #([1-9][0-9]*) certificate SHA-256 digest: ([0-9A-Fa-f]{64})", certificate_lines[0])
+              if match is None or match.group(1) != "1":
+                  raise SystemExit("signed APK certificate must belong to signer #1")
+              return match.group(2).lower()
+          for apk in (unsigned_apk, signed_apk):
+              observed_identity = (
+                  command("apkanalyzer", "manifest", "application-id", str(apk)),
+                  command("apkanalyzer", "manifest", "version-name", str(apk)),
+                  command("apkanalyzer", "manifest", "version-code", str(apk)),
+              )
+              if observed_identity != expected_identity:
+                  raise SystemExit("APK package/version identity is not bound to the audited candidate")
+              manifest = ET.fromstring(command("apkanalyzer", "manifest", "print", str(apk)))
+              namespace = "{http://schemas.android.com/apk/res/android}"
+              application = manifest.find("application")
+              if application is None:
+                  raise SystemExit("APK has no application manifest")
+              metadata = {item.attrib.get(namespace + "name"): item.attrib.get(namespace + "value") for item in application.findall("meta-data")}
+              if metadata.get("dev.latchway.firebase_configuration_sha256") != unsigned.get("candidate", {}).get("firebase_configuration_sha256") or metadata.get("dev.latchway.candidate_configuration_sha256") != unsigned.get("candidate", {}).get("candidate_configuration_sha256"):
+                  raise SystemExit("APK embedded configuration hashes are not source-bound")
+          signer_report = command("apksigner", "verify", "--min-sdk-version", "24", "--verbose", "--print-certs", str(signed_apk))
+          if single_apk_signer_certificate(signer_report) != certificate:
+              raise SystemExit("signed APK certificate does not match the protected pin")
+          PY
+          classes="$RUNNER_TEMP/react-native-aab-verifier-classes"
+          install -d -m 0700 "$classes"
+          javac -d "$classes" "$verifier/VerifyReactNativeAabSignature.java"
+          java -cp "$classes" VerifyReactNativeAabSignature \
+            "$root/LatchwayExample-release.aab" \
+            "$EXPECTED_UPLOAD_CERTIFICATE_SHA256" \
+            "$root/android-aab-presign-payload.manifest"
+      - name: Retain only the independently verified signed candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-signed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/react-native-android-signed/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

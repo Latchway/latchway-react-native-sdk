@@ -3,6 +3,7 @@ import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import Darwin
+import CryptoKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -15,6 +16,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    PhysicalIdentityGrantHandoff.captureAndClearEnvironment()
+
     let delegate = ReactNativeDelegate()
     let factory = RCTReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -54,6 +57,44 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 @objc(LatchwayEvidence)
 final class LatchwayEvidence: NSObject {
   @objc static func requiresMainQueueSetup() -> Bool { false }
+
+  @objc(consumeIdentityGrant:packageOrBundleIdentifier:identityProvider:resolve:reject:)
+  func consumeIdentityGrant(
+    _ applicationID: String,
+    packageOrBundleIdentifier: String,
+    identityProvider: String,
+    resolve: RCTPromiseResolveBlock,
+    reject: RCTPromiseRejectBlock
+  ) {
+    do {
+      guard DeviceEvidenceFacts.physical,
+            !DeviceEvidenceFacts.simulator,
+            !DeviceEvidenceFacts.debugBuild,
+            !DeviceEvidenceFacts.testing,
+            !DeviceEvidenceFacts.debuggerAttached
+      else { throw EvidenceFailure.invalid }
+      guard Self.safe(applicationID, pattern: "^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$"),
+            packageOrBundleIdentifier == Bundle.main.bundleIdentifier,
+            identityProvider == "firebase"
+      else { throw EvidenceFailure.invalid }
+      resolve(try PhysicalIdentityGrantHandoff.consume())
+    } catch {
+      reject("device_identity_grant_invalid", "Protected one-use identity grant is unavailable.", nil)
+    }
+  }
+
+  @objc(javascriptBundleSHA256:reject:)
+  func javascriptBundleSHA256(
+    resolve: RCTPromiseResolveBlock,
+    reject: RCTPromiseRejectBlock
+  ) {
+    let value = ProcessInfo.processInfo.environment["LATCHWAY_JAVASCRIPT_BUNDLE_SHA256"]
+    if let value, Self.safe(value, pattern: "^[0-9a-f]{64}$") {
+      resolve(value)
+    } else {
+      reject("device_evidence_invalid", "Protected JavaScript bundle digest is unavailable.", nil)
+    }
+  }
 
   @objc(write:resolve:reject:)
   func write(
@@ -123,7 +164,7 @@ final class LatchwayEvidence: NSObject {
     guard let provider = native["provider"] as? String,
           ["app_attest", "unverified"].contains(provider),
           let trustLevel = native["trust_level"] as? String,
-          ["none", "identity_only", "web_risk_verified", "app_verified", "device_verified", "strong_device_verified", "debug"].contains(trustLevel),
+          ["none", "identity_only", "web_risk_verified", "app_verified", "debug"].contains(trustLevel),
           let keyStorage = native["key_storage"] as? String,
           ["secure_enclave", "unknown"].contains(keyStorage),
           let nativeVersion = native["native_sdk_version"] as? String,
@@ -356,3 +397,74 @@ private enum DeviceEvidenceFacts {
 }
 
 private enum EvidenceFailure: Error { case invalid }
+
+/// A one-slot, process-memory-only handoff for the physical example. The
+/// collector supplies a Firebase custom token through devicectl's child
+/// environment. The value and its expected hash are removed from the process
+/// environment at launch and the slot is destroyed before the only read
+/// resolves to JavaScript. Latchway session, DPoP, refresh, and attestation
+/// material never crosses this example bridge.
+private enum PhysicalIdentityGrantHandoff {
+  private static let lock = NSLock()
+  private static var captured: String?
+  private static var invalid = false
+  private static var consumed = false
+
+  static func captureAndClearEnvironment() {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !consumed, captured == nil, !invalid else {
+      invalid = true
+      clearEnvironment()
+      return
+    }
+
+    let grantPointer = getenv("LATCHWAY_ONE_TIME_DEVICE_GRANT")
+    let hashPointer = getenv("LATCHWAY_DEVICE_GRANT_SHA256")
+    defer { clearEnvironment() }
+    guard let grantPointer, let hashPointer else {
+      if grantPointer != nil || hashPointer != nil { invalid = true }
+      return
+    }
+
+    let grant = String(cString: grantPointer)
+    let expectedHash = String(cString: hashPointer)
+    guard Self.safeGrant(grant),
+          expectedHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+          Self.sha256(grant) == expectedHash
+    else {
+      invalid = true
+      return
+    }
+    captured = grant
+  }
+
+  static func consume() throws -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !invalid, !consumed, let value = captured else {
+      invalid = true
+      throw EvidenceFailure.invalid
+    }
+    consumed = true
+    captured = nil
+    return value
+  }
+
+  private static func clearEnvironment() {
+    unsetenv("LATCHWAY_ONE_TIME_DEVICE_GRANT")
+    unsetenv("LATCHWAY_DEVICE_GRANT_SHA256")
+  }
+
+  private static func safeGrant(_ value: String) -> Bool {
+    guard (32 ... 65_536).contains(value.utf8.count) else { return false }
+    return value.range(
+      of: "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      options: .regularExpression
+    ) != nil
+  }
+
+  private static func sha256(_ value: String) -> String {
+    SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+}

@@ -25,10 +25,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 private const val EVIDENCE_FILE = "latchway-rn-device-run.json"
 private const val EVIDENCE_MODULE = "LatchwayEvidence"
+private const val MAXIMUM_IDENTITY_GRANT_BYTES = 65_536
+private val PHYSICAL_RUN_ID = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+private val SHA256_DIGEST = Regex("^[0-9a-f]{64}$")
+private val APPLICATION_IDENTIFIER = Regex("^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$")
 
 class LatchwayEvidencePackage : BaseReactPackage() {
     override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? =
@@ -52,6 +59,43 @@ class LatchwayEvidenceModule(
     context: ReactApplicationContext,
 ) : ReactContextBaseJavaModule(context) {
     override fun getName(): String = EVIDENCE_MODULE
+
+    @ReactMethod
+    fun consumeIdentityGrant(
+        applicationID: String,
+        packageOrBundleIdentifier: String,
+        identityProvider: String,
+        promise: Promise,
+    ) {
+        try {
+            val activity = requireNotNull(reactApplicationContext.getCurrentActivity())
+            val runID = requireNotNull(activity.intent?.getStringExtra("dev.latchway.RUN_ID"))
+                .also { require(PHYSICAL_RUN_ID.matches(it)) }
+            val debuggable = reactApplicationContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+            val testing = Build.FINGERPRINT.lowercase(Locale.US).contains("robolectric")
+            val debugger = Debug.isDebuggerConnected() || Debug.waitingForDebugger()
+            require(!isEmulator() && !testing && !debugger && !debuggable)
+            require(APPLICATION_IDENTIFIER.matches(applicationID))
+            require(packageOrBundleIdentifier == reactApplicationContext.packageName)
+            require(identityProvider == "firebase")
+            promise.resolve(PhysicalIdentityGrantHandoff.consume(
+                runID,
+                applicationID,
+                packageOrBundleIdentifier,
+                identityProvider,
+            ))
+        } catch (_: Exception) {
+            promise.reject(
+                "device_identity_grant_invalid",
+                "Protected one-use identity grant is unavailable.",
+            )
+        }
+    }
+
+    @ReactMethod
+    fun javascriptBundleSHA256(promise: Promise) {
+        promise.reject("device_evidence_invalid", "JavaScript bundle digest is only available on iOS.")
+    }
 
     @ReactMethod
     fun write(encoded: String, promise: Promise) {
@@ -103,7 +147,7 @@ class LatchwayEvidenceModule(
         ))
         require(native.getString("provider") in setOf("play_integrity", "unverified"))
         require(native.getString("trust_level") in setOf(
-            "none", "identity_only", "web_risk_verified", "app_verified", "device_verified",
+            "none", "identity_only", "web_risk_verified", "device_verified",
             "strong_device_verified", "debug",
         ))
         require(native.getString("key_storage") in setOf(
@@ -265,18 +309,177 @@ class LatchwayEvidenceModule(
 class LatchwayEvidenceProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        require(mode == "r" && uri.pathSegments == listOf("v1", "latest"))
         val caller = Binder.getCallingUid()
         if (caller != Process.SHELL_UID && caller != 0) throw SecurityException("adb shell only")
-        val file = File(requireNotNull(context).filesDir, EVIDENCE_FILE)
-        check(file.isFile && file.length() in 1..131_072)
-        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        if (mode == "r" && uri.pathSegments == listOf("v1", "latest")) {
+            val file = File(requireNotNull(context).filesDir, EVIDENCE_FILE)
+            check(file.isFile && file.length() in 1..131_072)
+            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
+        if (mode == "w" && uri.pathSegments.size == 7 &&
+            uri.pathSegments.take(2) == listOf("v1", "identity-grant")) {
+            val expectedHash = uri.pathSegments[2].also { require(SHA256_DIGEST.matches(it)) }
+            val runID = uri.pathSegments[3].also { require(PHYSICAL_RUN_ID.matches(it)) }
+            val applicationID = uri.pathSegments[4].also { require(APPLICATION_IDENTIFIER.matches(it)) }
+            val packageName = uri.pathSegments[5].also {
+                require(it == requireNotNull(context).packageName)
+            }
+            val identityProvider = uri.pathSegments[6].also { require(it == "firebase") }
+            val pipe = ParcelFileDescriptor.createPipe()
+            Thread({
+                val grantBuffer = ByteArray(MAXIMUM_IDENTITY_GRANT_BYTES)
+                try {
+                    var grantSize = 0
+                    ParcelFileDescriptor.AutoCloseInputStream(pipe[0]).use { input ->
+                        while (grantSize < grantBuffer.size) {
+                            val count = input.read(grantBuffer, grantSize, grantBuffer.size - grantSize)
+                            if (count < 0) break
+                            grantSize += count
+                        }
+                        if (grantSize == grantBuffer.size) require(input.read() < 0)
+                    }
+                    require(grantSize > 0)
+                    val grant = grantBuffer.copyOf(grantSize)
+                    PhysicalIdentityGrantHandoff.stage(
+                        grant,
+                        expectedHash,
+                        runID,
+                        applicationID,
+                        packageName,
+                        identityProvider,
+                    )
+                } catch (_: Exception) {
+                    PhysicalIdentityGrantHandoff.invalidate()
+                } finally {
+                    grantBuffer.fill(0)
+                }
+            }, "latchway-identity-grant-handoff").apply {
+                isDaemon = true
+                start()
+            }
+            return pipe[1]
+        }
+        throw IllegalArgumentException("unsupported evidence-provider operation")
     }
+
     override fun getType(uri: Uri): String = "application/json"
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException()
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = throw UnsupportedOperationException()
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = throw UnsupportedOperationException()
+}
+
+/**
+ * One process-memory slot populated only through the shell-protected provider.
+ * `adb shell content write` streams the Firebase custom token over stdin, so
+ * the value is absent from shell argv, intents, logcat, files, and retained
+ * evidence. The byte array is zeroed before the sole bridge read resolves.
+ */
+private object PhysicalIdentityGrantHandoff {
+    private val available = CountDownLatch(1)
+    private var bytes: ByteArray? = null
+    private var runID: String? = null
+    private var applicationID: String? = null
+    private var packageName: String? = null
+    private var identityProvider: String? = null
+    private var invalid = false
+    private var consumed = false
+
+    @Synchronized
+    fun stage(
+        value: ByteArray,
+        expectedHash: String,
+        expectedRunID: String,
+        expectedApplicationID: String,
+        expectedPackageName: String,
+        expectedIdentityProvider: String,
+    ) {
+        try {
+            require(!invalid && !consumed && bytes == null && runID == null)
+            require(applicationID == null && packageName == null && identityProvider == null)
+            require(APPLICATION_IDENTIFIER.matches(expectedApplicationID))
+            require(expectedPackageName.isNotEmpty() && expectedIdentityProvider == "firebase")
+            require(value.size in 32..MAXIMUM_IDENTITY_GRANT_BYTES)
+            val encoded = String(value, StandardCharsets.US_ASCII)
+            val segments = encoded.split('.', limit = 4)
+            require(segments.size == 3 && segments.all { segment ->
+                segment.isNotEmpty() && segment.all { character ->
+                    character in 'A'..'Z' || character in 'a'..'z' || character in '0'..'9' ||
+                        character == '_' || character == '-'
+                }
+            })
+            val actual = MessageDigest.getInstance("SHA-256").digest(value).toHex()
+            require(MessageDigest.isEqual(
+                actual.toByteArray(StandardCharsets.US_ASCII),
+                expectedHash.toByteArray(StandardCharsets.US_ASCII),
+            ))
+            bytes = value
+            runID = expectedRunID
+            applicationID = expectedApplicationID
+            packageName = expectedPackageName
+            identityProvider = expectedIdentityProvider
+            available.countDown()
+        } catch (failure: Exception) {
+            value.fill(0)
+            clearState()
+            invalid = true
+            consumed = true
+            available.countDown()
+            throw failure
+        }
+    }
+
+    fun consume(
+        expectedRunID: String,
+        expectedApplicationID: String,
+        expectedPackageName: String,
+        expectedIdentityProvider: String,
+    ): String {
+        val staged = try {
+            available.await(30, TimeUnit.SECONDS)
+        } catch (failure: Exception) {
+            synchronized(this) {
+                clearState()
+                invalid = true
+                consumed = true
+            }
+            throw failure
+        }
+        synchronized(this) {
+            try {
+                require(staged && !invalid && !consumed && runID == expectedRunID)
+                require(applicationID == expectedApplicationID)
+                require(packageName == expectedPackageName)
+                require(identityProvider == expectedIdentityProvider && expectedIdentityProvider == "firebase")
+                val output = String(requireNotNull(bytes), StandardCharsets.US_ASCII)
+                clearState()
+                consumed = true
+                return output
+            } catch (failure: Exception) {
+                clearState()
+                invalid = true
+                consumed = true
+                throw failure
+            }
+        }
+    }
+
+    @Synchronized
+    fun invalidate() {
+        clearState()
+        invalid = true
+        consumed = true
+        available.countDown()
+    }
+
+    private fun clearState() {
+        bytes?.fill(0)
+        bytes = null
+        runID = null
+        applicationID = null
+        packageName = null
+        identityProvider = null
+    }
 }
 
 private fun JSONObject.namesSet(): Set<String> {
@@ -309,3 +512,5 @@ private fun isEmulator(): Boolean {
         model.contains("sdk_gphone") || model.contains("emulator") ||
         product.contains("sdk") || hardware.contains("goldfish") || hardware.contains("ranchu")
 }
+
+private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(Locale.US, it.toInt() and 0xff) }
