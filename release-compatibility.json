@@ -32,7 +32,7 @@
     "package": "@latchway/client",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "afab50dcdb577be8a9ca6e94c054a7717a857f6d"
+    "source_commit": "17ebfb3fb3bc800fa46cdb36b32be3498aeb89b8"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
