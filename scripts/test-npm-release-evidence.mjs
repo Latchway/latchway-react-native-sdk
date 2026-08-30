@@ -197,6 +197,42 @@ test("private sibling checkouts use the optional read token and release docs for
   );
 });
 
+test("raw GitHub dependency readers receive bounded private-repository authentication", async () => {
+  const command = "node scripts/verify-published-dependencies.mjs --all";
+  const token = "GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}";
+  for (const [workflowName, expectedCommands] of [["native-consumer.yml", 2], ["release.yml", 1]]) {
+    const workflow = await readFile(new URL(`../.github/workflows/${workflowName}`, import.meta.url), "utf8");
+    assert.equal(workflow.split(command).length - 1, expectedCommands,
+      `${workflowName} changed its dependency-verifier invocation count`);
+    let commandIndex = -1;
+    for (let index = 0; index < expectedCommands; index += 1) {
+      commandIndex = workflow.indexOf(command, commandIndex + 1);
+      const stepStart = workflow.lastIndexOf("\n      - name:", commandIndex);
+      const nextStep = workflow.indexOf("\n      - name:", commandIndex);
+      assert.ok(workflow.slice(stepStart, nextStep === -1 ? undefined : nextStep).includes(token),
+        `${workflowName} invokes the private-repository verifier without its read token`);
+    }
+  }
+
+  const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
+  assert.equal(source.match(/execFileSync\("gh"/gu)?.length ?? 0, 1,
+    "all GitHub CLI calls must pass through the authenticated wrapper");
+  assert.equal((source.match(/runGitHubCLI\(/gu)?.length ?? 0) - 1, 4,
+    "each GitHub CLI consumer must use the authenticated wrapper");
+  assert.match(source,
+    /execFileSync\("gh", arguments_, \{ \.\.\.options, env: githubReadEnvironment\(\) \}\)/u);
+  assert.equal(source.match(/execFileSync\("git"/gu)?.length ?? 0, 1,
+    "all raw Git tag reads must remain visibly authenticated");
+  const gitRead = source.slice(source.indexOf('execFileSync("git"'), source.indexOf("}).trim()", source.indexOf('execFileSync("git"')));
+  assert.match(gitRead, /\["-c", "credential\.helper=", "ls-remote"/u);
+  assert.match(gitRead, /env: authenticatedGitEnvironment\(\)/u);
+  assert.match(source, /GIT_ASKPASS: gitAskpass/u);
+  assert.match(source, /GIT_TERMINAL_PROMPT: "0"/u);
+  assert.match(source, /\["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN"/u,
+    "the sibling read token must not be inherited by npm subprocesses");
+  assert.doesNotMatch(source, /https:\/\/[^\s"'`]*x-access-token/iu);
+});
+
 test("published dependency gate requires immutable attested assets and live registry bytes", async () => {
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
   const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");

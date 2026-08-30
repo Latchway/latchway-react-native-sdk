@@ -68,6 +68,8 @@ jobs:
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Verify clean npm dependency consumer
@@ -118,6 +120,8 @@ jobs:
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Resolve public CocoaPods dependency in official React Native host
