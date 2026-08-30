@@ -138,13 +138,10 @@ export default function App(): React.JSX.Element {
       tests.push(httpTest("dpop_authorized_request", first, first.status >= 200 && first.status < 300));
 
       // The public bridge deliberately has no authorization-envelope escape
-      // hatch. Replay, proof mutation, and protocol-header mutation must be
-      // proven by the separately linked native SDK report, never by returning
-      // reusable credentials to this JavaScript harness. Keep the legacy raw
-      // fields failed so an older physical-evidence finalizer cannot silently
-      // approve a run until that linkage migration is complete.
-      tests.push(booleanTest("dpop_replay_rejected", false));
-      tests.push(booleanTest("tampered_dpop_rejected", false));
+      // hatch. Replay, proof mutation, credential rotation, protocol mutation,
+      // and post-revocation enforcement are imported by the protected
+      // finalizer from the exact hash-pinned native evidence report. JavaScript
+      // proves only behavior that crosses the opaque production bridge.
 
       try {
         await measuredClient.quota(deployment.errorMappingFeature);
@@ -162,24 +159,6 @@ export default function App(): React.JSX.Element {
           ...(mappedRequestID === undefined ? {} : { request_id: mappedRequestID }),
         });
       }
-
-      const beforeDiagnostics = await measuredClient.diagnostics();
-      const beforeInstallation = beforeDiagnostics.installation.id;
-      if (beforeInstallation === undefined) throw new Error("Session rotation preflight omitted installation metadata.");
-      const beforeInstallationHash = await sink.sha256(beforeInstallation);
-      await measuredClient.refresh();
-      const afterDiagnostics = await measuredClient.diagnostics();
-      const afterInstallation = afterDiagnostics.installation.id;
-      if (afterInstallation === undefined) throw new Error("Session rotation result omitted installation metadata.");
-      const afterInstallationHash = await sink.sha256(afterInstallation);
-      tests.push({
-        id: "session_refresh_rotation",
-        status: "failed",
-        duration_ms: 0,
-        installation_before_sha256: beforeInstallationHash,
-        installation_after_sha256: afterInstallationHash,
-      });
-      tests.push(booleanTest("protocol_version_rejection", false));
 
       const stream = await measuredClient.fetch("/v1/chat/completions", {
         method: "POST",
@@ -222,14 +201,11 @@ export default function App(): React.JSX.Element {
         hardware,
       ));
 
-      await measuredClient.revokeCurrentInstallation();
-      tests.push(booleanTest("installation_revocation", false));
-
       const requiredTests = rawEvidenceTests().map((identifier) =>
         tests.find((test) => test.id === identifier) ?? booleanTest(identifier, false)
       );
       const record = {
-        schema_version: "latchway.react-native-device-run.v1",
+        schema_version: "latchway.react-native-device-run.v2",
         platform: Platform.OS === "ios"
           ? "react_native_ios_app_attest"
           : "react_native_android_play_integrity",
@@ -269,7 +245,7 @@ export default function App(): React.JSX.Element {
           tests.find((test) => test.id === identifier) ?? booleanTest(identifier, false)
         );
         await sink.write(JSON.stringify({
-          schema_version: "latchway.react-native-device-run.v1",
+          schema_version: "latchway.react-native-device-run.v2",
           platform: Platform.OS === "ios"
             ? "react_native_ios_app_attest"
             : "react_native_android_play_integrity",
@@ -344,7 +320,6 @@ function required(name: keyof typeof Config): string {
 
 interface EvidenceSink {
   runID(): Promise<string>;
-  sha256(value: string): Promise<string>;
   write(encoded: string): Promise<void>;
 }
 
@@ -356,11 +331,6 @@ interface EvidenceTest {
   error_code?: string;
   request_id?: string;
   mapped_error_type?: "react_native_latchway_error";
-  credential_before_sha256?: string;
-  credential_after_sha256?: string;
-  installation_before_sha256?: string;
-  installation_after_sha256?: string;
-  protocol_version_sent?: number;
 }
 
 interface SafeHTTPResult {
@@ -372,8 +342,7 @@ interface SafeHTTPResult {
 
 function evidenceSink(): EvidenceSink {
   const value = NativeModules.LatchwayEvidence as EvidenceSink | undefined;
-  if (value === undefined || typeof value.runID !== "function" || typeof value.sha256 !== "function" ||
-      typeof value.write !== "function") {
+  if (value === undefined || typeof value.runID !== "function" || typeof value.write !== "function") {
     throw new Error("The physical-evidence native sink is unavailable.");
   }
   return value;
@@ -428,14 +397,9 @@ function rawEvidenceTests(): string[] {
     Platform.OS === "ios" ? "app_attest_session" : "play_integrity_session",
     Platform.OS === "ios" ? "secure_enclave_key" : "hardware_backed_key",
     "dpop_authorized_request",
-    "dpop_replay_rejected",
-    "tampered_dpop_rejected",
     "canonical_error_mapping",
-    "session_refresh_rotation",
-    "protocol_version_rejection",
     "streamed_request",
     "quota",
-    "installation_revocation",
   ];
 }
 

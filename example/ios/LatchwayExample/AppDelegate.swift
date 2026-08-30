@@ -3,7 +3,6 @@ import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import Darwin
-import CryptoKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -94,24 +93,11 @@ final class LatchwayEvidence: NSObject {
     }
   }
 
-  @objc(sha256:resolve:reject:)
-  func sha256(
-    _ value: String,
-    resolve: RCTPromiseResolveBlock,
-    reject: RCTPromiseRejectBlock
-  ) {
-    guard (1 ... 8_192).contains(value.utf8.count) else {
-      reject("device_evidence_invalid", "Hash input is outside the protected bound.", nil)
-      return
-    }
-    resolve(SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined())
-  }
-
   private static func sanitize(_ input: [String: Any]) throws -> [String: Any] {
     try requireKeys(input, [
       "schema_version", "platform", "run", "gateway_version", "native", "pins", "tests", "redaction",
     ])
-    guard input["schema_version"] as? String == "latchway.react-native-device-run.v1",
+    guard input["schema_version"] as? String == "latchway.react-native-device-run.v2",
           input["platform"] as? String == "react_native_ios_app_attest",
           let run = input["run"] as? [String: Any],
           let gatewayVersion = input["gateway_version"] as? String,
@@ -163,7 +149,7 @@ final class LatchwayEvidence: NSObject {
     else { throw EvidenceFailure.invalid }
 
     return [
-      "schema_version": "latchway.react-native-device-run.v1",
+      "schema_version": "latchway.react-native-device-run.v2",
       "platform": "react_native_ios_app_attest",
       "run": [
         "id": runID,
@@ -206,15 +192,19 @@ final class LatchwayEvidence: NSObject {
 
   private static func sanitizeTests(_ tests: [[String: Any]]) throws -> [[String: Any]] {
     guard (1 ... 32).contains(tests.count) else { throw EvidenceFailure.invalid }
+    let expected: Set<String> = [
+      "react_native_bridge", "app_attest_session", "secure_enclave_key",
+      "dpop_authorized_request", "streamed_request", "quota", "canonical_error_mapping",
+    ]
     var seen = Set<String>()
-    return try tests.map { item in
+    let output = try tests.map { item in
       guard Set(item.keys).isSubset(of: [
         "id", "status", "duration_ms", "http_status", "error_code", "request_id",
-        "mapped_error_type", "credential_before_sha256", "credential_after_sha256",
-        "installation_before_sha256", "installation_after_sha256", "protocol_version_sent",
+        "mapped_error_type",
       ]),
       let identifier = item["id"] as? String,
       safe(identifier, pattern: "^[a-z][a-z0-9_]{0,63}$"),
+      expected.contains(identifier),
       seen.insert(identifier).inserted,
       let status = item["status"] as? String,
       ["passed", "failed"].contains(status),
@@ -242,23 +232,10 @@ final class LatchwayEvidence: NSObject {
         guard mapped == "react_native_latchway_error" else { throw EvidenceFailure.invalid }
         output["mapped_error_type"] = mapped
       }
-      for name in [
-        "credential_before_sha256", "credential_after_sha256",
-        "installation_before_sha256", "installation_after_sha256",
-      ] {
-        if let hash = item[name] as? String {
-          guard safe(hash, pattern: "^[0-9a-f]{64}$") else { throw EvidenceFailure.invalid }
-          output[name] = hash
-        }
-      }
-      if let version = item["protocol_version_sent"] as? NSNumber {
-        guard version.int64Value >= 0 && version.int64Value <= Int64(Int32.max) else {
-          throw EvidenceFailure.invalid
-        }
-        output["protocol_version_sent"] = version.intValue
-      }
       return output
     }
+    guard seen == expected else { throw EvidenceFailure.invalid }
+    return output
   }
 
   private static func sanitizeRedaction(_ input: [String: Any]) throws -> [String: Bool] {

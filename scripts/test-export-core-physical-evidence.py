@@ -18,6 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = ROOT / "scripts" / "device-evidence.py"
 FIXTURE_PATH = ROOT / "scripts" / "test-device-evidence.py"
 EXPORTER_PATH = ROOT / "scripts" / "export-core-physical-evidence.py"
+RN_FINALIZER_FIXTURE_PATH = ROOT / "scripts" / "test-finalize-react-native-device-run.py"
 SCHEMA_PATH = ROOT / "Conformance" / "physical-device-evidence.schema.json"
 CORE_CONSUMER_PATH = ROOT.parent / "latchway" / "scripts" / "cross-repo-conformance.py"
 
@@ -34,6 +35,7 @@ def load_module(name: str, path: pathlib.Path):
 validator = load_module("device_evidence_export_test", VALIDATOR_PATH)
 fixtures = load_module("device_evidence_fixtures", FIXTURE_PATH)
 exporter = load_module("physical_evidence_exporter", EXPORTER_PATH)
+rn_finalizer_fixtures = load_module("rn_finalizer_export_fixtures", RN_FINALIZER_FIXTURE_PATH)
 core_consumer = (
     load_module("latchway_core_cross_repo_consumer", CORE_CONSUMER_PATH)
     if CORE_CONSUMER_PATH.is_file()
@@ -69,6 +71,18 @@ def bind_gateway_deployment(profile: dict, observation: dict) -> None:
     profile["source"].update(GATEWAY_DEPLOYMENT)
     profile["expected_pins"].update(GATEWAY_DEPLOYMENT)
     observation["observed_pins"].update(GATEWAY_DEPLOYMENT)
+
+
+def bind_finalized_ios_gateway(profile: dict, evidence: dict) -> None:
+    profile["source"].update(GATEWAY_DEPLOYMENT)
+    profile["expected_pins"].update(GATEWAY_DEPLOYMENT)
+    evidence["source"].update(GATEWAY_DEPLOYMENT)
+    pins = {item["name"]: item for item in evidence["pins"]}
+    for name, value in GATEWAY_DEPLOYMENT.items():
+        pins[name].update(expected=value, observed=value, matched=True)
+    evidence["artifacts"]["profile_sha256"] = (
+        rn_finalizer_fixtures.finalizer.ios_native_evidence.canonical_sha256(profile)
+    )
 
 
 def android_native_case() -> tuple[dict, dict]:
@@ -176,23 +190,33 @@ class ExportCoreEvidenceTest(unittest.TestCase):
             "android": "0.1.0",
             "react_native": "1.0.0",
         }
-        native_ios_profile = fixtures.profile()
+        (
+            _, _, _, native_ios_profile, native_ios_evidence, _,
+        ) = rn_finalizer_fixtures.raw_case("react_native_ios_app_attest")
         native_ios_profile["source"]["sdk_version"] = versions["ios"]
-        native_ios_observation = fixtures.observation()
-        bind_gateway_deployment(native_ios_profile, native_ios_observation)
+        native_ios_evidence["source"]["sdk_version"] = versions["ios"]
+        bind_finalized_ios_gateway(native_ios_profile, native_ios_evidence)
         native_android_profile, native_android_observation = android_native_case()
         native_android_profile["source"]["sdk_version"] = versions["android"]
         bind_gateway_deployment(native_android_profile, native_android_observation)
-        cases = [
-            ("ios", native_ios_profile, native_ios_observation),
-            ("android", native_android_profile, native_android_observation),
-        ]
         paths: list[pathlib.Path] = []
         native_hashes: dict[str, str] = {}
-        for name, profile, observation in cases:
-            evidence = validator.build_evidence(observation, profile, self.schema)
-            errors = validator.schema_errors(evidence, self.schema) + validator.semantic_errors(evidence, profile)
-            self.assertTrue(evidence["release_eligible"], f"{name}: {errors}")
+        rn_finalizer_fixtures.finalizer.validate_linked_native_report(
+            native_ios_evidence,
+            native_ios_profile,
+            "ios_app_attest",
+            self.schema,
+        )
+        self.assertEqual(native_ios_evidence["schema_version"], "latchway.physical-device-evidence.v2")
+        for name, profile, evidence in (
+            ("ios", native_ios_profile, native_ios_evidence),
+            (
+                "android",
+                native_android_profile,
+                validator.build_evidence(native_android_observation, native_android_profile, self.schema),
+            ),
+        ):
+            self.assertTrue(evidence["release_eligible"], name)
             profile_path = root / f"{name}-profile.json"
             evidence_path = root / f"{name}-evidence.json"
             profile_path.write_text(json.dumps(profile), encoding="utf-8")

@@ -25,7 +25,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.util.Locale
 
 private const val EVIDENCE_FILE = "latchway-rn-device-run.json"
@@ -86,21 +85,11 @@ class LatchwayEvidenceModule(
         else promise.reject("device_evidence_invalid", "Protected physical-device run ID is unavailable.")
     }
 
-    @ReactMethod
-    fun sha256(value: String, promise: Promise) {
-        if (value.toByteArray(StandardCharsets.UTF_8).size !in 1..8_192) {
-            promise.reject("device_evidence_invalid", "Hash input is outside the protected bound.")
-            return
-        }
-        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
-        promise.resolve(digest.joinToString("") { "%02x".format(Locale.US, it.toInt() and 0xff) })
-    }
-
     private fun sanitize(input: JSONObject): JSONObject {
         require(input.namesSet() == setOf(
             "schema_version", "platform", "run", "gateway_version", "native", "pins", "tests", "redaction",
         ))
-        require(input.getString("schema_version") == "latchway.react-native-device-run.v1")
+        require(input.getString("schema_version") == "latchway.react-native-device-run.v2")
         require(input.getString("platform") == "react_native_android_play_integrity")
         val run = input.getJSONObject("run")
         require(run.namesSet() == setOf("id", "mode", "started_at", "completed_at"))
@@ -146,7 +135,7 @@ class LatchwayEvidenceModule(
         require(!emulator && !testing && !debugger && !debuggable)
 
         return JSONObject()
-            .put("schema_version", "latchway.react-native-device-run.v1")
+            .put("schema_version", "latchway.react-native-device-run.v2")
             .put("platform", "react_native_android_play_integrity")
             .put("run", JSONObject()
                 .put("id", run.getString("id"))
@@ -187,15 +176,18 @@ class LatchwayEvidenceModule(
         require(input.length() in 1..32)
         val output = JSONArray()
         val seen = mutableSetOf<String>()
+        val expected = setOf(
+            "react_native_bridge", "play_integrity_session", "hardware_backed_key",
+            "dpop_authorized_request", "streamed_request", "quota", "canonical_error_mapping",
+        )
         for (index in 0 until input.length()) {
             val item = input.getJSONObject(index)
             require(item.namesSet().subtract(setOf(
                 "id", "status", "duration_ms", "http_status", "error_code", "request_id",
-                "mapped_error_type", "credential_before_sha256", "credential_after_sha256",
-                "installation_before_sha256", "installation_after_sha256", "protocol_version_sent",
+                "mapped_error_type",
             )).isEmpty())
             require(item.has("id") && item.has("status") && item.has("duration_ms"))
-            val id = item.getString("id").also { require(TEST_ID.matches(it) && seen.add(it)) }
+            val id = item.getString("id").also { require(TEST_ID.matches(it) && it in expected && seen.add(it)) }
             val status = item.getString("status").also { require(it == "passed" || it == "failed") }
             val duration = item.getLong("duration_ms").also { require(it in 0..7_200_000) }
             val safe = JSONObject().put("id", id).put("status", status).put("duration_ms", duration)
@@ -206,18 +198,9 @@ class LatchwayEvidenceModule(
                 "mapped_error_type",
                 item.getString("mapped_error_type").also { require(it == "react_native_latchway_error") },
             )
-            for (name in listOf(
-                "credential_before_sha256", "credential_after_sha256",
-                "installation_before_sha256", "installation_after_sha256",
-            )) {
-                if (item.has(name)) safe.put(name, item.getString(name).also { require(SHA256.matches(it)) })
-            }
-            if (item.has("protocol_version_sent")) safe.put(
-                "protocol_version_sent",
-                item.getLong("protocol_version_sent").also { require(it in 0..Int.MAX_VALUE.toLong()) },
-            )
             output.put(safe)
         }
+        require(seen == expected)
         return output
     }
 

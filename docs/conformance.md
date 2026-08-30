@@ -13,9 +13,12 @@ Provider credentials and signing material belong in protected CI/device infrastr
 The production TurboModule intentionally cannot expose or mutate DPoP/session
 credentials for a JavaScript evidence harness. Replay, proof tamper, session
 credential rotation, and protocol-header mutation therefore have to be taken
-from the separately linked native SDK physical-device reports. Until the raw
-React Native evidence schema and finalizer enforce that linkage, those legacy
-JavaScript checks remain failed and release promotion remains blocked.
+from the separately linked native SDK physical-device reports. The v2 raw
+React Native record omits those native-only claims. Its protected finalizer
+validates the hash-pinned platform-native report, imports only the five exact
+allowlisted proof objects, and rejects missing, failed, renamed, extended, or
+coordinate-substituted proofs. The React Native report remains ineligible
+unless both its own seven bridge/runtime checks and every imported proof pass.
 
 The repository's native source jobs build official React Native 0.82 iOS and
 Android hosts against the exact locked SDK source releases. The published

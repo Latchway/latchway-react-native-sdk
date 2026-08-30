@@ -72,10 +72,10 @@ a pinned Release candidate built for those workflows; ordinary development
 should leave it `false`. See [physical-device evidence](../docs/physical-device-evidence.md)
 for the complete build, collection, and cross-repository finalization contract.
 
-The current raw-device schema still asks the React Native JavaScript harness to
-replay and mutate DPoP credentials and compare credential hashes. That would
-violate the native-only credential boundary, so the example records those
-legacy checks as failed. A release remains blocked until the physical-evidence
-finalizer consumes the equivalent replay, tamper, rotation, protocol, and
-revocation proofs from the already linked native iOS/Android reports instead of
-asking the production TurboModule to export credentials.
+The v2 raw-device record includes only behavior the opaque JavaScript bridge can
+prove: bridge reachability, native-owned authorization, typed errors, streaming,
+quota, and redacted trust diagnostics. It never asks JavaScript to replay or
+mutate DPoP credentials or hash refresh tokens. The protected finalizer verifies
+the exact hash-pinned, release-eligible native iOS/Android report and imports its
+replay, tamper, refresh-rotation, protocol-rejection, and revocation tests. Raw
+JavaScript attempts to claim those native-only proofs are rejected.

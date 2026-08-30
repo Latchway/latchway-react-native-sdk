@@ -18,8 +18,10 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -30,6 +32,14 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("physical evidence validator cannot be loaded")
 device_evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(device_evidence)
+FINALIZER_SPEC = importlib.util.spec_from_file_location(
+    "react_native_device_finalizer",
+    SCRIPT_DIR / "finalize-react-native-device-run.py",
+)
+if FINALIZER_SPEC is None or FINALIZER_SPEC.loader is None:
+    raise RuntimeError("linked native evidence validator cannot be loaded")
+react_native_finalizer = importlib.util.module_from_spec(FINALIZER_SPEC)
+FINALIZER_SPEC.loader.exec_module(react_native_finalizer)
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -167,10 +177,21 @@ def validate_report(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     profile = load_json(profile_path)
     evidence = load_json(evidence_path)
-    profile_errors = device_evidence.validate_profile(profile)
-    evidence_errors = device_evidence.verify(evidence, profile, schema)
-    if profile_errors or evidence_errors:
-        raise Rejected(f"{platform}_evidence_invalid")
+    try:
+        if platform == "ios_app_attest":
+            react_native_finalizer.validate_linked_native_report(
+                evidence,
+                profile,
+                platform,
+                schema,
+            )
+        else:
+            profile_errors = device_evidence.validate_profile(profile)
+            evidence_errors = device_evidence.verify(evidence, profile, schema)
+            if profile_errors or evidence_errors:
+                raise ValueError("physical evidence validation failed")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Rejected(f"{platform}_evidence_invalid") from error
     if profile.get("platform") != platform or evidence.get("platform") != platform:
         raise Rejected(f"{platform}_identity_invalid")
     source = evidence["source"]
@@ -283,6 +304,44 @@ def write_exclusive(path: pathlib.Path, payload: bytes) -> None:
 
 def copy_exclusive(source: pathlib.Path, destination: pathlib.Path) -> None:
     write_exclusive(destination, source.read_bytes())
+
+
+def snapshot_input(source: pathlib.Path, destination: pathlib.Path) -> None:
+    """Copy one untrusted artifact from a single no-follow file descriptor."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        raise Rejected("input_file_invalid") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or not 1 <= metadata.st_size <= 16 * 1024 * 1024:
+            raise Rejected("input_file_invalid")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read(16 * 1024 * 1024 + 1)
+        if len(payload) != metadata.st_size or len(payload) > 16 * 1024 * 1024:
+            raise Rejected("input_file_changed")
+    finally:
+        os.close(descriptor)
+    destination.parent.mkdir(mode=0o700, parents=True)
+    write_exclusive(destination, payload)
+    destination.chmod(0o400)
+
+
+def snapshot_arguments(arguments: argparse.Namespace, root: pathlib.Path) -> argparse.Namespace:
+    copied = argparse.Namespace(**vars(arguments))
+    names = ["schema", "coordinates"]
+    for argument_name, _, _ in PLATFORM_INPUTS:
+        names.extend(
+            f"{argument_name}_{suffix}"
+            for suffix in ("profile", "evidence", "attestation", "manifest")
+        )
+    for name in names:
+        source = getattr(arguments, name)
+        destination = root / name / source.name
+        snapshot_input(source, destination)
+        setattr(copied, name, destination)
+    return copied
 
 
 def export(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -422,7 +481,8 @@ def main() -> int:
     arguments = parser.parse_args()
     summary_path = arguments.summary or arguments.output_root / "physical_devices-validation.json"
     try:
-        result = export(arguments)
+        with tempfile.TemporaryDirectory(prefix="latchway-physical-export-") as directory:
+            result = export(snapshot_arguments(arguments, pathlib.Path(directory)))
     except Rejected as error:
         failure = {
             "schema_version": "latchway.physical-device-export.v1",

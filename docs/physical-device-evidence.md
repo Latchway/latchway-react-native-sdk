@@ -12,14 +12,13 @@ protected, manually dispatched `Physical React Native evidence` workflow can
 collect a candidate report, and the final cross-repository adapter requires all
 four independently validated native and React Native reports.
 
-> **Gate migration required:** the repaired production bridge no longer exports
-> an authorized `Request`, access token, or DPoP proof. The existing raw report
-> schema still expects JavaScript to replay/mutate those credentials and hash a
-> session credential. The example now fails those legacy fields deliberately.
-> Promotion stays blocked until the finalizer takes replay, tamper, refresh
-> rotation, protocol rejection, and revocation proof from the already linked
-> native report while the React Native report proves bridge reachability,
-> native-owned dispatch, streaming, cancellation, safe errors, and quota.
+The raw React Native device record is
+`latchway.react-native-device-run.v2`. It contains only checks the opaque
+production bridge can prove without exporting credentials. The protected
+finalizer imports replay rejection, proof-tamper rejection, refresh-token
+rotation, protocol-version rejection, and post-revocation enforcement from the
+exact linked native report. A JavaScript record that supplies any of those
+native-only proof IDs is rejected.
 
 ## What the run proves
 
@@ -28,13 +27,12 @@ Each platform run uses the real example application and verifies:
 - the React Native New Architecture bridge reached the locked native SDK;
 - a production App Attest session with a Secure Enclave key on iOS, or a Play
   Integrity session with hardware-backed Android Keystore key material;
-- a DPoP-authorized request through the opaque native dispatch boundary; proof
-  replay and proof-tamper rejection come from the linked native report after
-  the gate migration above;
-- the concrete React Native `LatchwayError` mapping for a canonical 404,
-  credential rotation across an explicit refresh for the same installation,
-  rejection of protocol version zero, and rejection of a request authorized
-  immediately before that installation is revoked;
+- a DPoP-authorized request through the opaque native dispatch boundary and the
+  concrete React Native `LatchwayError` mapping for a canonical 404;
+- exact HTTP 401 replay/tamper rejection, redacted refresh-credential rotation
+  for one stable installation, HTTP 426 protocol-version-zero rejection, and
+  HTTP 403 post-revocation enforcement imported unchanged, field-for-field,
+  from the linked, release-eligible native report;
 - a bounded, non-empty SSE stream and a quota response through the pinned
   gateway image and configuration;
 - one short-lived, P-256-signed deployment statement fetched from the same
@@ -67,6 +65,25 @@ credentials, but the build configuration itself remains a protected release
 input. Identity-provider configuration and accounts must be supplied through
 the platform's normal protected application setup and must never be stored in
 evidence artifacts.
+
+Before importing native-only proofs, the finalizer validates the native profile
+and report against its platform-authoritative checked-in schema, requires
+`release_eligible=true`, checks the platform and repository, and binds native
+SDK, core, contract, gateway image/configuration/origin/deployment-statement
+coordinates. The native
+report's byte SHA-256 must match all three independent bindings: the value
+embedded in the signed React Native candidate, the protected React Native
+profile, and the externally signed one-job collector lease. Only the five exact
+allowlisted native tests are copied. Missing, failed, renamed, extended,
+cross-platform, rehashed, or coordinate-substituted reports fail closed.
+
+Android native and React Native output evidence use the shared v1 contract. The
+pinned iOS SDK uses the component-aware v2 contract; this repository carries an
+exact reviewed snapshot at
+`Conformance/linked-ios-physical-device-evidence.schema.json` together with its
+validator at `scripts/linked-ios-device-evidence.py`. This prevents genuine v2
+iOS evidence from being treated as v1 while preserving the v1 React Native
+output consumed by the current cross-repository release adapter.
 
 For iOS, build a non-debug, production-signed New Architecture `.app` from the
 exact candidate commit. `LATCHWAY_IOS_INSTALL_MODE` must be `install`: the
@@ -197,8 +214,9 @@ build cannot be reused as current App Attest or Play Integrity proof.
 
 The scripts refuse dirty source trees, symbolic-link inputs, mismatched hashes,
 unsafe devices, untrusted builds, stale run IDs, and malformed records. The
-example-native sinks rebuild JSON from a strict allowlist and expose only a
-fixed protected file; they do not accept an arbitrary output path. Successful
+example-native sinks rebuild v2 JSON from an exact seven-test runtime allowlist,
+reject native-only proof fields and IDs, and expose only a fixed protected file;
+they do not accept an arbitrary output path. Successful
 artifacts contain the profile, sanitized observation, schema-validated evidence,
 JUnit, validation summary, device inventory, linked native report/profile,
 signed statement, signature, public key, exact client policy, verification

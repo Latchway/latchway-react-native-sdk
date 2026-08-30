@@ -41,20 +41,21 @@ cleanup() { if [[ -d "$temporary" && "$temporary" == */latchway-rn-android.* ]];
 trap cleanup EXIT
 [[ "$(git -C "$repository_root" rev-parse HEAD)" == "$LATCHWAY_SOURCE_COMMIT" ]] || { echo "source commit mismatch" >&2; exit 1; }
 [[ -z "$(git -C "$repository_root" status --porcelain=v1 --untracked-files=all)" ]] || { echo "physical evidence requires a clean source tree" >&2; exit 1; }
-[[ "$(shasum -a 256 "$LATCHWAY_NATIVE_EVIDENCE_PATH" | awk '{print $1}')" == "$LATCHWAY_NATIVE_EVIDENCE_SHA256" ]] || { echo "linked native evidence hash mismatch" >&2; exit 1; }
-python3 "$repository_root/scripts/device-evidence.py" verify --schema "$schema" --profile "$LATCHWAY_NATIVE_PROFILE_PATH" --evidence "$LATCHWAY_NATIVE_EVIDENCE_PATH" --junit "$temporary/native-junit.xml" --summary "$temporary/native-validation.json"
-python3 - "$LATCHWAY_NATIVE_EVIDENCE_PATH" <<'PY'
-import json, os, pathlib, sys
-source = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("source", {})
-expected = {"repository": "Latchway/latchway-android", "commit": os.environ["LATCHWAY_ANDROID_COMMIT"],
- "core_commit": os.environ["LATCHWAY_CORE_COMMIT"], "contract_version": os.environ["LATCHWAY_CONTRACT_VERSION"],
- "contract_bundle_sha256": os.environ["LATCHWAY_CONTRACT_BUNDLE_SHA256"], "gateway_image_digest": os.environ["LATCHWAY_GATEWAY_IMAGE_DIGEST"],
- "gateway_configuration_sha256": os.environ["LATCHWAY_GATEWAY_CONFIGURATION_SHA256"],
- "gateway_origin": os.environ["LATCHWAY_GATEWAY_ORIGIN"], "gateway_deployment_key_id": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID"],
- "gateway_deployment_statement_sha256": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256"],
- "gateway_deployment_public_key_sha256": os.environ["LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256"]}
-if any(source.get(name) != value for name, value in expected.items()): raise SystemExit("linked native coordinates mismatch")
-PY
+python3 "$repository_root/scripts/verify-linked-native-evidence.py" \
+  --platform android_play_integrity --profile "$LATCHWAY_NATIVE_PROFILE_PATH" \
+  --evidence "$LATCHWAY_NATIVE_EVIDENCE_PATH" --output-schema "$schema" \
+  --expected-sha256 "$LATCHWAY_NATIVE_EVIDENCE_SHA256" \
+  --expected-source-commit "$LATCHWAY_ANDROID_COMMIT" \
+  --expected-core-commit "$LATCHWAY_CORE_COMMIT" \
+  --expected-native-sdk-version "$LATCHWAY_NATIVE_SDK_VERSION" \
+  --expected-contract-version "$LATCHWAY_CONTRACT_VERSION" \
+  --expected-contract-bundle-sha256 "$LATCHWAY_CONTRACT_BUNDLE_SHA256" \
+  --expected-gateway-image-digest "$LATCHWAY_GATEWAY_IMAGE_DIGEST" \
+  --expected-gateway-configuration-sha256 "$LATCHWAY_GATEWAY_CONFIGURATION_SHA256" \
+  --expected-gateway-origin "$LATCHWAY_GATEWAY_ORIGIN" \
+  --expected-gateway-deployment-key-id "$LATCHWAY_GATEWAY_DEPLOYMENT_KEY_ID" \
+  --expected-gateway-deployment-statement-sha256 "$LATCHWAY_GATEWAY_DEPLOYMENT_STATEMENT_SHA256" \
+  --expected-gateway-deployment-public-key-sha256 "$LATCHWAY_GATEWAY_DEPLOYMENT_PUBLIC_KEY_SHA256"
 
 adb_device() { adb -s "$LATCHWAY_ANDROID_DEVICE_SERIAL" "$@"; }
 [[ "$(adb_device get-state)" == device ]] || { echo "selected device is not ready" >&2; exit 1; }
