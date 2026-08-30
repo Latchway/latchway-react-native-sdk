@@ -65,18 +65,26 @@ jobs:
           CORE_TAG: ${{ github.event.client_payload.core_tag }}
           REPORT_URL: ${{ github.event.client_payload.promotion_evidence_url }}
           REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
+          CORE_READ_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/latchway-cross-repository-promotion.json"
+          auth_config="$RUNNER_TEMP/latchway-core-release-auth"
+          trap 'rm -f -- "$auth_config"' EXIT
           test "$REPORT_URL" = "https://github.com/Latchway/latchway/releases/download/$CORE_TAG/latchway-cross-repository-promotion.json"
+          umask 077
+          printf 'header = "Authorization: Bearer %s"\n' "$CORE_READ_TOKEN" > "$auth_config"
           curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --config "$auth_config" \
             --connect-timeout 15 --max-time 120 --max-filesize 2097152 \
             --fail --location --silent --show-error --output "$report" "$REPORT_URL"
+          rm -f -- "$auth_config"
+          trap - EXIT
           printf '%s  %s\n' "$REPORT_SHA256" "$report" | sha256sum --check --strict
       - name: Verify the core workflow artifact attestation
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: |
           python3 scripts/require-gh-version.py
           gh attestation verify "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
@@ -112,17 +120,37 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GIT_TAG_READ_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ steps.promotion.outputs.release_commit }}
           RELEASE_TAG: ${{ steps.promotion.outputs.release_tag }}
           CORE_TAG: ${{ steps.promotion.outputs.core_tag }}
           REPORT_SHA256: ${{ steps.promotion.outputs.report_sha256 }}
         run: |
           set -euo pipefail
+          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
+          umask 077
+          cat > "$git_askpass" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
+            *github.com*Password*|*Password*github.com*)
+              test -n "${GIT_TAG_READ_TOKEN:-}"
+              printf '%s\n' "$GIT_TAG_READ_TOKEN"
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$git_askpass"
+          trap 'rm -f -- "$git_askpass"' EXIT
+          git_with_auth() {
+            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
+          }
           message="React Native SDK $RELEASE_TAG
 
           Core promotion: $CORE_TAG
           Promotion evidence SHA-256: $REPORT_SHA256"
-          remote=$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")
+          remote=$(git_with_auth ls-remote --tags origin "refs/tags/$RELEASE_TAG")
           if [[ -n "$remote" ]]; then
             tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)
             test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.type)" = commit
@@ -139,7 +167,10 @@ jobs:
               '{ref: $ref, sha: $sha}' > "$RUNNER_TEMP/sdk-tag-ref.json"
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input "$RUNNER_TEMP/sdk-tag-ref.json" >/dev/null
           fi
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          rm -f -- "$git_askpass"
+          trap - EXIT
+          unset GIT_TAG_READ_TOKEN
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
 
@@ -163,8 +194,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch promoted annotated tag
+        env:
+          GIT_TAG_READ_TOKEN: ${{ github.token }}
         run: |
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          set -euo pipefail
+          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
+          umask 077
+          cat > "$git_askpass" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
+            *github.com*Password*|*Password*github.com*)
+              test -n "${GIT_TAG_READ_TOKEN:-}"
+              printf '%s\n' "$GIT_TAG_READ_TOKEN"
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$git_askpass"
+          trap 'rm -f -- "$git_askpass"' EXIT
+          git_with_auth() {
+            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
+          }
+          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          rm -f -- "$git_askpass"
+          trap - EXIT
+          unset GIT_TAG_READ_TOKEN
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "${{ needs.promote.outputs.commit }}"
         working-directory: latchway-react-native-sdk
@@ -176,6 +232,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
@@ -183,6 +240,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-ios-sdk
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.ios_commit }}
           path: latchway-ios-sdk
           persist-credentials: false
@@ -190,6 +248,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-android
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.android_commit }}
           path: latchway-android
           persist-credentials: false
@@ -197,6 +256,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.core_commit }}
           path: latchway
           persist-credentials: false
@@ -222,7 +282,7 @@ jobs:
         working-directory: latchway-react-native-sdk
       - name: Wait for verified locked public SDK releases
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ANDROID_VERSION: ${{ steps.lock.outputs.android_version }}
           IOS_VERSION: ${{ steps.lock.outputs.ios_version }}
           LATCHWAY_CENTRAL_VERIFY_ATTEMPTS: 180
@@ -306,6 +366,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
@@ -320,7 +381,11 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
-      - run: sdkmanager "platforms;android-${{ steps.lock.outputs.android_compile_sdk }}" "build-tools;36.0.0" "ndk;27.1.12297006"
+      - run: >-
+          sdkmanager
+          "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
+          "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
+          "ndk;${{ steps.lock.outputs.android_ndk_version }}"
       - name: Build exact JavaScript source and install workspace
         run: |
           pnpm --dir ../latchway-js install --frozen-lockfile
@@ -354,6 +419,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
@@ -424,8 +490,33 @@ jobs:
           name: latchway-react-native-release
           path: .release
       - name: Verify downloaded archive checksum and release tag
+        env:
+          GIT_TAG_READ_TOKEN: ${{ github.token }}
         run: |
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          set -euo pipefail
+          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
+          umask 077
+          cat > "$git_askpass" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
+            *github.com*Password*|*Password*github.com*)
+              test -n "${GIT_TAG_READ_TOKEN:-}"
+              printf '%s\n' "$GIT_TAG_READ_TOKEN"
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$git_askpass"
+          trap 'rm -f -- "$git_askpass"' EXIT
+          git_with_auth() {
+            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
+          }
+          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          rm -f -- "$git_askpass"
+          trap - EXIT
+          unset GIT_TAG_READ_TOKEN
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")

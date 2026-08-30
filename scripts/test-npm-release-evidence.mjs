@@ -172,10 +172,79 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   assert.doesNotMatch(workflow, /--source-commit/u);
 });
 
+test("private sibling checkouts use the optional read token and release docs forbid manual tags", async () => {
+  const token = "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}";
+  for (const workflowName of ["ci.yml", "native-consumer.yml", "release.yml"]) {
+    const workflow = await readFile(new URL(`../.github/workflows/${workflowName}`, import.meta.url), "utf8");
+    const siblingCheckouts = workflow.match(/^\s+repository:\s+Latchway\//gmu)?.length ?? 0;
+    assert.ok(siblingCheckouts > 0, `${workflowName} no longer exercises a sibling checkout`);
+    assert.equal(workflow.split(token).length - 1, siblingCheckouts,
+      `${workflowName} has a sibling checkout without the bounded token fallback`);
+  }
+  const documentation = await readFile(new URL("../docs/releasing.md", import.meta.url), "utf8");
+  const overviewDocumentation = await Promise.all([
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/native-installation.md", import.meta.url), "utf8"),
+  ]);
+  assert.match(documentation, /`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`/u);
+  assert.match(documentation, /Contents read permission and no\s+write permission/u);
+  assert.match(documentation, /repository_dispatch/u);
+  assert.match(documentation, /tag manually/iu);
+  assert.doesNotMatch(documentation, /\n(?:git tag|git push)\s/u);
+  assert.doesNotMatch(
+    `${documentation}\n${overviewDocumentation.join("\n")}`,
+    /tag-triggered release workflow|the tag workflow/iu,
+  );
+});
+
+test("raw GitHub dependency readers receive bounded private-repository authentication", async () => {
+  const command = "node scripts/verify-published-dependencies.mjs --all";
+  const token = "GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}";
+  for (const [workflowName, expectedCommands] of [["native-consumer.yml", 2], ["release.yml", 1]]) {
+    const workflow = await readFile(new URL(`../.github/workflows/${workflowName}`, import.meta.url), "utf8");
+    assert.equal(workflow.split(command).length - 1, expectedCommands,
+      `${workflowName} changed its dependency-verifier invocation count`);
+    let commandIndex = -1;
+    for (let index = 0; index < expectedCommands; index += 1) {
+      commandIndex = workflow.indexOf(command, commandIndex + 1);
+      const stepStart = workflow.lastIndexOf("\n      - name:", commandIndex);
+      const nextStep = workflow.indexOf("\n      - name:", commandIndex);
+      assert.ok(workflow.slice(stepStart, nextStep === -1 ? undefined : nextStep).includes(token),
+        `${workflowName} invokes the private-repository verifier without its read token`);
+    }
+  }
+
+  const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
+  assert.equal(source.match(/execFileSync\("gh"/gu)?.length ?? 0, 1,
+    "all GitHub CLI calls must pass through the authenticated wrapper");
+  assert.equal((source.match(/runGitHubCLI\(/gu)?.length ?? 0) - 1, 4,
+    "each GitHub CLI consumer must use the authenticated wrapper");
+  assert.match(source,
+    /execFileSync\("gh", arguments_, \{ \.\.\.options, env: githubReadEnvironment\(\) \}\)/u);
+  assert.equal(source.match(/execFileSync\("git"/gu)?.length ?? 0, 1,
+    "all raw Git tag reads must remain visibly authenticated");
+  const gitRead = source.slice(source.indexOf('execFileSync("git"'), source.indexOf("}).trim()", source.indexOf('execFileSync("git"')));
+  assert.match(gitRead, /\["-c", "credential\.helper=", "ls-remote"/u);
+  assert.match(gitRead, /env: authenticatedGitEnvironment\(\)/u);
+  assert.match(source, /GIT_ASKPASS: gitAskpass/u);
+  assert.match(source, /GIT_TERMINAL_PROMPT: "0"/u);
+  assert.match(source, /\["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN"/u,
+    "the sibling read token must not be inherited by npm subprocesses");
+  assert.doesNotMatch(source, /https:\/\/[^\s"'`]*x-access-token/iu);
+});
+
 test("published dependency gate requires immutable attested assets and live registry bytes", async () => {
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
+  const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const androidContract = await readFile(new URL("android-release-evidence.mjs", import.meta.url), "utf8");
   const verifierSource = `${source}\n${androidContract}`;
+  const dependencyGate = releaseWorkflow.slice(
+    releaseWorkflow.indexOf("Wait for verified locked public SDK releases"),
+  );
+  assert.match(
+    dependencyGate,
+    /GH_TOKEN: \$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \|\| github\.token \}\}/u,
+  );
   for (const control of [
     "release.immutable !== true",
     '"release", "verify"',
@@ -217,11 +286,10 @@ test("published dependency gate requires immutable attested assets and live regi
     /single_upload_only|publishing_type\s*!==\s*"automatic"|proof\.schema_version\s*!==\s*1|maven-central-(?:upload-intent|deployment(?:-status)?)\.v1/u,
   );
 
-  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  assert.match(workflow, /attestations: read/u);
-  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
-  assert.match(workflow, /published-dependency-evidence\.json/u);
-  assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/u);
+  assert.match(releaseWorkflow, /attestations: read/u);
+  assert.match(releaseWorkflow, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
+  assert.match(releaseWorkflow, /published-dependency-evidence\.json/u);
+  assert.doesNotMatch(releaseWorkflow, /secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/u);
 });
 
 test("release attestation parser binds exact source and asset closure", () => {

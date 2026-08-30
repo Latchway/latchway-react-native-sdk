@@ -40,6 +40,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
@@ -55,7 +56,11 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
-      - run: sdkmanager "platforms;android-${{ steps.lock.outputs.android_compile_sdk }}" "build-tools;36.0.0" "ndk;27.1.12297006"
+      - run: >-
+          sdkmanager
+          "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
+          "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
+          "ndk;${{ steps.lock.outputs.android_ndk_version }}"
       - name: Build exact JavaScript source and install workspace
         run: |
           pnpm --dir ../latchway-js install --frozen-lockfile
@@ -63,6 +68,8 @@ jobs:
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Verify clean npm dependency consumer
@@ -95,6 +102,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ref: ${{ steps.lock.outputs.javascript_commit }}
           path: latchway-js
           persist-credentials: false
@@ -112,6 +120,8 @@ jobs:
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Resolve public CocoaPods dependency in official React Native host

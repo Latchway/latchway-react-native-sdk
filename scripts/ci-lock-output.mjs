@@ -3,7 +3,10 @@ import { readJSON } from "./release-metadata.mjs";
 const lock = await readJSON("release-compatibility.json");
 const outputs = {
   android_commit: lock.android.source_commit,
+  android_build_tools_version: lock.android.build_tools_version,
   android_compile_sdk: String(lock.android.compile_sdk),
+  android_ndk_version: lock.android.ndk_version,
+  android_sdk_platform_version: lock.android.sdk_platform_version,
   android_version: lock.android.version,
   contract_version: lock.contract.version,
   core_commit: lock.contract.core_commit,

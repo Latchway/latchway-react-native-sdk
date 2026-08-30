@@ -23,8 +23,11 @@ builds real React Native 0.82 hosts.
    local path/repository overrides and builds the clean npm consumer plus the
    official iOS and Android example hosts.
 5. Set `core_release` in `contract.lock`, update every public SDK version and
-   the changelog, and create a signed, annotated `v<package-version>` tag at the
-   reviewed commit. Pushing that tag starts `.github/workflows/release.yml`.
+   the changelog. The accepted core promotion then sends the
+   `latchway_release_promoted` `repository_dispatch` payload for the exact
+   reviewed commit. `.github/workflows/release.yml` verifies the attested
+   promotion report before it creates, or verifies, the annotated
+   `v<package-version>` tag. Operators must not create or push that tag manually.
 
 `pnpm release:preflight -- v<package-version>` intentionally fails for a dirty
 tree, lightweight/wrong-commit tag, mismatched version, unpublished core lock,
@@ -44,6 +47,18 @@ requires GitHub's exact immutable-release settings response to report
 GitHub CLI to support JSON release and asset attestation verification. Bootstrap the npm package
 record through a separately reviewed one-time procedure if the registry requires
 it; the release workflow never accepts `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
+
+When any locked sibling repository is private, configure the repository or
+organization Actions secret `LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`. It must
+be a fine-grained token selected only for `Latchway/latchway`,
+`Latchway/latchway-js`, `Latchway/latchway-ios-sdk`, and
+`Latchway/latchway-android`, with repository Contents read permission and no
+write permission. Cross-repository checkout steps use it only for the pinned
+sibling fetch and set `persist-credentials: false`; the promotion job also uses
+it for the exact core release-asset download and attestation verification. If
+the sibling repositories remain private, the published-dependency gate uses the
+same read-only token to verify their immutable releases and assets. If every
+sibling is public, the secret may be omitted and the job token is used.
 
 After the protected preflight, the workflow resolves the remote annotated tag
 object to the promoted commit immediately before it creates or resumes the
@@ -72,7 +87,7 @@ Maven signatures against the attested public key with a fail-closed GnuPG status
 allowlist that rejects revoked, expired, unknown, or weak signatures. An interrupted exact promotion
 can therefore be rerun safely.
 
-Do not manually retag a failed release or overwrite a published npm version.
+Do not manually create or retag a failed release or overwrite a published npm version.
 Fix the release inputs, choose a new semantic version, and rerun the complete
 cross-repository sequence.
 

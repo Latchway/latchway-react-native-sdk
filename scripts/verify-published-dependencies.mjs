@@ -44,7 +44,18 @@ const evidence = {
   dependencies: {},
 };
 const temporary = await mkdtemp(join(tmpdir(), "latchway-published-dependencies-"));
+const gitAskpass = join(temporary, "github-git-askpass.sh");
 try {
+  await writeFile(gitAskpass, [
+    "#!/usr/bin/env sh",
+    "set -eu",
+    'case "${1:-}" in',
+    "  *github.com*Username*|*Username*github.com*) printf '%s\\n' x-access-token ;;",
+    '  *github.com*Password*|*Password*github.com*) test -n "${GH_TOKEN:-}"; printf \'%s\\n\' "$GH_TOKEN" ;;',
+    "  *) exit 1 ;;",
+    "esac",
+    "",
+  ].join("\n"), { mode: 0o700, flag: "wx" });
   if (verifyAll || selected.has("--javascript")) evidence.dependencies.javascript = await verifyJavaScript();
   if (verifyAll || selected.has("--core-ref")) {
     verifyReleaseTag({
@@ -613,8 +624,35 @@ async function verifyDetachedSignature(home, index, artifactBytes, signatureByte
   }
 }
 
+function requiredGitHubReadToken() {
+  const token = process.env.GH_TOKEN;
+  if (typeof token !== "string" || token.length === 0 || token.length > 4096 || /[\0\r\n]/u.test(token)) {
+    throw new Error("GH_TOKEN must contain a valid read token for the locked GitHub repositories.");
+  }
+  return token;
+}
+
+function githubReadEnvironment() {
+  return {
+    ...process.env,
+    GH_TOKEN: requiredGitHubReadToken(),
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+function authenticatedGitEnvironment() {
+  return {
+    ...githubReadEnvironment(),
+    GIT_ASKPASS: gitAskpass,
+  };
+}
+
+function runGitHubCLI(arguments_, options) {
+  return execFileSync("gh", arguments_, { ...options, env: githubReadEnvironment() });
+}
+
 function githubRelease(repository, tag) {
-  const output = execFileSync("gh", ["api", "-H", "X-GitHub-Api-Version: 2026-03-10",
+  const output = runGitHubCLI(["api", "-H", "X-GitHub-Api-Version: 2026-03-10",
     `repos/${repository}/releases/tags/${encodeURIComponent(tag)}`], {
     encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -654,7 +692,7 @@ function verifyReleaseAsset(repository, tag, path, sourceCommit, assets) {
 }
 
 function captureGHVerification(arguments_, label, expected) {
-  const bytes = execFileSync("gh", arguments_, {
+  const bytes = runGitHubCLI(arguments_, {
     encoding: "buffer", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
   });
   return validateReleaseAttestation(bytes, {
@@ -675,7 +713,7 @@ async function downloadAssets(repository, release, names, directory) {
     if (matches.length !== 1 || !Number.isInteger(matches[0].id) || matches[0].state !== "uploaded") {
       throw new Error(`${repository} release asset ${name} is missing or ambiguous.`);
     }
-    const bytes = execFileSync("gh", ["api", "--method", "GET", "-H", "Accept: application/octet-stream",
+    const bytes = runGitHubCLI(["api", "--method", "GET", "-H", "Accept: application/octet-stream",
       "-H", "X-GitHub-Api-Version: 2026-03-10",
       `repos/${repository}/releases/assets/${matches[0].id}`], {
       encoding: "buffer", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
@@ -715,7 +753,7 @@ function verifyImmutableReleaseAttestations(repository, tag, sourceCommit, asset
 }
 
 function verifyGitHubAttestation(repository, path, sourceCommit) {
-  execFileSync("gh", ["attestation", "verify", path,
+  runGitHubCLI(["attestation", "verify", path,
     "--repo", repository,
     "--signer-workflow", `${repository}/.github/workflows/release.yml`,
     "--source-ref", "refs/heads/main",
@@ -764,8 +802,9 @@ async function jsonAsset(assets, name) {
 
 function verifyReleaseTag(dependency, label, explicitTag) {
   const tag = explicitTag ?? `v${dependency.version}`;
-  const output = execFileSync("git", ["ls-remote", dependency.repository, `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
-    encoding: "utf8", maxBuffer: 1024 * 1024,
+  const output = execFileSync("git", ["-c", "credential.helper=", "ls-remote", dependency.repository,
+    `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
+    encoding: "utf8", env: authenticatedGitEnvironment(), maxBuffer: 1024 * 1024,
   }).trim();
   return requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
 }
@@ -793,8 +832,9 @@ async function auditNpmSignatures(packageName, version, integrity, directory) {
 }
 
 function sanitizedNpmEnvironment(userconfig, cache) {
-  const excluded = new Set(["NODE_AUTH_TOKEN", "NPM_TOKEN", "npm_config__auth", "npm_config_auth",
-    "npm_config__authToken", "NPM_CONFIG__AUTH", "NPM_CONFIG_AUTH"]);
+  const excluded = new Set(["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN",
+    "npm_config__auth", "npm_config_auth", "npm_config__authToken", "NPM_CONFIG__AUTH",
+    "NPM_CONFIG_AUTH"]);
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !excluded.has(name))),
     NPM_CONFIG_USERCONFIG: userconfig,

@@ -66,4 +66,4 @@ The repository is content-filtered to `dev.latchway`. Composite-build substituti
 
 ## Release dependency check
 
-CI must run once against only the published CocoaPods/Maven coordinates, without local path or repository overrides, before npm publication. A local native build proving source compatibility does not replace that consumer check. The manual `Published dependency consumer` workflow performs that gate; the tag-triggered release workflow repeats it before npm publication.
+CI must run once against only the published CocoaPods/Maven coordinates, without local path or repository overrides, before npm publication. A local native build proving source compatibility does not replace that consumer check. The manual `Published dependency consumer` workflow performs that gate; the promotion-dispatched release workflow repeats it before npm publication.

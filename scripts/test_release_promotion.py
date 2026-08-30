@@ -373,6 +373,34 @@ class PromotionVerifierTests(unittest.TestCase):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_docs_delegate_tag_creation_to_promoted_dispatch(self) -> None:
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn("repository_dispatch", documentation)
+        self.assertIn("tag manually", documentation.lower())
+        self.assertNotIn("\ngit tag ", documentation)
+        self.assertNotIn("\ngit push", documentation)
+
+    def test_private_sibling_checkouts_use_read_only_secret_with_public_fallback(self) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only sibling checkout policy")
+        token = (
+            "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN "
+            "|| github.token }}"
+        )
+        for relative in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/native-consumer.yml",
+            ".github/workflows/release.yml",
+        ):
+            with self.subTest(workflow=relative):
+                workflow = (ROOT / relative).read_text(encoding="utf-8")
+                sibling_checkouts = workflow.count("repository: Latchway/")
+                self.assertGreater(sibling_checkouts, 0)
+                self.assertEqual(workflow.count(token), sibling_checkouts)
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn("`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`", documentation)
+        self.assertIn("Contents read permission and no\nwrite permission", documentation)
+
     def test_only_attested_core_dispatch_can_reach_tag_and_publication(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("repository_dispatch:", workflow)
@@ -388,6 +416,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("--proto-redir '=https'", workflow)
         self.assertIn("--max-filesize 2097152", workflow)
+        self.assertIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token", workflow)
+        self.assertIn("latchway-core-release-auth", workflow)
+        self.assertIn("trap 'rm -f -- \"$auth_config\"' EXIT", workflow)
+        self.assertIn("--config \"$auth_config\"", workflow)
+        self.assertIn("rm -f -- \"$auth_config\"", workflow)
+        self.assertNotIn('--header "Authorization: Bearer $CORE_READ_TOKEN"', workflow)
         self.assertIn("sha256sum --check --strict", workflow)
         self.assertIn(
             "--signer-workflow Latchway/latchway/.github/workflows/"
@@ -424,6 +458,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("needs: [promote, verify]", workflow)
         elif REPOSITORY_ID in ("ios", "android"):
             self.assertIn("needs: promote", workflow)
+
+    def test_release_remote_tag_reads_use_ephemeral_same_repository_auth(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        expected_steps = {"javascript": 1, "ios": 2, "android": 2, "react_native": 3}
+        expected_calls = {"javascript": 2, "ios": 3, "android": 3, "react_native": 4}
+        auth_steps = expected_steps[REPOSITORY_ID]
+        auth_calls = expected_calls[REPOSITORY_ID]
+        self.assertEqual(workflow.count("GIT_TAG_READ_TOKEN: ${{ github.token }}"), auth_steps)
+        self.assertEqual(workflow.count("git_with_auth() {"), auth_steps)
+        self.assertEqual(workflow.count('GIT_ASKPASS="$git_askpass"'), auth_steps)
+        self.assertEqual(workflow.count("GIT_TERMINAL_PROMPT=0"), auth_steps)
+        self.assertEqual(workflow.count('git -c credential.helper= "$@"'), auth_steps)
+        self.assertEqual(workflow.count('chmod 700 "$git_askpass"'), auth_steps)
+        self.assertEqual(workflow.count('trap \'rm -f -- "$git_askpass"\' EXIT'), auth_steps)
+        self.assertEqual(workflow.count("git_with_auth ls-remote"), 1)
+        self.assertEqual(workflow.count("git_with_auth fetch --force origin"), auth_calls - 1)
+        self.assertNotIn("git ls-remote", workflow)
+        self.assertNotIn("git fetch --force origin", workflow)
+        self.assertNotIn("https://x-access-token:", workflow)
+        self.assertNotIn("git config --global", workflow)
 
     def test_react_native_publication_still_waits_for_all_dependency_releases(self) -> None:
         if REPOSITORY_ID != "react_native":
