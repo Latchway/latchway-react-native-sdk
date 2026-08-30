@@ -1,22 +1,78 @@
 import { LatchwayError } from "@latchway/client";
 import type { LatchwayErrorCode } from "@latchway/client";
 import { isCanonicalRequestID } from "./request-id.js";
+import { assertNoCredentialFields } from "./native-output.js";
 
-const knownCodes = new Set<LatchwayErrorCode>([
-  "request_invalid", "identity_token_missing", "identity_token_invalid", "identity_token_expired",
-  "identity_reauthentication_required", "attestation_required", "attestation_unsupported",
-  "attestation_invalid", "attestation_stale", "attestation_step_up_required", "dpop_missing",
-  "dpop_invalid", "dpop_replayed", "dpop_nonce_required", "session_expired", "session_revoked",
-  "refresh_token_reused", "installation_revoked", "feature_not_found", "feature_not_allowed",
-  "model_not_allowed", "quota_exceeded", "concurrency_exceeded", "output_limit_exceeded",
-  "pricing_unavailable", "route_not_found", "upstream_unavailable", "upstream_timeout",
-  "upstream_protocol_error", "configuration_invalid", "server_not_ready",
-  "protocol_version_unsupported", "authentication_required", "permission_denied", "resource_not_found",
-  "conflict", "etag_required", "etag_mismatch", "bootstrap_disabled", "rate_limited",
-  "operation_indeterminate", "internal_error",
-  "client_configuration_invalid", "storage_unavailable", "crypto_unavailable",
-  "attestation_provider_missing", "protocol_response_invalid", "request_not_replayable", "network_error",
-]);
+const knownCodeMap = {
+  request_invalid: true,
+  identity_token_missing: true,
+  identity_token_invalid: true,
+  identity_token_expired: true,
+  identity_reauthentication_required: true,
+  attestation_required: true,
+  attestation_unsupported: true,
+  attestation_invalid: true,
+  attestation_stale: true,
+  attestation_step_up_required: true,
+  dpop_missing: true,
+  dpop_invalid: true,
+  dpop_replayed: true,
+  dpop_nonce_required: true,
+  session_expired: true,
+  session_revoked: true,
+  refresh_token_reused: true,
+  installation_revoked: true,
+  installation_family_revoked: true,
+  installation_family_not_found: true,
+  component_definition_not_found: true,
+  component_not_configured: true,
+  component_not_provisioned: true,
+  component_revoked: true,
+  component_key_invalid: true,
+  component_key_replaced: true,
+  component_delegation_expired: true,
+  component_feature_not_granted: true,
+  component_parent_trust_expired: true,
+  component_direct_attestation_required: true,
+  containing_app_setup_required: true,
+  framework_integration_unsupported: true,
+  framework_version_unsupported: true,
+  transport_destination_not_allowed: true,
+  transport_request_not_replayable: true,
+  feature_not_found: true,
+  feature_not_allowed: true,
+  model_not_allowed: true,
+  quota_exceeded: true,
+  concurrency_exceeded: true,
+  output_limit_exceeded: true,
+  pricing_unavailable: true,
+  route_not_found: true,
+  upstream_unavailable: true,
+  upstream_timeout: true,
+  upstream_protocol_error: true,
+  configuration_invalid: true,
+  server_not_ready: true,
+  protocol_version_unsupported: true,
+  authentication_required: true,
+  permission_denied: true,
+  resource_not_found: true,
+  conflict: true,
+  etag_required: true,
+  etag_mismatch: true,
+  bootstrap_disabled: true,
+  rate_limited: true,
+  operation_indeterminate: true,
+  internal_error: true,
+  client_configuration_invalid: true,
+  storage_unavailable: true,
+  crypto_unavailable: true,
+  attestation_provider_missing: true,
+  protocol_response_invalid: true,
+  request_not_replayable: true,
+  network_error: true,
+} as const satisfies Record<LatchwayErrorCode, true>;
+
+const knownCodes: ReadonlySet<string> = new Set(Object.keys(knownCodeMap));
 
 const localCodeMap: Readonly<Record<string, LatchwayErrorCode>> = {
   cancelled: "network_error",
@@ -35,13 +91,20 @@ const localCodeMap: Readonly<Record<string, LatchwayErrorCode>> = {
 };
 
 export function fromNativeError(value: unknown): Error {
+  try {
+    assertNoCredentialFields(value);
+  } catch (cause) {
+    return cause instanceof LatchwayError
+      ? cause
+      : new LatchwayError("protocol_response_invalid", "Latchway returned unsafe native error metadata.");
+  }
   if (isAbortError(value)) return abortError();
   const record = isRecord(value) ? value : {};
   const userInfo = isRecord(record.userInfo) ? record.userInfo : {};
   const rawCode = firstString(record.code, userInfo.code);
   const mapped = rawCode === undefined
     ? "internal_error"
-    : localCodeMap[rawCode] ?? (knownCodes.has(rawCode as LatchwayErrorCode)
+    : localCodeMap[rawCode] ?? (knownCodes.has(rawCode)
       ? rawCode as LatchwayErrorCode
       : "internal_error");
   const codeValues = presentValues(record, userInfo, ["code"]);
@@ -128,7 +191,8 @@ function presentValues(
   const values: unknown[] = [];
   for (const source of [record, userInfo]) {
     for (const key of keys) {
-      if (Object.hasOwn(source, key)) values.push(source[key]);
+      const candidate = source[key];
+      if (Object.hasOwn(source, key) && candidate !== undefined && candidate !== null) values.push(candidate);
     }
   }
   return values;

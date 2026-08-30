@@ -39,14 +39,19 @@ for (const required of [
   "SHA256SUMS",
   "admin.openapi.yaml",
   "attestation-binding.schema.json",
+  "component-attestation-binding.schema.json",
   "client.openapi.yaml",
   "config.schema.json",
   "error-codes.yaml",
   "protocol-version.json",
   "test-vectors/attestation-binding/v1.json",
   "test-vectors/attestation-binding/vector.schema.json",
+  "test-vectors/component-attestation-binding/v2.json",
+  "test-vectors/component-attestation-binding/vector.schema.json",
   "test-vectors/dpop/v1.json",
   "test-vectors/dpop/vector.schema.json",
+  "test-vectors/installation-family/v2.json",
+  "test-vectors/installation-family/vector.schema.json",
 ]) {
   if (!listing.includes(required)) throw new Error(`Contract bundle is missing ${required}.`);
 }
@@ -79,7 +84,12 @@ try {
   for (const [bundled, vendored] of [
     ["protocol-version.json", "test/fixtures/contract/protocol-version.json"],
     ["test-vectors/attestation-binding/v1.json", "test/fixtures/contract/attestation-binding-v1.json"],
+    [
+      "test-vectors/component-attestation-binding/v2.json",
+      "test/fixtures/contract/component-attestation-binding-v2.json",
+    ],
     ["test-vectors/dpop/v1.json", "test/fixtures/contract/dpop-v1.json"],
+    ["test-vectors/installation-family/v2.json", "test/fixtures/contract/installation-family-v2.json"],
   ]) {
     const bundleBytes = await readFile(join(temporary, bundled));
     const fixtureBytes = await readFile(new URL(vendored, repositoryRoot));

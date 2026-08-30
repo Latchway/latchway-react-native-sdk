@@ -20,6 +20,21 @@ for (const forbidden of ["attestationEvidence", "integrityToken", "refreshToken"
 if (!spec.includes("identityToken: string")) {
   throw new Error("TurboModule must accept the transient app-owned identity token callback result.");
 }
+for (const required of [
+  "startRequest(", "readResponseChunk(", "closeResponse(", "revokeFamily(",
+  "configureComponent(", "establishDirectAttestation(", "componentDiagnostics(",
+]) {
+  if (!spec.includes(required)) throw new Error(`TurboModule omits native-owned transport primitive: ${required}`);
+}
+if (spec.includes("authorize(")) {
+  throw new Error("TurboModule must not return a JavaScript authorization envelope.");
+}
+for (const method of ["establishDirectAttestation", "componentDiagnostics"]) {
+  const signature = spec.match(new RegExp(`${method}\\([\\s\\S]*?\\): Promise<`))?.[0] ?? "";
+  if (signature.includes("identityToken") || signature.includes("componentJSON")) {
+    throw new Error(`${method} must use the separately configured component context without root identity input.`);
+  }
+}
 
 const packageJSON = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const compatibility = JSON.parse(
@@ -35,6 +50,51 @@ const android = await readFile(
 );
 if (!ios.includes(".reactNativeIOS")) throw new Error("iOS bridge does not select react_native_ios runtime identity.");
 if (!android.includes("REACT_NATIVE_ANDROID")) throw new Error("Android bridge does not select react_native_android runtime identity.");
+for (const marker of [
+  "client.transport(feature: input.feature).bytes(for: preparedRequest)",
+  "LatchwayAsyncBytes.AsyncIterator",
+  "stream.bytes.makeAsyncIterator()",
+  "stream.finish()",
+  "stream.cancel()",
+]) {
+  if (!ios.includes(marker)) throw new Error(`iOS bridge omits SDK-owned streaming transport lifecycle: ${marker}`);
+}
+for (const forbidden of ["client.authorize(&authorizedRequest", "client.makeURLSession()", "session.bytes(for: authorizedRequest)"]) {
+  if (ios.includes(forbidden)) throw new Error(`iOS bridge bypasses the SDK-owned streaming retry transport: ${forbidden}`);
+}
+for (const [label, source, marker] of [
+  ["iOS", ios, "revokeCurrentInstallationFamily()"],
+  ["Android", android, "revokeCurrentInstallationFamily()"],
+]) {
+  if (!source.includes(marker)) throw new Error(`${label} bridge omits installation-family revocation.`);
+}
+for (const marker of [
+  "LatchwayExtensionClient(",
+  "componentDefinitionID: input.definitionID",
+  "establishDirectAttestation()",
+  "isApplicationExtensionProcess()",
+  "clientRuntime: .reactNativeIOS",
+  '"delegated_direct_attested"',
+]) {
+  const source = marker === '"delegated_direct_attested"' ? joined : ios;
+  if (!source.includes(marker)) throw new Error(`React Native direct component-attestation boundary is incomplete: ${marker}`);
+}
+if (!android.includes("Direct component attestation is not supported by this Android SDK")) {
+  throw new Error("Android must fail closed until its native SDK exposes direct component attestation.");
+}
+for (const [label, source] of [["iOS", ios], ["Android", android]]) {
+  for (const marker of ["/proxy/", "GET", "PATCH", "%2f", "%5c"]) {
+    if (!source.toLowerCase().includes(marker.toLowerCase())) {
+      throw new Error(`${label} bridge omits opaque-route boundary marker: ${marker}`);
+    }
+  }
+}
+if (/"(?:authorization|dpop|accessToken|refreshToken|privateKey)"\s*:/u.test(ios)) {
+  throw new Error("iOS bridge serializes credential material to JavaScript.");
+}
+if (/\.put\("(?:authorization|dpop|accessToken|refreshToken|privateKey)"/u.test(android)) {
+  throw new Error("Android bridge serializes credential material to JavaScript.");
+}
 const podspec = await readFile(new URL("../LatchwayReactNative.podspec", import.meta.url), "utf8");
 if (!podspec.includes(`spec.dependency "${compatibility.ios.pod}", "${compatibility.ios.version}"`)) {
   throw new Error("The iOS native dependency is not pinned to the locked release.");

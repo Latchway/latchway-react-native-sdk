@@ -17,241 +17,35 @@ env:
   PNPM_VERSION: 10.15.0
 
 jobs:
-  javascript:
-    name: JavaScript, contracts, and package consumer
+  pull-request:
+    name: Hermetic pull-request policy and source checks
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
-      - name: Check out React Native SDK
+      - name: Check out React Native SDK without credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          path: latchway-react-native-sdk
           persist-credentials: false
-      - name: Read immutable compatibility lock
-        id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
-        working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
-      - name: Check out locked iOS SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-ios-sdk
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.ios_commit }}
-          path: latchway-ios-sdk
-          persist-credentials: false
-      - name: Check out locked Android SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-android
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.android_commit }}
-          path: latchway-android
-          persist-credentials: false
-      - name: Check out locked core contract
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.core_commit }}
-          path: latchway
-          persist-credentials: false
-      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
-        with:
-          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Build the exact JavaScript dependency
+      - name: Verify candidate-owned metadata and native boundaries
         run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-        working-directory: latchway-js
-      - name: Install exact React Native dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: latchway-react-native-sdk
-      - name: Verify all locked source commits and contracts
-        run: pnpm verify:compatibility --sources
-        working-directory: latchway-react-native-sdk
-      - name: Build and verify the locked core contract bundle
+          node scripts/verify-contract.mjs
+          node scripts/verify-compatibility.mjs --metadata-only
+          node scripts/verify-native-boundary.mjs
+      - name: Run dependency-free workflow and evidence tests
         run: |
-          mkdir -p "$RUNNER_TEMP/latchway-contract"
-          python3 scripts/build-contract-bundle.py --output-directory "$RUNNER_TEMP/latchway-contract"
-          pnpm --dir ../latchway-react-native-sdk verify:bundle -- "$RUNNER_TEMP/latchway-contract/latchway-contract-${{ steps.lock.outputs.contract_version }}.tar.gz"
-        working-directory: latchway
-      - name: Verify source, tests, codegen, example, and boundaries
-        run: pnpm check
-        working-directory: latchway-react-native-sdk
-      - name: Verify physical-device evidence validators fail closed
-        run: |
+          node --test scripts/test-ci-lock-output.mjs scripts/test-package-archive.mjs
           python3 scripts/test-device-evidence.py
+          python3 scripts/test-locked-sources-workflow.py
+          python3 scripts/test-physical-evidence-workflow.py
           python3 scripts/test-finalize-react-native-device-run.py
           python3 scripts/test-export-core-physical-evidence.py
           python3 scripts/test-verify-gateway-deployment.py
+          python3 scripts/test_release_promotion.py
+          python3 scripts/test_require_gh_version.py
           bash -n scripts/gateway-deployment-evidence.sh
           bash -n scripts/run-physical-react-native-ios.sh
           bash -n scripts/run-physical-react-native-android.sh
-        working-directory: latchway-react-native-sdk
-      - name: Pack exact JavaScript dependency
-        run: pnpm pack:check
-        working-directory: latchway-js
-      - name: Verify deterministic React Native package
-        run: |
-          pnpm pack:check
-          pnpm verify:reproducible
-        working-directory: latchway-react-native-sdk
-      - name: Verify a clean packed-package consumer
-        run: pnpm consumer:check
-        working-directory: latchway-react-native-sdk
-      - name: Upload verified npm archive
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: latchway-react-native-npm
-          path: |
-            latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
-            latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-  android-source:
-    name: Android source publication and RN 0.82 host
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - name: Check out React Native SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          path: latchway-react-native-sdk
-          persist-credentials: false
-      - name: Read immutable compatibility lock
-        id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
-        working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
-      - name: Check out locked Android SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-android
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.android_commit }}
-          path: latchway-android
-          persist-credentials: false
-      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
-      - name: Install locked Android build platforms
-        run: >-
-          sdkmanager
-          "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
-          "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
-          "ndk;${{ steps.lock.outputs.android_ndk_version }}"
-      - name: Build the exact JavaScript dependency
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-        working-directory: latchway-js
-      - name: Install exact React Native dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: latchway-react-native-sdk
-      - name: Verify exact Android Maven publications and isolated consumers
-        env:
-          LATCHWAY_PUBLICATION_TEST_VERSION: ${{ steps.lock.outputs.android_version }}
-        run: ./scripts/verify-local-publication.sh
-        working-directory: latchway-android
-      - name: Compile and lint standalone React Native library
-        env:
-          LATCHWAY_NATIVE_REPOSITORY: ${{ github.workspace }}/latchway-android/build/publication-test-repository
-        run: ./android/gradlew -p android clean check --no-daemon
-        working-directory: latchway-react-native-sdk
-      - name: Compile and lint official React Native Android host
-        env:
-          LATCHWAY_NATIVE_REPOSITORY: ${{ github.workspace }}/latchway-android/build/publication-test-repository
-        run: ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
-        working-directory: latchway-react-native-sdk
-
-  ios-source:
-    name: iOS source pod and RN 0.82 host
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - name: Check out React Native SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          path: latchway-react-native-sdk
-          persist-credentials: false
-      - name: Read immutable compatibility lock
-        id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
-        working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
-      - name: Check out locked iOS SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: Latchway/latchway-ios-sdk
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.ios_commit }}
-          path: latchway-ios-sdk
-          persist-credentials: false
-      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Build the exact JavaScript dependency
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-        working-directory: latchway-js
-      - name: Install exact React Native dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: latchway-react-native-sdk
-      - name: Parse CocoaPods specification
-        run: pnpm ios:spec
-        working-directory: latchway-react-native-sdk
-      - name: Resolve exact local iOS SDK in official React Native host
-        env:
-          LATCHWAY_IOS_SDK_PATH: ${{ github.workspace }}/latchway-ios-sdk
-          RCT_NEW_ARCH_ENABLED: "1"
-        run: pod install --repo-update
-        working-directory: latchway-react-native-sdk/example/ios
-      - name: Build official React Native iOS host
-        run: >-
-          xcodebuild
-          -workspace LatchwayExample.xcworkspace
-          -scheme LatchwayExample
-          -configuration Debug
-          -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-derived"
-          CODE_SIGNING_ALLOWED=NO
-          build
-        working-directory: latchway-react-native-sdk/example/ios

@@ -38,10 +38,11 @@ to the native SDKs and must not be reimplemented in JavaScript or C++ here.
 The application-owned external identity token crosses the TurboModule boundary
 only for the duration of a native operation. Private keys, refresh tokens, raw
 attestation evidence, attestation challenge bindings, and native session state
-must never enter JavaScript. The access token and DPoP proof necessarily return
-inside a short-lived authorization envelope so React Native fetch can attach
-them to the exact-origin request; they are not exposed as standalone public
-values, persisted, or included in diagnostics and errors.
+must never enter JavaScript. Access tokens and DPoP proofs also remain native:
+the iOS URL session or Android OkHttp client attaches them, dispatches the
+exact-origin request, rejects redirects, and retains the response handle.
+JavaScript receives only safe response metadata and pull-streamed response
+bytes. There is no public or TurboModule authorization-envelope API.
 
 The SDK must never accept an upstream AI-provider secret. Latchway server or
 native-SDK vulnerabilities should be reported to their owning repository, with

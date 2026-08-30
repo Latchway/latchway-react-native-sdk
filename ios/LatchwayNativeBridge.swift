@@ -25,8 +25,27 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         }
     }
 
-    @objc(authorizeWithClientID:operationID:identityToken:requestJSON:resolve:reject:)
-    public func authorize(
+    @objc(configureComponentWithClientID:configurationJSON:componentJSON:resolve:reject:)
+    public func configureComponent(
+        clientID: String,
+        configurationJSON: String,
+        componentJSON: String,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.configureComponent(
+                    clientID: clientID,
+                    encodedConfiguration: configurationJSON,
+                    encodedComponent: componentJSON
+                ))
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(startRequestWithClientID:operationID:identityToken:requestJSON:resolve:reject:)
+    public func startRequest(
         clientID: String,
         operationID: String,
         identityToken: String,
@@ -37,8 +56,41 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         Task {
             do {
                 resolve(try await store.run(clientID: clientID, operationID: operationID) { context in
-                    try await context.authorize(identityToken: identityToken, encoded: requestJSON)
+                    try await context.startRequest(identityToken: identityToken, encoded: requestJSON)
                 })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(readResponseChunkWithClientID:operationID:responseID:maximumBytes:resolve:reject:)
+    public func readResponseChunk(
+        clientID: String,
+        operationID: String,
+        responseID: String,
+        maximumBytes: Double,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.readResponseChunk(responseID: responseID, maximumBytes: maximumBytes)
+                })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(closeResponseWithClientID:responseID:resolve:reject:)
+    public func closeResponse(
+        clientID: String,
+        responseID: String,
+        resolve: @escaping LatchwayResolveVoid,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                try await store.closeResponse(clientID: clientID, responseID: responseID)
+                resolve()
             } catch { Self.reject(error, with: reject) }
         }
     }
@@ -91,6 +143,40 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         }
     }
 
+    @objc(establishDirectAttestationWithClientID:operationID:resolve:reject:)
+    public func establishDirectAttestation(
+        clientID: String,
+        operationID: String,
+        resolve: @escaping LatchwayResolveVoid,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                _ = try await store.runComponent(clientID: clientID, operationID: operationID) { context in
+                    try await context.establishDirectAttestation()
+                    return true
+                }
+                resolve()
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(componentDiagnosticsWithClientID:operationID:resolve:reject:)
+    public func componentDiagnostics(
+        clientID: String,
+        operationID: String,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.runComponent(clientID: clientID, operationID: operationID) { context in
+                    try await context.diagnostics()
+                })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
     @objc(revokeWithClientID:operationID:identityToken:resolve:reject:)
     public func revoke(
         clientID: String,
@@ -101,6 +187,19 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
     ) {
         runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
             try await $0.revokeCurrentInstallation()
+        }
+    }
+
+    @objc(revokeFamilyWithClientID:operationID:identityToken:resolve:reject:)
+    public func revokeFamily(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        resolve: @escaping LatchwayResolveVoid,
+        reject: @escaping LatchwayReject
+    ) {
+        runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
+            try await $0.revokeCurrentInstallationFamily()
         }
     }
 
@@ -158,13 +257,38 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
 
 private actor LatchwayBridgeStore {
     private var clients: [String: NativeClientContext] = [:]
+    private var componentClients: [String: NativeComponentContext] = [:]
     private var cancellations: [String: @Sendable () -> Void] = [:]
 
     func configure(clientID: String, encoded: String) throws -> String {
-        guard clients[clientID] == nil else { throw LatchwayError.invalidConfiguration("client identifier is already configured") }
+        guard clients[clientID] == nil, componentClients[clientID] == nil else {
+            throw LatchwayError.invalidConfiguration("client identifier is already configured")
+        }
         let configuration = try NativeConfiguration.decode(encoded)
         let context = try NativeClientContext(configuration: configuration)
         clients[clientID] = context
+        return try jsonString([
+            "platform": "react_native_ios",
+            "nativeSDKVersion": LatchwayVersion.sdk,
+            "contractVersion": LatchwayVersion.contract,
+            "protocolVersion": LatchwayVersion.protocolVersion,
+        ])
+    }
+
+    func configureComponent(
+        clientID: String,
+        encodedConfiguration: String,
+        encodedComponent: String
+    ) throws -> String {
+        guard clients[clientID] == nil, componentClients[clientID] == nil else {
+            throw LatchwayError.invalidConfiguration("client identifier is already configured")
+        }
+        let configuration = try NativeComponentConfiguration.decode(encodedConfiguration)
+        let component = try NativeComponentInput.decode(encodedComponent)
+        componentClients[clientID] = try NativeComponentContext(
+            configuration: configuration,
+            component: component
+        )
         return try jsonString([
             "platform": "react_native_ios",
             "nativeSDKVersion": LatchwayVersion.sdk,
@@ -187,16 +311,43 @@ private actor LatchwayBridgeStore {
         return try await task.value
     }
 
+    func runComponent<T: Sendable>(
+        clientID: String,
+        operationID: String,
+        operation: @escaping @Sendable (NativeComponentContext) async throws -> T
+    ) async throws -> T {
+        guard let context = componentClients[clientID] else {
+            throw LatchwayError.invalidConfiguration("component client is not configured")
+        }
+        let key = "\(clientID)|\(operationID)"
+        guard cancellations[key] == nil else {
+            throw LatchwayError.invalidRequest("operation identifier is already active")
+        }
+        let task = Task { try await operation(context) }
+        cancellations[key] = { task.cancel() }
+        defer { cancellations.removeValue(forKey: key) }
+        return try await task.value
+    }
+
     func cancel(clientID: String, operationID: String) {
         cancellations["\(clientID)|\(operationID)"]?()
     }
 
-    func dispose(clientID: String) {
-        clients.removeValue(forKey: clientID)
+    func closeResponse(clientID: String, responseID: String) async throws {
+        guard let context = clients[clientID] else {
+            throw LatchwayError.invalidConfiguration("client is not configured")
+        }
+        await context.closeResponse(responseID: responseID)
+    }
+
+    func dispose(clientID: String) async {
+        let context = clients.removeValue(forKey: clientID)
+        componentClients.removeValue(forKey: clientID)
         let prefix = "\(clientID)|"
         for key in cancellations.keys.filter({ $0.hasPrefix(prefix) }) {
             cancellations.removeValue(forKey: key)?()
         }
+        await context?.close()
     }
 }
 
@@ -204,11 +355,15 @@ private final class NativeClientContext: @unchecked Sendable {
     private let identity = TransientIdentityTokenProvider()
     private let operationLock = NativeOperationLock()
     private let client: LatchwayClient
+    private let baseURL: URL
+    private let responses = NativeResponseRegistry()
 
     init(configuration: NativeConfiguration) throws {
-        guard let baseURL = URL(string: configuration.baseURL) else {
-            throw LatchwayError.invalidConfiguration("base URL is invalid")
-        }
+        let baseURL = try validatedNativeBaseURL(
+            configuration.baseURL,
+            allowInsecureLoopback: configuration.allowInsecureLoopback
+        )
+        self.baseURL = baseURL
         let attestation: (any LatchwayAttestationProvider)?
         if configuration.apple.appAttestEnabled {
             if let namespace = configuration.apple.storageNamespace {
@@ -240,30 +395,81 @@ private final class NativeClientContext: @unchecked Sendable {
         client = LatchwayClient(configuration: native, identityTokenProvider: identity)
     }
 
-    func authorize(identityToken: String, encoded: String) async throws -> String {
-        let input = try AuthorizationInput.decode(encoded)
-        guard let url = URL(string: input.url) else { throw LatchwayError.invalidRequest("request URL is invalid") }
-        return try await withIdentityToken(identityToken) { client in
-            var request = URLRequest(url: url)
-            request.httpMethod = input.method
-            if let requestID = input.requestID {
-                request.setValue(requestID, forHTTPHeaderField: "X-Latchway-Request-ID")
-            }
-            if let nonce = input.nonce {
-                try await client.authorize(&request, feature: input.feature, nonce: nonce)
-            } else {
-                try await client.authorize(&request, feature: input.feature)
-            }
-            guard let authorization = request.value(forHTTPHeaderField: "Authorization"),
-                  let proof = request.value(forHTTPHeaderField: "DPoP"),
-                  let requestID = request.value(forHTTPHeaderField: "X-Latchway-Request-ID")
-            else { throw LatchwayError.invalidServerResponse }
-            return try jsonString([
-                "authorization": authorization,
-                "dpop": proof,
-                "requestID": requestID,
-            ])
+    func startRequest(identityToken: String, encoded: String) async throws -> String {
+        let input = try NativeRequestInput.decode(encoded)
+        guard let url = URL(string: input.url) else {
+            throw LatchwayError.invalidRequest("request URL is invalid")
         }
+        try validateTarget(baseURL: baseURL, target: url, method: input.method, feature: input.feature)
+        var request = URLRequest(url: url)
+        request.httpMethod = input.method
+        request.httpBody = input.body
+        for pair in input.headers {
+            request.setValue(pair[1], forHTTPHeaderField: pair[0])
+        }
+        let preparedRequest = request
+        return try await withIdentityToken(identityToken) { client in
+            let stream = try await client.transport(feature: input.feature).bytes(for: preparedRequest)
+            do {
+                try Task.checkCancellation()
+                let response = stream.response
+                guard (200 ... 599).contains(response.statusCode),
+                      response.url.map({
+                          targetHasSameAllowedOriginAndPath(
+                              baseURL: self.baseURL,
+                              target: $0,
+                              method: input.method,
+                              feature: input.feature
+                          )
+                      }) == true
+                else {
+                    throw LatchwayError.invalidServerResponse
+                }
+                let responseID = "rsp_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+                let handle = NativeResponseHandle(stream: stream)
+                await self.responses.insert(handle, responseID: responseID)
+                do {
+                    return try responseMetadata(responseID: responseID, response: response)
+                } catch {
+                    await self.responses.close(responseID: responseID)
+                    throw error
+                }
+            } catch let error as LatchwayError {
+                stream.cancel()
+                throw error
+            } catch is CancellationError {
+                stream.cancel()
+                throw LatchwayError.cancelled
+            } catch let error as URLError where error.code == .cancelled && Task.isCancelled {
+                stream.cancel()
+                throw LatchwayError.cancelled
+            } catch {
+                stream.cancel()
+                throw LatchwayError.transportFailure
+            }
+        }
+    }
+
+    func readResponseChunk(responseID: String, maximumBytes: Double) async throws -> String {
+        guard maximumBytes.isFinite,
+              maximumBytes.rounded(.towardZero) == maximumBytes,
+              (1 ... Double(maximumResponseChunkBytes)).contains(maximumBytes)
+        else { throw LatchwayError.invalidRequest("response chunk limit is invalid") }
+        guard let data = try await responses.read(responseID: responseID, maximumBytes: Int(maximumBytes)) else {
+            return try jsonString(["done": true])
+        }
+        return try jsonString([
+            "done": false,
+            "chunk": data.base64EncodedString(),
+        ])
+    }
+
+    func closeResponse(responseID: String) async {
+        await responses.close(responseID: responseID)
+    }
+
+    func close() async {
+        await responses.closeAll()
     }
 
     func quota(identityToken: String, feature: String) async throws -> String {
@@ -313,6 +519,10 @@ private final class NativeClientContext: @unchecked Sendable {
         try await withIdentityToken(identityToken) { try await $0.revokeCurrentInstallation() }
     }
 
+    func revokeCurrentInstallationFamily(identityToken: String) async throws {
+        try await withIdentityToken(identityToken) { try await $0.revokeCurrentInstallationFamily() }
+    }
+
     func withIdentityToken<T: Sendable>(
         _ token: String,
         operation: @escaping @Sendable (LatchwayClient) async throws -> T
@@ -334,6 +544,89 @@ private final class NativeClientContext: @unchecked Sendable {
             throw error
         }
     }
+}
+
+private final class NativeComponentContext: @unchecked Sendable {
+    private let client: LatchwayExtensionClient
+
+    init(configuration: NativeComponentConfiguration, component input: NativeComponentInput) throws {
+        guard isApplicationExtensionProcess() else {
+            throw LatchwayComponentError.invalidConfiguration(
+                "The React Native component client must run inside the signed iOS extension process"
+            )
+        }
+        let baseURL = try validatedNativeBaseURL(
+            configuration.baseURL,
+            allowInsecureLoopback: configuration.allowInsecureLoopback
+        )
+        let fallback: LatchwaySoftwareKeyFallbackPolicy = configuration.apple.softwareKeyFallbackPolicy == "allow"
+            ? .allowWhenSecureEnclaveUnavailable
+            : .disallow
+        let native = LatchwayConfiguration(
+            baseURL: baseURL,
+            applicationID: configuration.applicationID,
+            environment: configuration.environment,
+            identityProvider: "custom_jwt",
+            clientRuntime: .reactNativeIOS,
+            clientSDKVersion: configuration.sdkVersion,
+            appVersion: configuration.appVersion,
+            softwareKeyFallbackPolicy: fallback
+        )
+        let component = LatchwayComponentConfiguration(
+            definitionID: input.definitionID,
+            kind: input.kind,
+            keychainAccessGroup: input.keychainAccessGroup,
+            requestedFeatures: input.requestedFeatures
+        )
+        let provider: (any LatchwayAttestationProvider)?
+#if canImport(LatchwayAppAttest)
+        if let callerStorageNamespace = configuration.apple.storageNamespace {
+            provider = LatchwayAppAttestProvider(
+                storageNamespace: "\(callerStorageNamespace).react_native_ios.component.\(input.definitionID)"
+            )
+        } else {
+            provider = LatchwayAppAttestProvider(
+                applicationID: configuration.applicationID,
+                environment: configuration.environment,
+                clientRuntime: .reactNativeIOS,
+                componentDefinitionID: input.definitionID
+            )
+        }
+#else
+        provider = nil
+#endif
+        client = try LatchwayExtensionClient(
+            configuration: native,
+            component: component,
+            directAttestationProvider: provider
+        )
+    }
+
+    func establishDirectAttestation() async throws {
+        try await client.establishDirectAttestation()
+    }
+
+    func diagnostics() async throws -> String {
+        let diagnostics = await client.diagnostics()
+        return try jsonString([
+            "familyID": diagnostics.familyID as Any,
+            "componentID": diagnostics.componentID as Any,
+            "definitionID": diagnostics.definitionID,
+            "keychainAccessGroup": diagnostics.keychainAccessGroup,
+            "keyAvailable": diagnostics.keyAvailable,
+            "keyStorage": diagnostics.keyStorage.rawValue,
+            "grantAvailable": diagnostics.grantAvailable,
+            "sessionAvailable": diagnostics.sessionAvailable,
+            "trustSource": diagnostics.trustSource?.rawValue as Any,
+            "trustExpiresAt": diagnostics.trustExpiresAt.map(iso8601) as Any,
+            "containingAppActionRequired": diagnostics.containingAppActionRequired,
+        ])
+    }
+}
+
+private func isApplicationExtensionProcess(bundle: Bundle = .main) -> Bool {
+    bundle.bundleURL.pathExtension == "appex"
+        && bundle.object(forInfoDictionaryKey: "NSExtension") != nil
 }
 
 private actor TransientIdentityTokenProvider: LatchwayIdentityTokenProvider {
@@ -369,6 +662,102 @@ private actor NativeOperationLock {
     }
 }
 
+private actor NativeResponseRegistry {
+    private var responses: [String: NativeResponseHandle] = [:]
+
+    func insert(_ response: NativeResponseHandle, responseID: String) {
+        responses[responseID] = response
+    }
+
+    func read(responseID: String, maximumBytes: Int) async throws -> Data? {
+        guard let response = responses[responseID] else {
+            throw LatchwayError.invalidRequest("native response handle is unavailable")
+        }
+        let data = try await response.read(maximumBytes: maximumBytes)
+        if data == nil {
+            responses.removeValue(forKey: responseID)
+            await response.close()
+        }
+        return data
+    }
+
+    func close(responseID: String) async {
+        guard let response = responses.removeValue(forKey: responseID) else { return }
+        await response.close()
+    }
+
+    func closeAll() async {
+        let active = Array(responses.values)
+        responses.removeAll()
+        for response in active { await response.close() }
+    }
+}
+
+private actor NativeResponseHandle {
+    private let stream: LatchwayStreamingResponse
+    private var iterator: LatchwayAsyncBytes.AsyncIterator?
+    private var exhausted = false
+    private var closed = false
+
+    init(stream: LatchwayStreamingResponse) {
+        self.stream = stream
+        iterator = stream.bytes.makeAsyncIterator()
+    }
+
+    func read(maximumBytes: Int) async throws -> Data? {
+        if exhausted { return nil }
+        guard !closed, var activeIterator = iterator else {
+            throw LatchwayError.invalidRequest("native response handle is unavailable")
+        }
+        iterator = nil
+        var result = Data()
+        result.reserveCapacity(maximumBytes)
+        do {
+            while result.count < maximumBytes {
+                try Task.checkCancellation()
+                guard let byte = try await activeIterator.next() else {
+                    exhausted = true
+                    closed = true
+                    iterator = nil
+                    stream.finish()
+                    return result.isEmpty ? nil : result
+                }
+                guard !closed else { throw LatchwayError.cancelled }
+                result.append(byte)
+                // A line boundary keeps SSE and NDJSON delivery incremental even
+                // when the bridge requests a larger maximum chunk.
+                if byte == 0x0A { break }
+            }
+            guard !closed else { throw LatchwayError.cancelled }
+            iterator = activeIterator
+            return result
+        } catch let error as LatchwayError {
+            closeNow()
+            throw error
+        } catch is CancellationError {
+            closeNow()
+            throw LatchwayError.cancelled
+        } catch let error as URLError where error.code == .cancelled {
+            closeNow()
+            throw LatchwayError.cancelled
+        } catch {
+            closeNow()
+            throw LatchwayError.transportFailure
+        }
+    }
+
+    func close() {
+        closeNow()
+    }
+
+    private func closeNow() {
+        guard !closed else { return }
+        closed = true
+        iterator = nil
+        stream.cancel()
+    }
+}
+
 private struct NativeConfiguration: Decodable {
     struct Apple: Decodable {
         let appAttestEnabled: Bool
@@ -384,9 +773,20 @@ private struct NativeConfiguration: Decodable {
     let sdkVersion: String
     let contractVersion: String
     let protocolVersion: Int
+    let allowInsecureLoopback: Bool
     let apple: Apple
 
     static func decode(_ encoded: String) throws -> Self {
+        guard let data = encoded.data(using: .utf8), data.count <= 65_536,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == nativeConfigurationKeys,
+              let apple = object["apple"] as? [String: Any],
+              nativeAppleConfigurationRequiredKeys.isSubset(of: apple.keys),
+              Set(apple.keys).isSubset(of: nativeAppleConfigurationKeys),
+              let android = object["android"] as? [String: Any],
+              nativeAndroidConfigurationRequiredKeys.isSubset(of: android.keys),
+              Set(android.keys).isSubset(of: nativeAndroidConfigurationKeys)
+        else { throw LatchwayError.invalidConfiguration("native configuration is invalid") }
         let value = try decodeStrict(Self.self, encoded: encoded)
         guard value.contractVersion == LatchwayVersion.contract,
               value.protocolVersion == LatchwayVersion.protocolVersion
@@ -395,17 +795,319 @@ private struct NativeConfiguration: Decodable {
     }
 }
 
-private struct AuthorizationInput: Decodable {
+private struct NativeComponentConfiguration: Decodable {
+    struct Apple: Decodable {
+        let storageNamespace: String?
+        let softwareKeyFallbackPolicy: String
+    }
+
+    let baseURL: String
+    let applicationID: String
+    let environment: String
+    let appVersion: String
+    let sdkVersion: String
+    let contractVersion: String
+    let protocolVersion: Int
+    let allowInsecureLoopback: Bool
+    let apple: Apple
+
+    static func decode(_ encoded: String) throws -> Self {
+        guard let data = encoded.data(using: .utf8), data.count <= 65_536,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == nativeComponentConfigurationKeys,
+              let apple = object["apple"] as? [String: Any],
+              nativeComponentAppleConfigurationRequiredKeys.isSubset(of: apple.keys),
+              Set(apple.keys).isSubset(of: nativeComponentAppleConfigurationKeys)
+        else { throw LatchwayError.invalidConfiguration("native component configuration is invalid") }
+        let value = try decodeStrict(Self.self, encoded: encoded)
+        guard value.contractVersion == LatchwayVersion.contract,
+              value.protocolVersion == LatchwayVersion.protocolVersion,
+              value.apple.softwareKeyFallbackPolicy == "allow"
+                || value.apple.softwareKeyFallbackPolicy == "disallow"
+        else { throw LatchwayError.invalidConfiguration("component contract version is incompatible") }
+        return value
+    }
+}
+
+private struct NativeComponentInput: Decodable, Equatable {
+    let definitionID: String
+    let kind: String
+    let keychainAccessGroup: String
+    let requestedFeatures: [String]
+
+    static func decode(_ encoded: String) throws -> Self {
+        guard let data = encoded.data(using: .utf8), data.count <= 65_536,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"])
+        else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+        let value = try decodeStrict(Self.self, encoded: encoded)
+        guard matches(value.definitionID, pattern: "^[a-z][a-z0-9_-]{0,62}$"),
+              reactNativeDirectAttestationComponentKinds.contains(value.kind),
+              matches(value.keychainAccessGroup, pattern: "^[A-Za-z0-9._-]{1,255}$"),
+              !value.requestedFeatures.isEmpty,
+              value.requestedFeatures.count <= 256,
+              Set(value.requestedFeatures).count == value.requestedFeatures.count,
+              value.requestedFeatures.allSatisfy(validFeature)
+        else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+        return value
+    }
+}
+
+private struct NativeRequestInput: Decodable {
     let url: String
     let method: String
     let feature: String
-    let nonce: String?
-    let requestID: String?
+    let headers: [[String]]
+    let bodyBase64: String?
+
+    var body: Data? {
+        guard let bodyBase64 else { return nil }
+        return Data(base64Encoded: bodyBase64)
+    }
 
     static func decode(_ encoded: String) throws -> Self {
-        try decodeStrict(Self.self, encoded: encoded)
+        guard let data = encoded.data(using: .utf8), data.count <= maximumNativeRequestBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw LatchwayError.invalidRequest("native request is invalid") }
+        let required = Set(["url", "method", "feature", "headers"])
+        let allowed = required.union(["bodyBase64"])
+        guard required.isSubset(of: object.keys), Set(object.keys).isSubset(of: allowed) else {
+            throw LatchwayError.invalidRequest("native request is invalid")
+        }
+        let value = try decodeStrict(Self.self, encoded: encoded, maximumBytes: maximumNativeRequestBytes)
+        guard validMethod(value.method), validFeature(value.feature), value.headers.count <= maximumHeaders else {
+            throw LatchwayError.invalidRequest("native request is invalid")
+        }
+        var headerBytes = 0
+        for pair in value.headers {
+            guard pair.count == 2 else { throw LatchwayError.invalidRequest("native request header is invalid") }
+            let name = pair[0].lowercased()
+            let headerValue = pair[1]
+            guard validHeaderName(name), validHeaderValue(headerValue), !isForbiddenCredentialName(name) else {
+                throw LatchwayError.invalidRequest("native request header is invalid")
+            }
+            headerBytes += name.utf8.count + headerValue.utf8.count
+            guard headerBytes <= maximumHeaderBytes else {
+                throw LatchwayError.invalidRequest("native request headers are too large")
+            }
+        }
+        if let encodedBody = value.bodyBase64 {
+            guard let body = Data(base64Encoded: encodedBody), body.count <= maximumRequestBodyBytes,
+                  body.base64EncodedString() == encodedBody
+            else { throw LatchwayError.invalidRequest("native request body is invalid") }
+        }
+        return value
     }
 }
+
+private func responseMetadata(responseID: String, response: HTTPURLResponse) throws -> String {
+    var headers: [[String]] = []
+    var headerBytes = 0
+    for (rawName, rawValue) in response.allHeaderFields {
+        guard let name = (rawName as? String)?.lowercased(), safeResponseHeaders.contains(name),
+              let value = rawValue as? String
+        else { continue }
+        guard validHeaderValue(value) else { throw LatchwayError.invalidServerResponse }
+        headerBytes += name.utf8.count + value.utf8.count
+        guard headers.count < maximumHeaders, headerBytes <= maximumHeaderBytes else {
+            throw LatchwayError.invalidServerResponse
+        }
+        headers.append([name, value])
+    }
+    return try jsonString([
+        "responseID": responseID,
+        "status": response.statusCode,
+        "statusText": "",
+        "headers": headers,
+    ])
+}
+
+private func validatedNativeBaseURL(_ encoded: String, allowInsecureLoopback: Bool) throws -> URL {
+    guard let url = URL(string: encoded),
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          components.user == nil, components.password == nil,
+          components.percentEncodedPath == "/", components.percentEncodedQuery == nil,
+          components.fragment == nil, let scheme = components.scheme?.lowercased(),
+          let host = components.host?.lowercased()
+    else { throw LatchwayError.invalidConfiguration("base URL is invalid") }
+    let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+    guard scheme == "https" || (allowInsecureLoopback && loopback && scheme == "http") else {
+        throw LatchwayError.invalidConfiguration("base URL transport is invalid")
+    }
+    return url
+}
+
+private func validateTarget(baseURL: URL, target: URL, method: String, feature: String) throws {
+    guard targetHasSameAllowedOriginAndPath(
+        baseURL: baseURL,
+        target: target,
+        method: method,
+        feature: feature
+    ) else {
+        throw LatchwayError.invalidRequest("request destination is not an allowed Latchway data-plane URL")
+    }
+    guard let query = URLComponents(url: target, resolvingAgainstBaseURL: false)?.percentEncodedQuery else { return }
+    for component in query.split(separator: "&", omittingEmptySubsequences: false) {
+        let name = component.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        if isForbiddenCredentialName(decodedCredentialName(name)) {
+            throw LatchwayError.invalidRequest("upstream provider credentials must not be supplied in the request URL")
+        }
+    }
+}
+
+private func targetHasSameAllowedOriginAndPath(
+    baseURL: URL,
+    target: URL,
+    method: String,
+    feature: String
+) -> Bool {
+    guard let base = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+          let candidate = URLComponents(url: target, resolvingAgainstBaseURL: false),
+          let baseScheme = base.scheme?.lowercased(), let candidateScheme = candidate.scheme?.lowercased(),
+          let baseHost = base.host?.lowercased(), let candidateHost = candidate.host?.lowercased(),
+          base.user == nil, base.password == nil, base.fragment == nil,
+          candidate.user == nil, candidate.password == nil, candidate.fragment == nil,
+          baseScheme == candidateScheme, baseHost == candidateHost,
+          effectivePort(base) == effectivePort(candidate)
+    else { return false }
+    let normalizedMethod = method.uppercased()
+    if normalizedMethod == "POST", allowedDataPlanePaths.contains(candidate.percentEncodedPath) {
+        return true
+    }
+    let prefix = "/proxy/\(feature)/"
+    guard opaqueDataPlaneMethods.contains(normalizedMethod), candidate.percentEncodedQuery == nil,
+          candidate.percentEncodedPath.hasPrefix(prefix)
+    else { return false }
+    let remaining = String(candidate.percentEncodedPath.dropFirst(prefix.count))
+    let lowerRemaining = remaining.lowercased()
+    return (1 ... 2_048).contains(remaining.utf8.count)
+        && remaining.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+            !$0.isEmpty && $0 != "." && $0 != ".."
+        }
+        && !lowerRemaining.contains("%2e")
+        && !lowerRemaining.contains("%2f")
+        && !lowerRemaining.contains("%5c")
+        && !remaining.contains("\\")
+        && !lowerRemaining.hasPrefix("http:")
+        && !lowerRemaining.hasPrefix("https:")
+}
+
+private func effectivePort(_ components: URLComponents) -> Int? {
+    if let port = components.port { return port }
+    switch components.scheme?.lowercased() {
+    case "https": return 443
+    case "http": return 80
+    default: return nil
+    }
+}
+
+private func decodedCredentialName(_ value: String) -> String {
+    var decoded = value
+    for _ in 0 ..< 4 {
+        guard let next = decoded.removingPercentEncoding, next != decoded else { break }
+        decoded = next
+    }
+    if decoded.range(of: #"%[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil {
+        return "credential-encoded-name"
+    }
+    return decoded.lowercased()
+}
+
+private func isForbiddenCredentialName(_ value: String) -> Bool {
+    let normalized = value.lowercased()
+    if forbiddenRequestHeaders.contains(normalized) || forbiddenCredentialQueryNames.contains(normalized) { return true }
+    let compact = normalized.replacingOccurrences(
+        of: #"[^a-z0-9]"#,
+        with: "",
+        options: .regularExpression
+    )
+    if ["key", "token", "secret", "bearer", "cookie", "password", "passwd"].contains(compact) { return true }
+    return forbiddenCredentialNameFragments.contains { compact.contains($0) }
+}
+
+private func validMethod(_ value: String) -> Bool {
+    matches(value, pattern: #"^[A-Z][A-Z0-9!#$%&'*+.^_`|~-]{0,31}$"#)
+        && !forbiddenMethods.contains(value)
+}
+
+private func validFeature(_ value: String) -> Bool {
+    matches(value, pattern: #"^[a-z][a-z0-9_-]{0,62}$"#)
+}
+
+private func validHeaderName(_ value: String) -> Bool {
+    matches(value, pattern: #"^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$"#)
+}
+
+private func validHeaderValue(_ value: String) -> Bool {
+    guard value.utf8.count <= maximumHeaderValueBytes else { return false }
+    return !value.unicodeScalars.contains { scalar in
+        (0x00 ... 0x08).contains(scalar.value)
+            || (0x0A ... 0x1F).contains(scalar.value)
+            || scalar.value == 0x7F
+    }
+}
+
+private func matches(_ value: String, pattern: String) -> Bool {
+    value.range(of: pattern, options: .regularExpression) != nil
+}
+
+private let maximumRequestBodyBytes = 8 * 1024 * 1024
+private let maximumNativeRequestBytes = 12 * 1024 * 1024
+private let maximumResponseChunkBytes = 32 * 1024
+private let maximumHeaders = 128
+private let maximumHeaderBytes = 128 * 1024
+private let maximumHeaderValueBytes = 8 * 1024
+private let nativeConfigurationKeys = Set([
+    "baseURL", "applicationID", "environment", "identityProvider", "appVersion", "sdkVersion",
+    "contractVersion", "protocolVersion", "allowInsecureLoopback", "apple", "android",
+])
+private let nativeAppleConfigurationRequiredKeys = Set(["appAttestEnabled", "softwareKeyFallbackPolicy"])
+private let nativeAppleConfigurationKeys = nativeAppleConfigurationRequiredKeys.union(["storageNamespace"])
+private let nativeAndroidConfigurationRequiredKeys = Set(["keyPolicy"])
+private let nativeAndroidConfigurationKeys = nativeAndroidConfigurationRequiredKeys.union([
+    "playIntegrityCloudProjectNumber",
+])
+private let nativeComponentConfigurationKeys = Set([
+    "baseURL", "applicationID", "environment", "appVersion", "sdkVersion", "contractVersion",
+    "protocolVersion", "allowInsecureLoopback", "apple",
+])
+private let nativeComponentAppleConfigurationRequiredKeys = Set(["softwareKeyFallbackPolicy"])
+private let nativeComponentAppleConfigurationKeys = nativeComponentAppleConfigurationRequiredKeys.union([
+    "storageNamespace",
+])
+private let forbiddenMethods = Set(["CONNECT", "TRACE", "TRACK"])
+private let allowedDataPlanePaths = Set([
+    "/v1/responses",
+    "/v1/chat/completions",
+    "/v1/embeddings",
+    "/v1/messages",
+])
+private let opaqueDataPlaneMethods = Set(["GET", "POST", "PUT", "PATCH", "DELETE"])
+private let reactNativeDirectAttestationComponentKinds = Set(["action_extension", "sso_extension"])
+private let forbiddenRequestHeaders = Set([
+    "authorization", "proxy-authorization", "api-key", "api_key", "apikey", "x-api-key",
+    "openai-api-key", "openai_api_key", "x-openai-api-key", "anthropic-api-key", "anthropic_api_key",
+    "x-goog-api-key", "x-goog_api_key", "access_token", "auth_token", "x-auth-token", "cookie", "connection",
+    "content-length", "expect", "host", "key", "proxy-connection", "te", "trailer", "transfer-encoding",
+    "token", "upgrade", "x-amz-credential", "x-amz-security-token", "x-amz-signature", "x-goog-credential",
+    "x-goog-signature", "dpop", "dpop-nonce", "x-latchway-feature", "x-latchway-framework",
+    "x-latchway-framework-version", "x-latchway-protocol-version", "x-latchway-request-id", "x-latchway-sdk",
+    "x-latchway-sdk-version",
+])
+private let forbiddenCredentialQueryNames = forbiddenRequestHeaders.union([
+    "refresh_token", "identity_token", "private_key", "client_data_hash", "request_hash", "integrity_token",
+])
+private let forbiddenCredentialNameFragments = [
+    "authorization", "dpop", "apikey", "accesstoken", "authtoken", "refreshtoken", "identitytoken",
+    "integritytoken", "sessiontoken", "privatekey", "clientsecret", "credential", "attestationevidence",
+    "clientdatahash", "requesthash", "xamzsignature", "xgoogsignature",
+]
+private let safeResponseHeaders = Set([
+    "accept-ranges", "age", "cache-control", "content-encoding", "content-language", "content-length",
+    "content-range", "content-type", "date", "etag", "expires", "last-modified", "request-id", "retry-after",
+    "server-timing", "vary", "x-request-id", "x-latchway-request-id", "x-latchway-server-version",
+    "x-latchway-operation-id",
+])
 
 private struct NativeFailure {
     let code: String
@@ -416,11 +1118,55 @@ private struct NativeFailure {
     let retryable: Bool
 
     init(_ error: Error) {
-        if let error = error as? LatchwayError {
+        if let error = error as? LatchwayComponentError {
+            switch error {
+            case .containingAppSetupRequired:
+                code = "containing_app_setup_required"; message = "The containing application must prepare this component."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .componentNotProvisioned:
+                code = "component_not_provisioned"; message = "The component has not been provisioned."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .componentGrantExpired:
+                code = "component_delegation_expired"; message = "The component delegation has expired."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .componentRevoked:
+                code = "component_revoked"; message = "The component has been revoked."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .installationFamilyRevoked:
+                code = "installation_family_revoked"; message = "The installation family has been revoked."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .parentTrustExpired:
+                code = "component_parent_trust_expired"; message = "The component parent trust has expired."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .featureNotDelegated:
+                code = "component_feature_not_granted"; message = "The feature was not delegated to this component."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .keychainAccessGroupUnavailable:
+                code = "secure_state_unavailable"; message = "The component Keychain access group is unavailable."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .componentKeyUnavailable:
+                code = "key_unavailable"; message = "The component key is unavailable."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .identityChanged:
+                code = "identity_reauthentication_required"; message = "The application identity must be reauthenticated."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .directAttestationRequired:
+                code = "component_direct_attestation_required"; message = "Direct component attestation is required."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case .invalidConfiguration:
+                code = "invalid_configuration"; message = "The native component configuration is invalid."
+                requestID = nil; operationID = nil; status = nil; retryable = false
+            case let .latchway(underlying):
+                let failure = NativeFailure(underlying)
+                code = failure.code; message = failure.message
+                requestID = failure.requestID; operationID = failure.operationID
+                status = failure.status; retryable = failure.retryable
+            }
+        } else if let error = error as? LatchwayError {
             switch error {
             case let .server(problem):
                 code = problem.code.description
-                message = sanitize(problem.detail)
+                message = "The Latchway gateway rejected the request."
                 requestID = problem.requestID
                 operationID = problem.operationID
                 status = problem.status
@@ -466,8 +1212,12 @@ private struct NativeFailure {
     }
 }
 
-private func decodeStrict<T: Decodable>(_ type: T.Type, encoded: String) throws -> T {
-    guard let data = encoded.data(using: .utf8), data.count <= 65_536 else {
+private func decodeStrict<T: Decodable>(
+    _ type: T.Type,
+    encoded: String,
+    maximumBytes: Int = 65_536
+) throws -> T {
+    guard let data = encoded.data(using: .utf8), data.count <= maximumBytes else {
         throw LatchwayError.invalidRequest("native input is invalid")
     }
     do { return try JSONDecoder().decode(type, from: data) }
@@ -494,11 +1244,4 @@ private func iso8601(_ date: Date) -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter.string(from: date)
-}
-
-private func sanitize(_ value: String) -> String {
-    let bounded = String(value.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(512))
-    let markers = ["eyJ", "lwa_", "lws_", "refresh_token", "identity_token", "integrity_token"]
-    if markers.contains(where: { bounded.localizedCaseInsensitiveContains($0) }) { return "Sensitive detail redacted." }
-    return bounded.isEmpty ? "The Latchway native operation failed." : bounded
 }

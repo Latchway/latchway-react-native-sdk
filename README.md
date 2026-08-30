@@ -47,22 +47,70 @@ const response = await latchway.fetch("/v1/chat/completions", {
     messages: [{ role: "user", content: "Plan tomorrow" }],
   }),
 });
+
+// OpenAI-compatible clients, Vercel AI providers, and LangChain adapters can
+// receive a normal fetch function that is permanently scoped to one feature.
+const habitAssistantFetch = latchway.fetchFor("habit_assistant");
 ```
 
 `applicationID` is the generated application resource ID returned by the
 Admin API, not an app name, package/bundle identifier, or user-chosen slug.
 
-Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them, while `revokeCurrentInstallation()` is the explicit server and local secure-state destruction operation.
+Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them. `revokeCurrentInstallation()` removes only the current installation; `revokeCurrentInstallationFamily()` revokes the full wire-v2 family and retires the root native key and session state.
 
-Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. Bodyless `GET`, `HEAD`, and `OPTIONS` requests receive at most one pre-dispatch retry only when a `401 application/problem+json` body exactly matches the canonical `session_expired` or `dpop_nonce_required` problem definition and its request ID agrees with the response header. A nonce retry additionally requires one unambiguous bounded `DPoP-Nonce`; a session rejection carrying that header is not replayed. Requests with bodies are never cloned or replayed by the JavaScript wrapper.
+An independently executing iOS action or SSO extension whose containing
+app has already provisioned its component descriptor can perform the contract's
+component-scoped App Attest step-up without moving evidence through JavaScript:
+
+```ts
+import { createLatchwayComponentClient } from "@latchway/react-native";
+
+const component = {
+  definitionID: "action_extension",
+  kind: "action_extension",
+  keychainAccessGroup: "ABCDE12345.com.example.app.action-extension",
+  requestedFeatures: ["habit_assistant"],
+} as const;
+
+// Construct this only in the JavaScript runtime hosted by the signed .appex.
+// It is deliberately separate from the containing app's root client.
+const componentClient = createLatchwayComponentClient({
+  baseURL: "https://gateway.example.com",
+  applicationID: "app_01J00000000000000000000000",
+  environment: "production",
+  component,
+});
+
+await componentClient.establishDirectAttestation();
+const componentState = await componentClient.diagnostics();
+// componentState.trustSource may now be "delegated_direct_attested".
+```
+
+The access group must be fully resolved and present in both signed entitlement
+sets; build-setting expressions such as `$(AppIdentifierPrefix)` are rejected.
+Configuration fails unless the current process is an iOS `.appex`; the
+containing React Native application cannot use its root lease to attest an
+extension bundle. The component client has no identity callback or root API and
+selects the contract-owned `react_native_ios` platform. It creates the
+component-namespaced provider, challenge, App Attest evidence, exchange, and
+rotating component session inside the pinned iOS SDK. Only redacted component
+diagnostics return. Android v1 has delegated component sessions but no
+equivalent direct-attestation endpoint, so component configuration fails closed
+with `attestation_unsupported` there instead of imitating the iOS flow.
+
+Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. JavaScript never clones or replays an authenticated request; any bounded pre-dispatch retry is exclusively a native transport decision. Android installs the locked Latchway OkHttp interceptor, origin guard, and authenticator. iOS uses the locked feature transport, whose private redirect-rejecting URL session classifies at most 64 KiB of one canonical pre-dispatch rejection before its single safe retry.
+
+The fetch surface is intentionally bounded. It dispatches only to the configured origin. The structured paths `/v1/responses`, `/v1/chat/completions`, `/v1/embeddings`, and `/v1/messages` are POST-only. Opaque integrations may use GET, POST, PUT, PATCH, or DELETE only below `/proxy/{feature}/<safe-relative-path>` with an exact feature match and no query; empty segments, traversal, encoded separators, backslashes, and absolute-URL-shaped suffixes fail closed. Fragments and credential-shaped query names fail before identity acquisition. Request bodies are buffered to cross the New Architecture bridge and are limited to 8 MiB. Response bodies remain pull-streamed in chunks with cancellation and backpressure, while native retains the network task and credential-bearing request. Redirects are refused, and JavaScript receives only status, a strict safe-header allowlist, an opaque response handle, and response bytes.
+
+The compatible subset guarantees request method, headers, body, `AbortSignal`, response status/headers, and a pull-driven `ReadableStream`. It does not provide browser cookie or cache modes, service-worker behavior, redirect following, streaming request uploads, response trailers, or native `Response.url`/`redirected` metadata. Frameworks must expose a custom-fetch hook and use one of the allowed data-plane paths; browser-only framework features remain unsupported in React Native. A provider SDK's required placeholder authorization header is discarded, never forwarded. Consult the released framework compatibility registry before claiming support for a specific OpenAI, Vercel AI, or LangChain version.
 
 `errorFromResponse` is re-exported for explicit conversion of a returned problem response. An `operation_indeterminate` error includes a required canonical `operationID`; preserve it with the request ID and reconcile the operation before deciding whether to retry.
 
 ## Security boundary
 
-The only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of the native operation. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Authorization and DPoP headers cross back only as short-lived output needed for the JavaScript-owned fetch dispatch; diagnostics and errors never include them.
+The root client's only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of the native operation. The separate component client has no identity callback and cannot acquire the containing app's native root lease. Its component JSON contains only definition ID, kind, fully resolved Keychain access group, and requested feature IDs. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Native code attaches Authorization and DPoP, sends the request, and owns the response stream. Authorization, DPoP, access tokens, refresh tokens, private keys, attestation evidence, and reusable credentials never return to JavaScript.
 
-Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, and Latchway protocol headers are removed before authorization. Provider-credential query names are rejected, including percent-encoded and case-varied names. Only the configured gateway origin can be authorized, redirects are rejected, and insecure HTTP is limited to explicitly enabled loopback conformance.
+Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, transport-owned headers, and Latchway protocol headers are removed before the request crosses the bridge. This permits SDKs that require a placeholder API-key option without forwarding that placeholder or a real provider credential. Provider-credential query names are rejected, including percent-encoded and case-varied names. Insecure HTTP is limited to explicitly enabled loopback conformance.
 
 See [native installation](docs/native-installation.md), [security details](docs/security.md), and [architecture](docs/architecture.md).
 Release ordering and immutable publication gates are in [releasing](docs/releasing.md).
@@ -90,16 +138,19 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-The version 1 source candidate consumes released contract checkpoint `0.5.1`,
-wire protocol `1`, core commit `2f5e5e67c824e270431f1232cc6dc2824848e380`, and
+The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
+current wire protocol `2` (with wire `1` retained in the core compatibility
+window), core commit `a62b0f6aa2328604101c1073c56f5ecb3bed3618`, and
 bundle SHA-256
-`52ebacd1e38c522b89bb14a1f34782176be32cdf91d22b7ab962003dbca2d754`.
+`36aa3c4786e60f2cdbbc3d0cd2f65bffe894a099479517b2e1faa01361c74b00`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and
 `contract.lock`, so later compatible releases do not require rewriting CI.
 `pnpm verify:contracts` checks the active lock and vendored canonical fixtures
-byte-for-byte. The promotion-dispatched release workflow still refuses
+byte-for-byte, including the installation-family and component-attestation
+binding v2 fixtures. The
+promotion-dispatched release workflow still refuses
 publication until exact native registry, provenance, physical-device, and
 immutable-release evidence passes.
 

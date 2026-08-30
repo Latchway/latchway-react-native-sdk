@@ -15,28 +15,30 @@ env:
   NODE_VERSION: 24.19.0
   PNPM_VERSION: 10.15.0
   NPM_VERSION: 11.6.2
+  NPM_CLI_ARCHIVE: npm-11.6.2.tgz
+  NPM_CLI_BYTES: "2663834"
+  NPM_CLI_ENTRY_COUNT: "2133"
+  NPM_CLI_INTEGRITY: sha512-7iKzNfy8lWYs3zq4oFPa8EXZz5xt9gQNKJZau3B1ErLBb6bF7sBJ00x09485DOvRT2l5Gerbl3VlZNT57MxJVA==
+  NPM_CLI_SHA256: 585f95094ee5cb2788ee11d90f2a518a7c9ef6e083fa141d0b63ca3383675a20
+  NPM_CLI_SHA512: ee22b335fcbc95662cdf3ab8a053daf045d9cf9c6df6040d28965abb707512b2c16fa6c5eec049d34c74f78f390cebd14f697919eadb97756564d4f9eccc4954
+  NPM_CLI_UNPACKED_BYTES: "11785613"
+  NPM_CLI_URL: https://registry.npmjs.org/npm/-/npm-11.6.2.tgz
+  NPM_CLI_VERSION: 11.6.2
 
 jobs:
-  promote:
-    name: Verify core promotion and create SDK tag
+  authorize-promotion:
+    name: Authenticate core promotion without candidate source
     if: github.repository == 'Latchway/latchway-react-native-sdk'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       attestations: read
-      contents: write
+      contents: read
     outputs:
-      commit: ${{ steps.promotion.outputs.release_commit }}
-      tag: ${{ steps.promotion.outputs.release_tag }}
-      version: ${{ steps.promotion.outputs.release_version }}
+      commit: ${{ steps.coordinates.outputs.commit }}
     steps:
-      - name: Check out exact promoted React Native source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event.client_payload.repository.commit }}
-          fetch-depth: 0
-          persist-credentials: false
       - name: Validate dispatch envelope before network access
+        id: coordinates
         shell: bash
         env:
           SDK_ID: ${{ github.event.client_payload.repository.id }}
@@ -58,7 +60,18 @@ jobs:
           [[ "$OCI_IMAGE_DIGEST" =~ ^ghcr\.io/latchway/latchway@sha256:[0-9a-f]{64}$ ]]
           test "$REPORT_URL" = "https://github.com/Latchway/latchway/releases/download/$CORE_TAG/latchway-cross-repository-promotion.json"
           test "$GITHUB_SHA" = "$SDK_COMMIT"
-          test "$(git rev-parse --verify HEAD)" = "$SDK_COMMIT"
+          printf 'commit=%s\n' "$SDK_COMMIT" >> "$GITHUB_OUTPUT"
+      - name: Require fixed GitHub attestation tooling without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_line=$(gh version | head -n 1)
+          [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
+          major=${BASH_REMATCH[1]}
+          minor=${BASH_REMATCH[2]}
+          patch=${BASH_REMATCH[3]}
+          (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
+          gh attestation verify --help >/dev/null
       - name: Download and hash the exact core promotion report
         shell: bash
         env:
@@ -81,18 +94,61 @@ jobs:
           rm -f -- "$auth_config"
           trap - EXIT
           printf '%s  %s\n' "$REPORT_SHA256" "$report" | sha256sum --check --strict
-      - name: Verify the core workflow artifact attestation
+      - name: Verify the core workflow artifact attestation with read-only credentials
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
         run: |
-          python3 scripts/require-gh-version.py
+          set -euo pipefail
           gh attestation verify "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
             --repo Latchway/latchway \
             --signer-workflow Latchway/latchway/.github/workflows/cross-repository-conformance.yml \
             --source-ref refs/heads/main \
             --deny-self-hosted-runners
-      - name: Validate exact report, dispatch, and local source bindings
+      - name: Transfer authenticated promotion report to credential-free validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-core-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-cross-repository-promotion.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify-promotion:
+    name: Validate candidate source against authenticated promotion
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: authorize-promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      android_commit: ${{ steps.lock.outputs.android_commit }}
+      android_version: ${{ steps.lock.outputs.android_version }}
+      commit: ${{ steps.promotion.outputs.release_commit }}
+      contract_version: ${{ steps.lock.outputs.contract_version }}
+      core_commit: ${{ steps.lock.outputs.core_commit }}
+      core_tag: ${{ steps.promotion.outputs.core_tag }}
+      ios_commit: ${{ steps.lock.outputs.ios_commit }}
+      ios_version: ${{ steps.lock.outputs.ios_version }}
+      javascript_commit: ${{ steps.lock.outputs.javascript_commit }}
+      javascript_version: ${{ steps.lock.outputs.javascript_version }}
+      react_native_version: ${{ steps.lock.outputs.react_native_version }}
+      report_sha256: ${{ steps.promotion.outputs.report_sha256 }}
+      tag: ${{ steps.promotion.outputs.release_tag }}
+      version: ${{ steps.promotion.outputs.release_version }}
+    steps:
+      - name: Check out exact promoted React Native SDK source without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.authorize-promotion.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download authenticated core promotion report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdk-core-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sdk-core-promotion
+      - name: Validate exact report, dispatch, and local source bindings without credentials
         id: promotion
         shell: bash
         env:
@@ -104,8 +160,10 @@ jobs:
           REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
           OCI_IMAGE_DIGEST: ${{ github.event.client_payload.oci_image_digest }}
         run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$SDK_COMMIT"
           python3 scripts/verify-release-promotion.py \
-            --report "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
+            --report "$RUNNER_TEMP/sdk-core-promotion/latchway-cross-repository-promotion.json" \
             --report-url "$REPORT_URL" \
             --report-sha256 "$REPORT_SHA256" \
             --repository-id react_native \
@@ -116,72 +174,457 @@ jobs:
             --core-tag "$CORE_TAG" \
             --oci-image-digest "$OCI_IMAGE_DIGEST" \
             --github-output "$GITHUB_OUTPUT"
-      - name: Create or verify evidence-gated annotated SDK tag
+      - name: Export bounded immutable dependency coordinates without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=release-compatibility.json
+          emit_commit() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit_version() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit_commit android_commit .android.source_commit
+          emit_version android_version .android.version
+          emit_version contract_version .contract.version
+          emit_commit core_commit .contract.core_commit
+          emit_commit ios_commit .ios.source_commit
+          emit_version ios_version .ios.version
+          emit_commit javascript_commit .javascript.source_commit
+          emit_version javascript_version .javascript.version
+          emit_version react_native_version .react_native.version
+          test "$(jq --raw-output '.react_native.package' "$lock")" = '@latchway/react-native'
+          test "$(jq --raw-output '.javascript.package' "$lock")" = '@latchway/client'
+          test "$(jq --raw-output '.ios.pod' "$lock")" = 'Latchway/AppAttest'
+          test "$(jq --raw-output '.android.group' "$lock")" = 'dev.latchway'
+          test "$(jq --raw-output '.javascript.repository' "$lock")" = 'https://github.com/Latchway/latchway-js.git'
+          test "$(jq --raw-output '.ios.repository' "$lock")" = 'https://github.com/Latchway/latchway-ios-sdk.git'
+          test "$(jq --raw-output '.android.repository' "$lock")" = 'https://github.com/Latchway/latchway-android.git'
+          test "$(jq --raw-output '.contract.repository' "$lock")" = 'https://github.com/Latchway/latchway.git'
+
+  promote:
+    name: Create or verify evidence-gated SDK tag without checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: verify-promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ needs.verify-promotion.outputs.commit }}
+      tag: ${{ needs.verify-promotion.outputs.tag }}
+      version: ${{ needs.verify-promotion.outputs.version }}
+      core_tag: ${{ needs.verify-promotion.outputs.core_tag }}
+      report_sha256: ${{ needs.verify-promotion.outputs.report_sha256 }}
+    steps:
+      - name: Create or verify evidence-gated annotated SDK tag using fixed API calls
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GIT_TAG_READ_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ steps.promotion.outputs.release_commit }}
-          RELEASE_TAG: ${{ steps.promotion.outputs.release_tag }}
-          CORE_TAG: ${{ steps.promotion.outputs.core_tag }}
-          REPORT_SHA256: ${{ steps.promotion.outputs.report_sha256 }}
+          RELEASE_COMMIT: ${{ needs.verify-promotion.outputs.commit }}
+          RELEASE_TAG: ${{ needs.verify-promotion.outputs.tag }}
+          CORE_TAG: ${{ needs.verify-promotion.outputs.core_tag }}
+          REPORT_SHA256: ${{ needs.verify-promotion.outputs.report_sha256 }}
         run: |
           set -euo pipefail
-          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
-          umask 077
-          cat > "$git_askpass" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "${1:-}" in
-            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
-            *github.com*Password*|*Password*github.com*)
-              test -n "${GIT_TAG_READ_TOKEN:-}"
-              printf '%s\n' "$GIT_TAG_READ_TOKEN"
-              ;;
-            *) exit 1 ;;
-          esac
-          EOF
-          chmod 700 "$git_askpass"
-          trap 'rm -f -- "$git_askpass"' EXIT
-          git_with_auth() {
-            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
-          }
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           message="React Native SDK $RELEASE_TAG
 
           Core promotion: $CORE_TAG
           Promotion evidence SHA-256: $REPORT_SHA256"
-          remote=$(git_with_auth ls-remote --tags origin "refs/tags/$RELEASE_TAG")
-          if [[ -n "$remote" ]]; then
-            tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)
-            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.type)" = commit
-            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .object.sha)" = "$RELEASE_COMMIT"
-            test "$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq .message)" = "$message"
-          else
+          set +e
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/sdk-tag-ref.json" 2> "$RUNNER_TEMP/sdk-tag-error.txt"
+          lookup_status=$?
+          set -e
+          if [[ "$lookup_status" -ne 0 ]]; then
+            test "$lookup_status" -eq 1
+            grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/sdk-tag-error.txt"
             jq --null-input --arg tag "$RELEASE_TAG" --arg message "$message" \
               --arg object "$RELEASE_COMMIT" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               '{tag: $tag, message: $message, object: $object, type: "commit", tagger: {name: "github-actions[bot]", email: "41898282+github-actions[bot]@users.noreply.github.com", date: $date}}' \
-              > "$RUNNER_TEMP/sdk-tag-object.json"
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input "$RUNNER_TEMP/sdk-tag-object.json" > "$RUNNER_TEMP/sdk-tag-result.json"
-            tag_object=$(jq --raw-output .sha "$RUNNER_TEMP/sdk-tag-result.json")
+              > "$RUNNER_TEMP/sdk-tag-object-create.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+              --input "$RUNNER_TEMP/sdk-tag-object-create.json" > "$RUNNER_TEMP/sdk-tag-result.json"
+            tag_object=$(jq --raw-output '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              "$RUNNER_TEMP/sdk-tag-result.json")
             jq --null-input --arg ref "refs/tags/$RELEASE_TAG" --arg sha "$tag_object" \
-              '{ref: $ref, sha: $sha}' > "$RUNNER_TEMP/sdk-tag-ref.json"
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input "$RUNNER_TEMP/sdk-tag-ref.json" >/dev/null
+              '{ref: $ref, sha: $sha}' > "$RUNNER_TEMP/sdk-tag-ref-create.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              --input "$RUNNER_TEMP/sdk-tag-ref-create.json" >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/sdk-tag-ref.json"
           fi
-          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          rm -f -- "$git_askpass"
-          trap - EXIT
-          unset GIT_TAG_READ_TOKEN
-          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
-          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
+          tag_object=$(jq --raw-output '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$RUNNER_TEMP/sdk-tag-ref.json")
+          test "$(jq --raw-output .object.type "$RUNNER_TEMP/sdk-tag-ref.json")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" > "$RUNNER_TEMP/sdk-tag-object.json"
+          jq --exit-status --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" --arg message "$message" \
+            '.tag == $tag and .object.type == "commit" and .object.sha == $commit and .message == $message' \
+            "$RUNNER_TEMP/sdk-tag-object.json" >/dev/null
+
+  locked-sources:
+    name: Fetch immutable sibling sources without candidate checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: verify-promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: private-sibling-read
+    permissions:
+      contents: read
+    steps:
+      - name: Validate locked source coordinates before credentials
+        shell: bash
+        env:
+          ANDROID_COMMIT: ${{ needs.verify-promotion.outputs.android_commit }}
+          CORE_COMMIT: ${{ needs.verify-promotion.outputs.core_commit }}
+          IOS_COMMIT: ${{ needs.verify-promotion.outputs.ios_commit }}
+          JAVASCRIPT_COMMIT: ${{ needs.verify-promotion.outputs.javascript_commit }}
+        run: |
+          set -euo pipefail
+          for commit in "$ANDROID_COMMIT" "$CORE_COMMIT" "$IOS_COMMIT" "$JAVASCRIPT_COMMIT"; do
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          done
+      - name: Check out locked JavaScript SDK without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-js
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          ref: ${{ needs.verify-promotion.outputs.javascript_commit }}
+          path: latchway-js
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out locked iOS SDK without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-ios-sdk
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          ref: ${{ needs.verify-promotion.outputs.ios_commit }}
+          path: latchway-ios-sdk
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out locked Android SDK without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-android
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          ref: ${{ needs.verify-promotion.outputs.android_commit }}
+          path: latchway-android
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out locked core contract without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway
+          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          ref: ${{ needs.verify-promotion.outputs.core_commit }}
+          path: latchway
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact checked-out commits without executing source
+        shell: bash
+        env:
+          ANDROID_COMMIT: ${{ needs.verify-promotion.outputs.android_commit }}
+          CORE_COMMIT: ${{ needs.verify-promotion.outputs.core_commit }}
+          IOS_COMMIT: ${{ needs.verify-promotion.outputs.ios_commit }}
+          JAVASCRIPT_COMMIT: ${{ needs.verify-promotion.outputs.javascript_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"
+          test "$(git -C latchway-ios-sdk rev-parse --verify HEAD)" = "$IOS_COMMIT"
+          test "$(git -C latchway-android rev-parse --verify HEAD)" = "$ANDROID_COMMIT"
+          test "$(git -C latchway rev-parse --verify HEAD)" = "$CORE_COMMIT"
+          for repository in latchway-js latchway-ios-sdk latchway-android latchway; do
+            test -z "$(git -C "$repository" config --local --get-all http.https://github.com/.extraheader || true)"
+          done
+      - name: Create transport-safe exact Git bundles without executing source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C latchway-js bundle create "$RUNNER_TEMP/locked-latchway-js.bundle" HEAD
+          git -C latchway-ios-sdk bundle create "$RUNNER_TEMP/locked-latchway-ios.bundle" HEAD
+          git -C latchway-android bundle create "$RUNNER_TEMP/locked-latchway-android.bundle" HEAD
+          git -C latchway bundle create "$RUNNER_TEMP/locked-latchway-core.bundle" HEAD
+          git bundle verify "$RUNNER_TEMP/locked-latchway-js.bundle"
+          git bundle verify "$RUNNER_TEMP/locked-latchway-ios.bundle"
+          git bundle verify "$RUNNER_TEMP/locked-latchway-android.bundle"
+          git bundle verify "$RUNNER_TEMP/locked-latchway-core.bundle"
+      - name: Transfer locked JavaScript source to credential-free jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: locked-latchway-js-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-js.bundle
+          if-no-files-found: error
+          retention-days: 1
+      - name: Transfer locked iOS source to credential-free jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: locked-latchway-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-ios.bundle
+          if-no-files-found: error
+          retention-days: 1
+      - name: Transfer locked Android source to credential-free jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: locked-latchway-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-android.bundle
+          if-no-files-found: error
+          retention-days: 1
+      - name: Transfer locked core source to credential-free jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: locked-latchway-core-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-core.bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  published-dependencies:
+    name: Authenticate published sibling inputs without candidate checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: verify-promotion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: private-sibling-read
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - name: Require fixed GitHub release tooling without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_line=$(gh version | head -n 1)
+          [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
+          major=${BASH_REMATCH[1]}
+          minor=${BASH_REMATCH[2]}
+          patch=${BASH_REMATCH[3]}
+          (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
+          gh release verify --help | grep --fixed-strings -- '--format' >/dev/null
+          gh release verify-asset --help | grep --fixed-strings -- '--format' >/dev/null
+          gh attestation verify --help >/dev/null
+      - name: Download and authenticate exact private release inputs with fixed API calls
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          ANDROID_COMMIT: ${{ needs.verify-promotion.outputs.android_commit }}
+          ANDROID_VERSION: ${{ needs.verify-promotion.outputs.android_version }}
+          CORE_COMMIT: ${{ needs.verify-promotion.outputs.core_commit }}
+          CORE_TAG: ${{ needs.verify-promotion.outputs.core_tag }}
+          IOS_COMMIT: ${{ needs.verify-promotion.outputs.ios_commit }}
+          IOS_VERSION: ${{ needs.verify-promotion.outputs.ios_version }}
+          JAVASCRIPT_COMMIT: ${{ needs.verify-promotion.outputs.javascript_commit }}
+          JAVASCRIPT_VERSION: ${{ needs.verify-promotion.outputs.javascript_version }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$GH_TOKEN"
+          for commit in "$ANDROID_COMMIT" "$CORE_COMMIT" "$IOS_COMMIT" "$JAVASCRIPT_COMMIT"; do
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          done
+          for version in "$ANDROID_VERSION" "$IOS_VERSION" "$JAVASCRIPT_VERSION"; do
+            [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          done
+          [[ "$CORE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+
+          root="$RUNNER_TEMP/published-dependency-inputs"
+          mkdir -m 700 "$root"
+
+          retry_to_file() {
+            local output=$1
+            shift
+            local temporary_output="${output}.partial"
+            for attempt in $(seq 1 180); do
+              if "$@" > "$temporary_output"; then
+                test -s "$temporary_output"
+                mv -- "$temporary_output" "$output"
+                return 0
+              fi
+              rm -f -- "$temporary_output"
+              if [[ "$attempt" -eq 180 ]]; then
+                echo "Authenticated dependency input did not become available within 90 minutes." >&2
+                return 1
+              fi
+              sleep 30
+            done
+          }
+
+          authenticate_tag() {
+            local repository=$1 tag=$2 commit=$3 directory=$4
+            retry_to_file "$directory/tag-ref.json" \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/git/ref/tags/$tag"
+            local tag_object
+            tag_object=$(jq --exit-status --raw-output \
+              '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              "$directory/tag-ref.json")
+            test "$(jq --raw-output .object.type "$directory/tag-ref.json")" = tag
+            retry_to_file "$directory/tag-object.json" \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/git/tags/$tag_object"
+            jq --exit-status --arg tag "$tag" --arg commit "$commit" --arg object "$tag_object" '
+              .sha == $object and .tag == $tag and .object.type == "commit" and .object.sha == $commit
+            ' "$directory/tag-object.json" >/dev/null
+          }
+
+          requires_build_attestation() {
+            local kind=$1 name=$2
+            if [[ "$kind" == android ]]; then return 0; fi
+            if [[ "$kind" == ios ]]; then [[ "$name" != *.tar.gz.sha256 ]]; return; fi
+            case "$name" in
+              latchway-client-*.tgz|build-reproducibility.json|package-evidence.json|post-publish-evidence.json|\
+              npm-registry-version.json|npm-registry-view.json|npm-attestations.json|\
+              npm-audit-signatures.json|npm-registry-evidence-manifest.json|npm-release-adoption-*.json)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          authenticate_release() {
+            local kind=$1 repository=$2 tag=$3 commit=$4
+            shift 4
+            local directory="$root/$kind"
+            mkdir -m 700 "$directory" "$directory/assets" "$directory/asset-attestations" \
+              "$directory/build-attestations"
+            authenticate_tag "$repository" "$tag" "$commit" "$directory"
+            retry_to_file "$directory/release.json" \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/releases/tags/$tag"
+            local fixed_json
+            fixed_json=$(printf '%s\n' "$@" | sort | jq --raw-input --slurp 'split("\n")[:-1]')
+            test "$(jq --argjson fixed "$fixed_json" '$fixed | length == ($fixed | unique | length)' \
+              "$directory/release.json")" = true
+            jq --exit-status --arg tag "$tag" --arg kind "$kind" --argjson fixed "$fixed_json" '
+              . as $release |
+              .tag_name == $tag and .draft == false and .immutable == true and
+              ([.assets[].name] | length) == ([.assets[].name] | unique | length) and
+              all($fixed[] as $name; ($release.assets | map(.name) | index($name)) != null) and
+              if $kind == "javascript" then
+                all($release.assets[].name as $name;
+                  ($fixed | index($name)) != null or
+                  ($name | test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))) and
+                ([$release.assets[].name |
+                  select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length) >= 1
+              else
+                ([$release.assets[].name] | sort) == ($fixed | sort)
+              end
+            ' "$directory/release.json" >/dev/null
+
+            while IFS=$'\t' read -r asset_id name expected_size expected_digest; do
+              [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+              [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
+              [[ -z "$expected_digest" || "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              local asset="$directory/assets/$name"
+              gh api --method GET \
+                -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/releases/assets/$asset_id" > "$asset"
+              test -s "$asset"
+              test "$(wc -c < "$asset" | tr -d ' ')" = "$expected_size"
+              if [[ -n "$expected_digest" ]]; then
+                test "sha256:$(sha256sum "$asset" | cut -d ' ' -f 1)" = "$expected_digest"
+              fi
+            done < <(jq --raw-output '.assets[] |
+              [.id, .name, .size, (.digest // "")] | @tsv' "$directory/release.json")
+
+            retry_to_file "$directory/release-attestation.json" \
+              gh release verify "$tag" --repo "$repository" --format json
+            while IFS= read -r name; do
+              local asset="$directory/assets/$name"
+              retry_to_file "$directory/asset-attestations/$name.json" \
+                gh release verify-asset "$tag" "$asset" --repo "$repository" --format json
+              if requires_build_attestation "$kind" "$name"; then
+                retry_to_file "$directory/build-attestations/$name.gh-output" \
+                  gh attestation verify "$asset" \
+                    --repo "$repository" \
+                    --signer-workflow "$repository/.github/workflows/release.yml" \
+                    --source-ref refs/heads/main \
+                    --source-digest "$commit" \
+                    --deny-self-hosted-runners
+                jq --null-input --arg repository "$repository" --arg asset "$name" \
+                  --arg source_commit "$commit" '{
+                    schema_version: 1,
+                    kind: "latchway_authenticated_build_attestation",
+                    repository: $repository,
+                    asset: $asset,
+                    source_commit: $source_commit,
+                    status: "verified"
+                  }' > "$directory/build-attestations/$name.json"
+              fi
+            done < <(jq --raw-output '.assets[].name' "$directory/release.json")
+          }
+
+          javascript_assets=(
+            "latchway-client-$JAVASCRIPT_VERSION.tgz"
+            SHA256SUMS
+            build-reproducibility.json
+            contract-evidence.json
+            package-evidence.json
+            post-publish-evidence.json
+            publish-input-evidence.json
+            release-candidate-evidence.json
+            tag-evidence.json
+            npm-registry-version.json
+            npm-registry-view.json
+            npm-attestations.json
+            npm-audit-signatures.json
+            npm-registry-evidence-manifest.json
+          )
+          ios_assets=(
+            "latchway-ios-sdk-$IOS_VERSION.tar.gz"
+            "latchway-ios-sdk-$IOS_VERSION.tar.gz.sha256"
+            cocoapods-published-podspec.json
+            cocoapods-reviewed-podspec.json
+            cocoapods-release-evidence.json
+            cocoapods-release-evidence.SHA256SUMS
+          )
+          android_assets=(
+            "latchway-android-$ANDROID_VERSION-maven-repository.zip"
+            "latchway-android-$ANDROID_VERSION-central-portal.zip"
+            SHA256SUMS
+            github-release-tag-binding.json
+            latchway-maven-signing-public-key.asc
+            maven-central-upload-intent.json
+            maven-central-deployment.json
+            maven-central-deployment-status.json
+            maven-central-release-evidence.json
+          )
+          authenticate_release javascript Latchway/latchway-js \
+            "v$JAVASCRIPT_VERSION" "$JAVASCRIPT_COMMIT" "${javascript_assets[@]}"
+          authenticate_release ios Latchway/latchway-ios-sdk \
+            "v$IOS_VERSION" "$IOS_COMMIT" "${ios_assets[@]}"
+          authenticate_release android Latchway/latchway-android \
+            "v$ANDROID_VERSION" "$ANDROID_COMMIT" "${android_assets[@]}"
+          mkdir -m 700 "$root/core"
+          authenticate_tag Latchway/latchway "$CORE_TAG" "$CORE_COMMIT" "$root/core"
+      - name: Transfer authenticated inputs to credential-free validation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: authenticated-published-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-dependency-inputs
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   verify:
     name: Verify immutable release inputs
     if: github.repository == 'Latchway/latchway-react-native-sdk'
-    needs: promote
+    needs: [promote, locked-sources, published-dependencies]
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
-      attestations: read
       contents: read
     env:
       RELEASE_TAG: ${{ needs.promote.outputs.tag }}
@@ -193,73 +636,79 @@ jobs:
           path: latchway-react-native-sdk
           fetch-depth: 0
           persist-credentials: false
-      - name: Fetch promoted annotated tag
-        env:
-          GIT_TAG_READ_TOKEN: ${{ github.token }}
+      - name: Validate promoted annotated tag without credentials
         run: |
           set -euo pipefail
-          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
-          umask 077
-          cat > "$git_askpass" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "${1:-}" in
-            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
-            *github.com*Password*|*Password*github.com*)
-              test -n "${GIT_TAG_READ_TOKEN:-}"
-              printf '%s\n' "$GIT_TAG_READ_TOKEN"
-              ;;
-            *) exit 1 ;;
-          esac
-          EOF
-          chmod 700 "$git_askpass"
-          trap 'rm -f -- "$git_askpass"' EXIT
-          git_with_auth() {
-            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
-          }
-          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          rm -f -- "$git_askpass"
-          trap - EXIT
-          unset GIT_TAG_READ_TOKEN
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "${{ needs.promote.outputs.commit }}"
         working-directory: latchway-react-native-sdk
       - name: Read immutable compatibility lock
         id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=release-compatibility.json
+          emit() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^[0-9A-Za-z@./_-]+$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit android_commit .android.source_commit
+          emit android_build_tools_version .android.build_tools_version
+          emit android_compile_sdk '.android.compile_sdk | tostring'
+          emit android_ndk_version .android.ndk_version
+          emit android_sdk_platform_version .android.sdk_platform_version
+          emit android_version .android.version
+          emit contract_version .contract.version
+          emit core_commit .contract.core_commit
+          emit ios_commit .ios.source_commit
+          emit ios_version .ios.version
+          emit javascript_commit .javascript.source_commit
+          emit javascript_version .javascript.version
+          emit react_native_version .react_native.version
+          [[ "$(jq --raw-output .android.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .ios.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .javascript.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .contract.core_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
         working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download authenticated locked JavaScript source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
-      - name: Check out locked iOS SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+          name: locked-latchway-js-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-source-bundles
+      - name: Download authenticated locked iOS source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-ios-sdk
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.ios_commit }}
-          path: latchway-ios-sdk
-          persist-credentials: false
-      - name: Check out locked Android SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+          name: locked-latchway-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-source-bundles
+      - name: Download authenticated locked Android source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-android
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.android_commit }}
-          path: latchway-android
-          persist-credentials: false
-      - name: Check out locked core contract
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+          name: locked-latchway-android-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-source-bundles
+      - name: Download authenticated locked core source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.core_commit }}
-          path: latchway
-          persist-credentials: false
+          name: locked-latchway-core-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-source-bundles
+      - name: Download authenticated published dependency inputs without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: authenticated-published-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-dependency-inputs
+      - name: Materialize authenticated source bundles without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-local "$RUNNER_TEMP/locked-source-bundles/locked-latchway-js.bundle" latchway-js
+          git clone --no-local "$RUNNER_TEMP/locked-source-bundles/locked-latchway-ios.bundle" latchway-ios-sdk
+          git clone --no-local "$RUNNER_TEMP/locked-source-bundles/locked-latchway-android.bundle" latchway-android
+          git clone --no-local "$RUNNER_TEMP/locked-source-bundles/locked-latchway-core.bundle" latchway
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "${{ steps.lock.outputs.javascript_commit }}"
+          test "$(git -C latchway-ios-sdk rev-parse --verify HEAD)" = "${{ steps.lock.outputs.ios_commit }}"
+          test "$(git -C latchway-android rev-parse --verify HEAD)" = "${{ steps.lock.outputs.android_commit }}"
+          test "$(git -C latchway rev-parse --verify HEAD)" = "${{ steps.lock.outputs.core_commit }}"
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -280,42 +729,26 @@ jobs:
           pnpm release:preflight -- "$RELEASE_TAG"
           pnpm verify:compatibility --sources
         working-directory: latchway-react-native-sdk
-      - name: Wait for verified locked public SDK releases
+      - name: Validate authenticated release inputs and wait for exact public registry bytes
         env:
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ANDROID_VERSION: ${{ steps.lock.outputs.android_version }}
-          IOS_VERSION: ${{ steps.lock.outputs.ios_version }}
-          LATCHWAY_CENTRAL_VERIFY_ATTEMPTS: 180
-          LATCHWAY_CENTRAL_VERIFY_DELAY_SECONDS: 30
-          LATCHWAY_COCOAPODS_VERIFY_ATTEMPTS: 180
-          LATCHWAY_COCOAPODS_VERIFY_DELAY_SECONDS: 30
+          LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS: ${{ runner.temp }}/published-dependency-inputs
           LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/published-dependency-evidence.json
         run: |
-          wait_for_coordinates() {
-            for attempt in $(seq 1 180); do
-              if node scripts/verify-published-dependencies.mjs --all; then
-                return 0
-              fi
-              if [[ "$attempt" -eq 180 ]]; then
-                echo "Locked SDK coordinates did not become verifiable within 90 minutes." >&2
-                return 1
-              fi
-              sleep 30
-            done
-          }
-
-          wait_for_coordinates &
-          coordinates_pid=$!
-          ../latchway-ios-sdk/scripts/verify-cocoapods-release.sh "$IOS_VERSION" &
-          ios_pid=$!
-          ../latchway-android/scripts/verify-central-release.sh "$ANDROID_VERSION" &
-          android_pid=$!
-
-          status=0
-          wait "$coordinates_pid" || status=1
-          wait "$ios_pid" || status=1
-          wait "$android_pid" || status=1
-          test "$status" -eq 0
+          set -euo pipefail
+          test -z "${GH_TOKEN:-}"
+          test -z "${GITHUB_TOKEN:-}"
+          for attempt in $(seq 1 180); do
+            rm -f -- "$LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE"
+            if node scripts/verify-published-dependencies.mjs --all; then
+              test -s "$LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE"
+              exit 0
+            fi
+            if [[ "$attempt" -eq 180 ]]; then
+              echo "Locked public SDK bytes did not become verifiable within 90 minutes." >&2
+              exit 1
+            fi
+            sleep 30
+          done
         working-directory: latchway-react-native-sdk
       - name: Build and verify immutable core contract bundle
         run: |
@@ -360,16 +793,44 @@ jobs:
           persist-credentials: false
       - name: Read immutable compatibility lock
         id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=release-compatibility.json
+          emit() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^[0-9A-Za-z@./_-]+$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit android_commit .android.source_commit
+          emit android_build_tools_version .android.build_tools_version
+          emit android_compile_sdk '.android.compile_sdk | tostring'
+          emit android_ndk_version .android.ndk_version
+          emit android_sdk_platform_version .android.sdk_platform_version
+          emit android_version .android.version
+          emit contract_version .contract.version
+          emit core_commit .contract.core_commit
+          emit ios_commit .ios.source_commit
+          emit ios_version .ios.version
+          emit javascript_commit .javascript.source_commit
+          emit javascript_version .javascript.version
+          emit react_native_version .react_native.version
+          [[ "$(jq --raw-output .android.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .ios.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .javascript.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .contract.core_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
         working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download authenticated locked JavaScript source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
+          name: locked-latchway-js-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-js
+      - name: Materialize authenticated JavaScript source without credentials
+        run: |
+          set -euo pipefail
+          git clone --no-local "$RUNNER_TEMP/locked-latchway-js/locked-latchway-js.bundle" latchway-js
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "${{ steps.lock.outputs.javascript_commit }}"
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -413,16 +874,44 @@ jobs:
           persist-credentials: false
       - name: Read immutable compatibility lock
         id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=release-compatibility.json
+          emit() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^[0-9A-Za-z@./_-]+$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit android_commit .android.source_commit
+          emit android_build_tools_version .android.build_tools_version
+          emit android_compile_sdk '.android.compile_sdk | tostring'
+          emit android_ndk_version .android.ndk_version
+          emit android_sdk_platform_version .android.sdk_platform_version
+          emit android_version .android.version
+          emit contract_version .contract.version
+          emit core_commit .contract.core_commit
+          emit ios_commit .ios.source_commit
+          emit ios_version .ios.version
+          emit javascript_commit .javascript.source_commit
+          emit javascript_version .javascript.version
+          emit react_native_version .react_native.version
+          [[ "$(jq --raw-output .android.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .ios.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .javascript.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .contract.core_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
         working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download authenticated locked JavaScript source without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
+          name: locked-latchway-js-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-latchway-js
+      - name: Materialize authenticated JavaScript source without credentials
+        run: |
+          set -euo pipefail
+          git clone --no-local "$RUNNER_TEMP/locked-latchway-js/locked-latchway-js.bundle" latchway-js
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "${{ steps.lock.outputs.javascript_commit }}"
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -452,18 +941,350 @@ jobs:
           build
         working-directory: latchway-react-native-sdk/example/ios
 
+  trusted-npm-cli:
+    name: Prepare exact trusted-publishing npm CLI without credentials
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
+    steps:
+      - name: Download and authenticate npm CLI without lifecycle scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          test "$NPM_CONFIG_IGNORE_SCRIPTS" = true
+          test "$NPM_CLI_VERSION" = "$NPM_VERSION"
+          test "$NPM_CLI_ARCHIVE" = "npm-$NPM_CLI_VERSION.tgz"
+          test "$NPM_CLI_URL" = "https://registry.npmjs.org/npm/-/npm-$NPM_CLI_VERSION.tgz"
+          [[ "$NPM_CLI_BYTES" =~ ^[1-9][0-9]{0,7}$ ]]
+          [[ "$NPM_CLI_ENTRY_COUNT" =~ ^[1-9][0-9]{0,4}$ ]]
+          [[ "$NPM_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$NPM_CLI_SHA512" =~ ^[0-9a-f]{128}$ ]]
+          [[ "$NPM_CLI_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          [[ "$NPM_CLI_UNPACKED_BYTES" =~ ^[1-9][0-9]{0,8}$ ]]
+
+          root="$RUNNER_TEMP/trusted-npm-cli"
+          mkdir -m 700 "$root"
+          archive="$root/$NPM_CLI_ARCHIVE"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 120 --max-filesize 3145728 \
+            --fail --silent --show-error --output "$archive" "$NPM_CLI_URL"
+
+          shopt -s nullglob dotglob
+          closure=("$root"/*)
+          test "${#closure[@]}" = 1
+          test "${closure[0]}" = "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          test "$(wc -c < "$archive" | tr -d ' ')" = "$NPM_CLI_BYTES"
+          printf '%s  %s\n' "$NPM_CLI_SHA256" "$archive" | sha256sum --check --strict
+          printf '%s  %s\n' "$NPM_CLI_SHA512" "$archive" | sha512sum --check --strict
+          observed_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w 0)"
+          test "$observed_integrity" = "$NPM_CLI_INTEGRITY"
+          gzip --test "$archive"
+
+          entry_count=0
+          while IFS= read -r entry; do
+            [[ "$entry" =~ ^package/([A-Za-z0-9@._+-]+/)*[A-Za-z0-9@._+-]+$ ]]
+            ((entry_count += 1))
+          done < <(tar --list --gzip --file "$archive")
+          test "$entry_count" = "$NPM_CLI_ENTRY_COUNT"
+          type_count=0
+          while IFS= read -r listing; do
+            test "${listing:0:1}" = '-'
+            ((type_count += 1))
+          done < <(tar --list --verbose --gzip --file "$archive")
+          test "$type_count" = "$NPM_CLI_ENTRY_COUNT"
+
+          inspection="$RUNNER_TEMP/trusted-npm-cli-inspection"
+          mkdir -m 700 "$inspection"
+          tar --extract --gzip --file "$archive" --directory "$inspection" \
+            --no-same-owner --no-same-permissions
+          test -z "$(find "$inspection" -mindepth 1 ! -type d ! -type f -print -quit)"
+          test "$(find "$inspection" -type f | wc -l | tr -d ' ')" = "$NPM_CLI_ENTRY_COUNT"
+          unpacked_bytes=$(find "$inspection" -type f -exec stat --format='%s' {} + | \
+            awk '{ total += $1 } END { print total + 0 }')
+          test "$unpacked_bytes" = "$NPM_CLI_UNPACKED_BYTES"
+          jq --exit-status --arg version "$NPM_CLI_VERSION" '
+            .name == "npm" and .version == $version and
+            .bin.npm == "bin/npm-cli.js" and .bin.npx == "bin/npx-cli.js"
+          ' "$inspection/package/package.json" >/dev/null
+      - name: Transfer exact npm CLI tarball as inert data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-npm-cli-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted-npm-cli/npm-11.6.2.tgz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  github-draft:
+    name: Create or verify GitHub draft without candidate checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: promote
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: npm
+    permissions:
+      contents: write
+    outputs:
+      release_state: ${{ steps.draft.outputs.release_state }}
+    steps:
+      - name: Preflight immutable release and create draft with fixed API calls
+        id: draft
+        shell: bash
+        env:
+          ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+          RELEASE_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+          RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ADMIN_TOKEN"
+          test -n "$RELEASE_TOKEN"
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          expected_prerelease=false
+          if [[ "$RELEASE_TAG" == *-* ]]; then expected_prerelease=true; fi
+          version_line=$(gh version | head -n 1)
+          [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
+          major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}
+          (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
+          GH_TOKEN="$ADMIN_TOKEN" gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-release-settings.json"
+          jq --exit-status '
+            type == "object" and
+            (keys | sort) == ["enabled", "enforced_by_owner"] and
+            .enabled == true and
+            (.enforced_by_owner | type) == "boolean"
+          ' "$RUNNER_TEMP/immutable-release-settings.json" >/dev/null
+          unset ADMIN_TOKEN
+          export GH_TOKEN="$RELEASE_TOKEN"
+          unset RELEASE_TOKEN
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/tag-ref.json"
+          tag_object=$(jq --raw-output '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' "$RUNNER_TEMP/tag-ref.json")
+          test "$(jq --raw-output .object.type "$RUNNER_TEMP/tag-ref.json")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" > "$RUNNER_TEMP/tag-object.json"
+          jq --exit-status --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" \
+            '.tag == $tag and .object.type == "commit" and .object.sha == $commit' \
+            "$RUNNER_TEMP/tag-object.json" >/dev/null
+          set +e
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/release.json" 2> "$RUNNER_TEMP/release-error.txt"
+          status=$?
+          set -e
+          if [[ "$status" -ne 0 ]]; then
+            test "$status" -eq 1
+            grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/release-error.txt"
+            prerelease=()
+            if [[ "$expected_prerelease" == true ]]; then prerelease=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --generate-notes --title "$RELEASE_TAG" "${prerelease[@]}"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          fi
+          jq --exit-status --arg tag "$RELEASE_TAG" --arg version "$RELEASE_VERSION" \
+            --argjson prerelease "$expected_prerelease" '
+            .tag_name == $tag and .name == $tag and .prerelease == $prerelease and
+            (.draft | type) == "boolean" and (.immutable | type) == "boolean" and
+            ((.draft == true and .immutable == false) or (.draft == false and .immutable == true)) and
+            ([.assets[].name] | length) == ([.assets[].name] | unique | length) and
+            all(.assets[].name;
+              . == ("latchway-react-native-" + $version + ".tgz") or
+              . == ("latchway-react-native-" + $version + ".tgz.sha256") or
+              . == "package-evidence.json" or . == "build-reproducibility.json" or
+              . == "published-dependency-evidence.json" or . == "npm-registry-version.json" or
+              . == "npm-registry-view.json" or . == "npm-attestations.json" or
+              . == "npm-audit-signatures.json" or . == "npm-registry-evidence-manifest.json" or
+              . == "post-publish-evidence.json" or
+              test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))
+          ' "$RUNNER_TEMP/release.json" >/dev/null
+          state=draft
+          if [[ "$(jq --raw-output .immutable "$RUNNER_TEMP/release.json")" == true ]]; then state=immutable; fi
+          printf 'release_state=%s\n' "$state" >> "$GITHUB_OUTPUT"
+
+  npm-publish:
+    name: Publish or adopt npm archive without candidate checkout
+    needs: [promote, verify, android, ios, trusted-npm-cli, github-draft]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    env:
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      publish_performed: ${{ steps.registry.outputs.publish_performed }}
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - name: Download exact credential-free npm CLI handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-npm-cli-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted-npm-cli
+      - name: Verify exact npm CLI closure before extraction or execution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          test "$NPM_CONFIG_IGNORE_SCRIPTS" = true
+          test "$NPM_CLI_VERSION" = "$NPM_VERSION"
+          test "$NPM_CLI_ARCHIVE" = "npm-$NPM_CLI_VERSION.tgz"
+          test "$NPM_CLI_URL" = "https://registry.npmjs.org/npm/-/npm-$NPM_CLI_VERSION.tgz"
+          [[ "$NPM_CLI_BYTES" =~ ^[1-9][0-9]{0,7}$ ]]
+          [[ "$NPM_CLI_ENTRY_COUNT" =~ ^[1-9][0-9]{0,4}$ ]]
+          [[ "$NPM_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$NPM_CLI_SHA512" =~ ^[0-9a-f]{128}$ ]]
+          [[ "$NPM_CLI_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          [[ "$NPM_CLI_UNPACKED_BYTES" =~ ^[1-9][0-9]{0,8}$ ]]
+
+          root="$RUNNER_TEMP/trusted-npm-cli"
+          archive="$root/$NPM_CLI_ARCHIVE"
+          shopt -s nullglob dotglob
+          closure=("$root"/*)
+          test "${#closure[@]}" = 1
+          test "${closure[0]}" = "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          test "$(wc -c < "$archive" | tr -d ' ')" = "$NPM_CLI_BYTES"
+          printf '%s  %s\n' "$NPM_CLI_SHA256" "$archive" | sha256sum --check --strict
+          printf '%s  %s\n' "$NPM_CLI_SHA512" "$archive" | sha512sum --check --strict
+          observed_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w 0)"
+          test "$observed_integrity" = "$NPM_CLI_INTEGRITY"
+          gzip --test "$archive"
+
+          entry_count=0
+          while IFS= read -r entry; do
+            [[ "$entry" =~ ^package/([A-Za-z0-9@._+-]+/)*[A-Za-z0-9@._+-]+$ ]]
+            ((entry_count += 1))
+          done < <(tar --list --gzip --file "$archive")
+          test "$entry_count" = "$NPM_CLI_ENTRY_COUNT"
+          type_count=0
+          while IFS= read -r listing; do
+            test "${listing:0:1}" = '-'
+            ((type_count += 1))
+          done < <(tar --list --verbose --gzip --file "$archive")
+          test "$type_count" = "$NPM_CLI_ENTRY_COUNT"
+
+          runtime="$RUNNER_TEMP/trusted-npm-cli-runtime"
+          mkdir -m 700 "$runtime"
+          tar --extract --gzip --file "$archive" --directory "$runtime" \
+            --no-same-owner --no-same-permissions
+          test -z "$(find "$runtime" -mindepth 1 ! -type d ! -type f -print -quit)"
+          test "$(find "$runtime" -type f | wc -l | tr -d ' ')" = "$NPM_CLI_ENTRY_COUNT"
+          unpacked_bytes=$(find "$runtime" -type f -exec stat --format='%s' {} + | \
+            awk '{ total += $1 } END { print total + 0 }')
+          test "$unpacked_bytes" = "$NPM_CLI_UNPACKED_BYTES"
+          jq --exit-status --arg version "$NPM_CLI_VERSION" '
+            .name == "npm" and .version == $version and
+            .bin.npm == "bin/npm-cli.js" and .bin.npx == "bin/npx-cli.js"
+          ' "$runtime/package/package.json" >/dev/null
+          cli="$runtime/package/bin/npm-cli.js"
+          test -f "$cli"
+          test ! -L "$cli"
+          test "$("$cli" --version)" = "$NPM_CLI_VERSION"
+          printf 'LATCHWAY_NPM_CLI=%s\n' "$cli" >> "$GITHUB_ENV"
+      - name: Download exact reviewed package without candidate source
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: latchway-react-native-release
+          path: ${{ runner.temp }}/reviewed-release
+      - name: Validate reviewed archive identity and checksum with fixed tooling
+        shell: bash
+        env:
+          RELEASE_STATE: ${{ needs.github-draft.outputs.release_state }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$RELEASE_STATE" == draft || "$RELEASE_STATE" == immutable ]]
+          root="$RUNNER_TEMP/reviewed-release"
+          archive="$root/latchway-react-native-$RELEASE_VERSION.tgz"
+          evidence="$root/package-evidence.json"
+          test -s "$archive"
+          test ! -L "$archive"
+          test -s "$evidence"
+          (cd "$root" && sha256sum --check "latchway-react-native-$RELEASE_VERSION.tgz.sha256")
+          jq --exit-status --arg version "$RELEASE_VERSION" \
+            --arg archive "latchway-react-native-$RELEASE_VERSION.tgz" '
+            .schema_version == 1 and .package == "@latchway/react-native" and
+            .version == $version and .tarball == $archive and
+            (.bytes | type) == "number" and .bytes > 0 and
+            (.sha256 | test("^[0-9a-f]{64}$")) and
+            (.integrity | test("^sha512-[A-Za-z0-9+/]+={0,2}$"))
+          ' "$evidence" >/dev/null
+          test "$(jq --raw-output .bytes "$evidence")" = "$(wc -c < "$archive" | tr -d ' ')"
+          test "$(jq --raw-output .sha256 "$evidence")" = "$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          test "$(tar -xOzf "$archive" package/package.json | jq --raw-output .name)" = '@latchway/react-native'
+          test "$(tar -xOzf "$archive" package/package.json | jq --raw-output .version)" = "$RELEASE_VERSION"
+      - name: Attest reviewed npm package and reproducibility inputs without candidate checkout
+        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/reviewed-release/latchway-react-native-${{ needs.promote.outputs.version }}.tgz
+            ${{ runner.temp }}/reviewed-release/package-evidence.json
+            ${{ runner.temp }}/reviewed-release/build-reproducibility.json
+            ${{ runner.temp }}/reviewed-release/published-dependency-evidence.json
+      - name: Publish or adopt exact npm bytes with fixed commands
+        id: registry
+        shell: bash
+        env:
+          RELEASE_STATE: ${{ needs.github-draft.outputs.release_state }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/reviewed-release"
+          archive="$root/latchway-react-native-$RELEASE_VERSION.tgz"
+          expected_integrity=$(jq --exit-status --raw-output .integrity "$root/package-evidence.json")
+          metadata="$RUNNER_TEMP/npm-version.json"
+          status=$(curl --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
+            --silent --show-error --output "$metadata" --write-out '%{http_code}' \
+            "https://registry.npmjs.org/%40latchway%2Freact-native/$RELEASE_VERSION")
+          publish_performed=false
+          if [[ "$status" == 200 ]]; then
+            test "$(jq --raw-output .name "$metadata")" = '@latchway/react-native'
+            test "$(jq --raw-output .version "$metadata")" = "$RELEASE_VERSION"
+            test "$(jq --raw-output .dist.integrity "$metadata")" = "$expected_integrity"
+            tarball=$(jq --exit-status --raw-output '.dist.tarball | strings' "$metadata")
+            test "$tarball" = "https://registry.npmjs.org/@latchway/react-native/-/react-native-$RELEASE_VERSION.tgz"
+            curl --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 120 --max-filesize 20971520 \
+              --fail --silent --show-error --output "$RUNNER_TEMP/existing.tgz" "$tarball"
+            cmp --silent "$archive" "$RUNNER_TEMP/existing.tgz"
+          else
+            test "$status" = 404
+            test "$RELEASE_STATE" = draft
+            tag=latest
+            if [[ "$RELEASE_VERSION" == *-* ]]; then tag=next; fi
+            "$LATCHWAY_NPM_CLI" publish "$archive" --access public --provenance --tag "$tag" \
+              --registry=https://registry.npmjs.org/
+            publish_performed=true
+          fi
+          printf 'publish_performed=%s\n' "$publish_performed" >> "$GITHUB_OUTPUT"
+
   publish:
-    name: Publish npm package and GitHub release
-    needs: [promote, verify, android, ios]
+    name: Generate and stage npm registry evidence without OIDC
+    needs: [promote, verify, android, ios, trusted-npm-cli, github-draft, npm-publish]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm
     permissions:
       actions: read
-      attestations: write
-      contents: write
-      id-token: write
+      contents: read
     env:
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
       RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
       RELEASE_TAG: ${{ needs.promote.outputs.tag }}
     steps:
@@ -476,139 +1297,136 @@ jobs:
           persist-credentials: false
       - name: Read immutable compatibility lock
         id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock=release-compatibility.json
+          emit() {
+            local name=$1 filter=$2 value
+            value=$(jq --exit-status --raw-output "$filter | strings" "$lock")
+            [[ "$value" =~ ^[0-9A-Za-z@./_-]+$ ]]
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+          }
+          emit android_commit .android.source_commit
+          emit android_build_tools_version .android.build_tools_version
+          emit android_compile_sdk '.android.compile_sdk | tostring'
+          emit android_ndk_version .android.ndk_version
+          emit android_sdk_platform_version .android.sdk_platform_version
+          emit android_version .android.version
+          emit contract_version .contract.version
+          emit core_commit .contract.core_commit
+          emit ios_commit .ios.source_commit
+          emit ios_version .ios.version
+          emit javascript_commit .javascript.source_commit
+          emit javascript_version .javascript.version
+          emit react_native_version .react_native.version
+          [[ "$(jq --raw-output .android.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .ios.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .javascript.source_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(jq --raw-output .contract.core_commit "$lock")" =~ ^[0-9a-f]{40}$ ]]
         working-directory: latchway-react-native-sdk
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
-      - name: Install trusted-publishing npm client
-        run: npm install --global "npm@${{ env.NPM_VERSION }}"
+      - name: Download exact credential-free npm CLI handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trusted-npm-cli-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trusted-npm-cli
+      - name: Verify exact npm CLI closure before registry evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+          test "$NPM_CONFIG_IGNORE_SCRIPTS" = true
+          test "$NPM_CLI_VERSION" = "$NPM_VERSION"
+          test "$NPM_CLI_ARCHIVE" = "npm-$NPM_CLI_VERSION.tgz"
+          test "$NPM_CLI_URL" = "https://registry.npmjs.org/npm/-/npm-$NPM_CLI_VERSION.tgz"
+          [[ "$NPM_CLI_BYTES" =~ ^[1-9][0-9]{0,7}$ ]]
+          [[ "$NPM_CLI_ENTRY_COUNT" =~ ^[1-9][0-9]{0,4}$ ]]
+          [[ "$NPM_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$NPM_CLI_SHA512" =~ ^[0-9a-f]{128}$ ]]
+          [[ "$NPM_CLI_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          [[ "$NPM_CLI_UNPACKED_BYTES" =~ ^[1-9][0-9]{0,8}$ ]]
+
+          root="$RUNNER_TEMP/trusted-npm-cli"
+          archive="$root/$NPM_CLI_ARCHIVE"
+          shopt -s nullglob dotglob
+          closure=("$root"/*)
+          test "${#closure[@]}" = 1
+          test "${closure[0]}" = "$archive"
+          test -f "$archive"
+          test ! -L "$archive"
+          test "$(wc -c < "$archive" | tr -d ' ')" = "$NPM_CLI_BYTES"
+          printf '%s  %s\n' "$NPM_CLI_SHA256" "$archive" | sha256sum --check --strict
+          printf '%s  %s\n' "$NPM_CLI_SHA512" "$archive" | sha512sum --check --strict
+          observed_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w 0)"
+          test "$observed_integrity" = "$NPM_CLI_INTEGRITY"
+          gzip --test "$archive"
+
+          entry_count=0
+          while IFS= read -r entry; do
+            [[ "$entry" =~ ^package/([A-Za-z0-9@._+-]+/)*[A-Za-z0-9@._+-]+$ ]]
+            ((entry_count += 1))
+          done < <(tar --list --gzip --file "$archive")
+          test "$entry_count" = "$NPM_CLI_ENTRY_COUNT"
+          type_count=0
+          while IFS= read -r listing; do
+            test "${listing:0:1}" = '-'
+            ((type_count += 1))
+          done < <(tar --list --verbose --gzip --file "$archive")
+          test "$type_count" = "$NPM_CLI_ENTRY_COUNT"
+
+          runtime="$RUNNER_TEMP/trusted-npm-cli-evidence-runtime"
+          mkdir -m 700 "$runtime"
+          tar --extract --gzip --file "$archive" --directory "$runtime" \
+            --no-same-owner --no-same-permissions
+          test -z "$(find "$runtime" -mindepth 1 ! -type d ! -type f -print -quit)"
+          test "$(find "$runtime" -type f | wc -l | tr -d ' ')" = "$NPM_CLI_ENTRY_COUNT"
+          unpacked_bytes=$(find "$runtime" -type f -exec stat --format='%s' {} + | \
+            awk '{ total += $1 } END { print total + 0 }')
+          test "$unpacked_bytes" = "$NPM_CLI_UNPACKED_BYTES"
+          jq --exit-status --arg version "$NPM_CLI_VERSION" '
+            .name == "npm" and .version == $version and
+            .bin.npm == "bin/npm-cli.js" and .bin.npx == "bin/npx-cli.js"
+          ' "$runtime/package/package.json" >/dev/null
+          cli="$runtime/package/bin/npm-cli.js"
+          test -f "$cli"
+          test ! -L "$cli"
+          test "$("$cli" --version)" = "$NPM_CLI_VERSION"
+          printf 'LATCHWAY_NPM_CLI=%s\n' "$cli" >> "$GITHUB_ENV"
       - name: Download verified package
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: latchway-react-native-release
           path: .release
-      - name: Verify downloaded archive checksum and release tag
-        env:
-          GIT_TAG_READ_TOKEN: ${{ github.token }}
+      - name: Verify downloaded archive checksum and release tag without credentials
         run: |
           set -euo pipefail
-          git_askpass="$RUNNER_TEMP/latchway-git-askpass"
-          umask 077
-          cat > "$git_askpass" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          case "${1:-}" in
-            *github.com*Username*|*Username*github.com*) printf '%s\n' x-access-token ;;
-            *github.com*Password*|*Password*github.com*)
-              test -n "${GIT_TAG_READ_TOKEN:-}"
-              printf '%s\n' "$GIT_TAG_READ_TOKEN"
-              ;;
-            *) exit 1 ;;
-          esac
-          EOF
-          chmod 700 "$git_askpass"
-          trap 'rm -f -- "$git_askpass"' EXIT
-          git_with_auth() {
-            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 git -c credential.helper= "$@"
-          }
-          git_with_auth fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          rm -f -- "$git_askpass"
-          trap - EXIT
-          unset GIT_TAG_READ_TOKEN
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
           (cd ../.release && sha256sum --check "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256")
-          node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
-      - name: Require GitHub immutable-release attestation tooling
+      - name: Validate promoted React Native release source without credentials
         run: |
           set -euo pipefail
-          python3 scripts/require-gh-version.py
-          verify_help=$(gh release verify --help)
-          verify_asset_help=$(gh release verify-asset --help)
-          grep --fixed-strings -- '--format' <<<"$verify_help" >/dev/null
-          grep --fixed-strings -- '--format' <<<"$verify_asset_help" >/dev/null
-      - name: Create or resume the fail-closed GitHub draft
-        id: github_release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
-        run: |
-          prerelease=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            prerelease=(--prerelease)
-          fi
-          python3 scripts/reconcile-github-release.py \
-            --prepare-draft \
-            --npm-adoption-history \
-            --expected-commit "$RELEASE_COMMIT" \
-            --repository "$GITHUB_REPOSITORY" \
-            --tag "$RELEASE_TAG" \
-            --title "$RELEASE_TAG" \
-            "${prerelease[@]}" \
-            --expected-asset-name "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
-            --expected-asset-name "latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
-            --expected-asset-name package-evidence.json \
-            --expected-asset-name build-reproducibility.json \
-            --expected-asset-name published-dependency-evidence.json \
-            --expected-asset-name npm-registry-version.json \
-            --expected-asset-name npm-registry-view.json \
-            --expected-asset-name npm-attestations.json \
-            --expected-asset-name npm-audit-signatures.json \
-            --expected-asset-name npm-registry-evidence-manifest.json \
-            --expected-asset-name post-publish-evidence.json
-        working-directory: latchway-react-native-sdk
-      - name: Attest reviewed npm package and reproducibility inputs
-        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
-        with:
-          subject-path: |
-            .release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
-            .release/package-evidence.json
-            .release/build-reproducibility.json
-            .release/published-dependency-evidence.json
-      - name: Publish or adopt the exact npm archive with trusted publishing
-        id: registry
-        env:
-          RELEASE_STATE: ${{ steps.github_release.outputs.release_state }}
-        run: node scripts/publish-or-verify.mjs "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz"
+          node scripts/release-preflight.mjs "$RELEASE_TAG"
         working-directory: latchway-react-native-sdk
       - name: Verify registry bytes, signatures, and exact trusted-publisher provenance
         id: registry_evidence
         env:
           EXPECTED_RELEASE_TAG: ${{ needs.promote.outputs.tag }}
           EXPECTED_SOURCE_COMMIT: ${{ needs.promote.outputs.commit }}
-          PUBLISH_PERFORMED: ${{ steps.registry.outputs.publish_performed }}
+          PUBLISH_PERFORMED: ${{ needs.npm-publish.outputs.publish_performed }}
         run: node scripts/verify-published.mjs "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz"
         working-directory: latchway-react-native-sdk
-      - name: Attest exact retained registry and adoption evidence
-        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
-        with:
-          subject-path: |
-            .release/npm-registry-version.json
-            .release/npm-registry-view.json
-            .release/npm-attestations.json
-            .release/npm-audit-signatures.json
-            .release/npm-registry-evidence-manifest.json
-            .release/post-publish-evidence.json
-            .release/${{ steps.registry_evidence.outputs.adoption_asset }}
-      - name: Attach every fixed asset, publish once, and require immutability
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+      - name: Stage exact React Native assets for isolated GitHub publication
         run: |
-          prerelease=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            prerelease=(--prerelease)
-          fi
-          python3 scripts/reconcile-github-release.py \
-            --npm-adoption-history \
-            --expected-commit "$RELEASE_COMMIT" \
-            --repository "$GITHUB_REPOSITORY" \
-            --tag "$RELEASE_TAG" \
-            --title "$RELEASE_TAG" \
-            "${prerelease[@]}" \
+          set -euo pipefail
+          destination="$RUNNER_TEMP/react-native-release-assets"
+          mkdir -m 700 "$destination"
+          install -m 600 -- \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
             ../.release/package-evidence.json \
@@ -620,5 +1438,243 @@ jobs:
             ../.release/npm-audit-signatures.json \
             ../.release/npm-registry-evidence-manifest.json \
             ../.release/post-publish-evidence.json \
-            "../.release/${{ steps.registry_evidence.outputs.adoption_asset }}"
+            "../.release/${{ steps.registry_evidence.outputs.adoption_asset }}" \
+            "$destination/"
         working-directory: latchway-react-native-sdk
+      - name: Transfer exact React Native assets to the no-checkout publication job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: latchway-react-native-github-release-${{ needs.promote.outputs.version }}
+          path: ${{ runner.temp }}/react-native-release-assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  github-release-policy:
+    name: Re-verify immutable release policy without OIDC or candidate checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: [promote, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: npm
+    permissions:
+      contents: read
+    steps:
+      - name: Verify immutable releases remain enforced with the protected admin credential
+        shell: bash
+        env:
+          ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$ADMIN_TOKEN"
+          GH_TOKEN="$ADMIN_TOKEN" gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            > "$RUNNER_TEMP/immutable-release-settings.json"
+          unset ADMIN_TOKEN
+          jq --exit-status '
+            type == "object" and
+            (keys | sort) == ["enabled", "enforced_by_owner"] and
+            .enabled == true and
+            (.enforced_by_owner | type) == "boolean"
+          ' "$RUNNER_TEMP/immutable-release-settings.json" >/dev/null
+
+  github-release:
+    name: Publish immutable GitHub release without candidate checkout
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: [promote, publish, github-release-policy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Download exact React Native release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: latchway-react-native-github-release-${{ needs.promote.outputs.version }}
+          path: ${{ runner.temp }}/react-native-release-assets
+      - name: Validate exact React Native asset closure before OIDC attestation
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          asset_root="$RUNNER_TEMP/react-native-release-assets"
+          shopt -s nullglob
+          adoption_assets=("$asset_root"/npm-release-adoption-*.json)
+          test "${#adoption_assets[@]}" = 1
+          adoption_name=${adoption_assets[0]##*/}
+          [[ "$adoption_name" =~ ^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\.json$ ]]
+          expected=(
+            "latchway-react-native-$RELEASE_VERSION.tgz"
+            "latchway-react-native-$RELEASE_VERSION.tgz.sha256"
+            package-evidence.json
+            build-reproducibility.json
+            published-dependency-evidence.json
+            npm-registry-version.json
+            npm-registry-view.json
+            npm-attestations.json
+            npm-audit-signatures.json
+            npm-registry-evidence-manifest.json
+            post-publish-evidence.json
+            "$adoption_name"
+          )
+          actual=("$asset_root"/*)
+          test "${#actual[@]}" = "${#expected[@]}"
+          for asset in "${actual[@]}"; do
+            test -f "$asset"
+            test ! -L "$asset"
+            test -s "$asset"
+          done
+          printf '%s\n' "${expected[@]}" | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
+          printf '%s\n' "${actual[@]##*/}" | LC_ALL=C sort > "$RUNNER_TEMP/actual-assets.txt"
+          cmp --silent "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+      - name: Attest exact retained registry and release evidence without candidate checkout
+        uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: ${{ runner.temp }}/react-native-release-assets/*
+      - name: Reconcile, publish, and verify immutable release with fixed API calls
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+          RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$RELEASE_TOKEN"
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          expected_prerelease=false
+          if [[ "$RELEASE_TAG" == *-* ]]; then expected_prerelease=true; fi
+          version_line=$(gh version | head -n 1)
+          [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
+          major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}
+          (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
+          gh release verify --help | grep --fixed-strings -- '--format' >/dev/null
+          gh release verify-asset --help | grep --fixed-strings -- '--format' >/dev/null
+          export GH_TOKEN="$RELEASE_TOKEN"
+          unset RELEASE_TOKEN
+
+          asset_root="$RUNNER_TEMP/react-native-release-assets"
+          adoption_assets=("$asset_root"/npm-release-adoption-*.json)
+          test "${#adoption_assets[@]}" = 1
+          [[ "${adoption_assets[0]##*/}" =~ ^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\.json$ ]]
+          fixed_assets=(
+            "$asset_root/latchway-react-native-$RELEASE_VERSION.tgz"
+            "$asset_root/latchway-react-native-$RELEASE_VERSION.tgz.sha256"
+            "$asset_root/package-evidence.json"
+            "$asset_root/build-reproducibility.json"
+            "$asset_root/published-dependency-evidence.json"
+            "$asset_root/npm-registry-version.json"
+            "$asset_root/npm-registry-view.json"
+            "$asset_root/npm-attestations.json"
+            "$asset_root/npm-audit-signatures.json"
+            "$asset_root/npm-registry-evidence-manifest.json"
+            "$asset_root/post-publish-evidence.json"
+          )
+          : > "$RUNNER_TEMP/fixed-assets.txt"
+          for asset in "${fixed_assets[@]}" "${adoption_assets[@]}"; do
+            test -f "$asset"
+            test ! -L "$asset"
+            test -s "$asset"
+          done
+          for asset in "${fixed_assets[@]}"; do printf '%s\n' "${asset##*/}" >> "$RUNNER_TEMP/fixed-assets.txt"; done
+          test "$(sort -u "$RUNNER_TEMP/fixed-assets.txt" | wc -l | tr -d ' ')" = 11
+          fixed_names=$(sort "$RUNNER_TEMP/fixed-assets.txt" | jq --raw-input --slurp 'split("\n")[:-1]')
+
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/tag-ref.json"
+          tag_object=$(jq --raw-output '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' "$RUNNER_TEMP/tag-ref.json")
+          test "$(jq --raw-output .object.type "$RUNNER_TEMP/tag-ref.json")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object" > "$RUNNER_TEMP/tag-object.json"
+          jq --exit-status --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" \
+            '.tag == $tag and .object.type == "commit" and .object.sha == $commit' \
+            "$RUNNER_TEMP/tag-object.json" >/dev/null
+          lookup_release() {
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          }
+          lookup_release
+          validate_release() {
+            local allow_draft=$1
+            jq --exit-status --arg tag "$RELEASE_TAG" --argjson prerelease "$expected_prerelease" \
+              --argjson fixed "$fixed_names" --argjson allow_draft "$allow_draft" '
+              . as $release |
+              .tag_name == $tag and .name == $tag and .prerelease == $prerelease and
+              (.draft | type) == "boolean" and (.immutable | type) == "boolean" and
+              ($allow_draft or .draft == false) and
+              ((.draft == true and .immutable == false) or (.draft == false and .immutable == true)) and
+              ([.assets[].name] | length) == ([.assets[].name] | unique | length) and
+              all($release.assets[].name as $name; ($fixed | index($name)) != null or
+                ($name | test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$")))
+            ' "$RUNNER_TEMP/release.json" >/dev/null
+          }
+          validate_release true
+          verify_or_upload() {
+            local asset=$1 name remote_count remote_id remote_size downloaded
+            name=${asset##*/}
+            remote_count=$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' "$RUNNER_TEMP/release.json")
+            test "$remote_count" -le 1
+            if [[ "$remote_count" -eq 1 ]]; then
+              remote_id=$(jq --raw-output --arg name "$name" '.assets[] | select(.name == $name) | .id' "$RUNNER_TEMP/release.json")
+              remote_size=$(jq --raw-output --arg name "$name" '.assets[] | select(.name == $name) | .size' "$RUNNER_TEMP/release.json")
+              test "$remote_size" = "$(wc -c < "$asset" | tr -d ' ')"
+              downloaded="$RUNNER_TEMP/existing-$name"
+              gh api --method GET -H 'Accept: application/octet-stream' \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$remote_id" > "$downloaded"
+              cmp --silent "$asset" "$downloaded"
+              return
+            fi
+            test "$(jq --raw-output .draft "$RUNNER_TEMP/release.json")" = true
+            gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
+          }
+          for asset in "${fixed_assets[@]}"; do verify_or_upload "$asset"; done
+          adoption_name=${adoption_assets[0]##*/}
+          if [[ "$(jq --arg name "$adoption_name" '[.assets[] | select(.name == $name)] | length' "$RUNNER_TEMP/release.json")" -eq 1 ||
+                "$(jq --raw-output .draft "$RUNNER_TEMP/release.json")" == true ]]; then
+            verify_or_upload "${adoption_assets[0]}"
+          else
+            test "$(jq '[.assets[].name | select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length' "$RUNNER_TEMP/release.json")" -ge 1
+          fi
+          lookup_release
+          validate_release true
+          jq --exit-status --argjson fixed "$fixed_names" '. as $release |
+            all($fixed[] as $name; ($release.assets | map(.name) | index($name)) != null) and
+            ([$release.assets[].name | select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length) >= 1
+          ' "$RUNNER_TEMP/release.json" >/dev/null
+          if [[ "$(jq --raw-output .draft "$RUNNER_TEMP/release.json")" == true ]]; then
+            if [[ "$expected_prerelease" == true ]]; then
+              gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+            else
+              gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+            fi
+          fi
+          lookup_release
+          validate_release false
+          jq --exit-status --argjson fixed "$fixed_names" '. as $release |
+            all($fixed[] as $name; ($release.assets | map(.name) | index($name)) != null) and
+            ([$release.assets[].name | select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length) >= 1
+          ' "$RUNNER_TEMP/release.json" >/dev/null
+          verified=false
+          for attempt in $(seq 1 12); do
+            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --format json \
+              > "$RUNNER_TEMP/release-attestation.json"; then verified=true; break; fi
+            test "$attempt" = 12 || sleep 10
+          done
+          test "$verified" = true
+          for asset in "${fixed_assets[@]}"; do
+            verified=false
+            for attempt in $(seq 1 12); do
+              if gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --format json \
+                > "$RUNNER_TEMP/${asset##*/}.attestation.json"; then verified=true; break; fi
+              test "$attempt" = 12 || sleep 10
+            done
+            test "$verified" = true
+          done

@@ -1,5 +1,9 @@
 import { LatchwayError } from "@latchway/client";
-import type { FetchImplementation, LatchwayOptions } from "./types.js";
+import type {
+  LatchwayComponentOptions,
+  LatchwayOptions,
+  ReactNativeDirectAttestationComponent,
+} from "./types.js";
 import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 
 export interface RuntimeConfiguration {
@@ -9,10 +13,17 @@ export interface RuntimeConfiguration {
   identityProvider: string;
   appVersion: string;
   getIdentityToken: () => Promise<string>;
-  fetch: FetchImplementation;
   nativeJSON: string;
   fingerprint: string;
   scope: string;
+}
+
+export interface RuntimeComponentConfiguration {
+  nativeJSON: string;
+  componentJSON: string;
+  fingerprint: string;
+  scope: string;
+  component: ReactNativeDirectAttestationComponent;
 }
 
 export function configure(options: LatchwayOptions): RuntimeConfiguration {
@@ -22,12 +33,6 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
   const identityProvider = identifier(options.identityProvider ?? "custom_jwt", "identityProvider");
   const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
   const getIdentityToken = tokenProvider(options);
-  const fallbackFetch = Reflect.get(globalThis, "fetch") as FetchImplementation | undefined;
-  const fetchImplementation = options.fetch ?? fallbackFetch?.bind(globalThis);
-  if (typeof fetchImplementation !== "function") {
-    throw new LatchwayError("client_configuration_invalid", "A Fetch API implementation is required.");
-  }
-
   const storageNamespace = options.apple?.storageNamespace;
   if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
   const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
@@ -75,10 +80,45 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     identityProvider,
     appVersion,
     getIdentityToken,
-    fetch: fetchImplementation,
     nativeJSON,
     fingerprint: nativeJSON,
     scope: `${baseURL.origin}|${applicationID}|${environment}`,
+  };
+}
+
+export function configureComponent(options: LatchwayComponentOptions): RuntimeComponentConfiguration {
+  const baseURL = parseBaseURL(options.baseURL, options.allowInsecureLoopback === true);
+  const applicationID = applicationResourceID(options.applicationID);
+  const environment = identifier(options.environment, "environment");
+  const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
+  const component = validateDirectAttestationComponent(options.component);
+  const storageNamespace = options.apple?.storageNamespace;
+  if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
+  const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
+  if (appleFallback !== "disallow" && appleFallback !== "allow") {
+    throw new LatchwayError("client_configuration_invalid", "apple.softwareKeyFallbackPolicy is invalid.");
+  }
+  const nativeJSON = JSON.stringify({
+    baseURL: baseURL.href,
+    applicationID,
+    environment,
+    appVersion,
+    sdkVersion: SDK_VERSION,
+    contractVersion: CONTRACT_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    allowInsecureLoopback: options.allowInsecureLoopback === true,
+    apple: {
+      softwareKeyFallbackPolicy: appleFallback,
+      ...(storageNamespace === undefined ? {} : { storageNamespace }),
+    },
+  });
+  const componentJSON = JSON.stringify(component);
+  return {
+    nativeJSON,
+    componentJSON,
+    fingerprint: `${nativeJSON}|${componentJSON}`,
+    scope: `${baseURL.origin}|${applicationID}|${environment}|${component.definitionID}`,
+    component,
   };
 }
 
@@ -145,4 +185,41 @@ function boundedString(value: string, field: string, maximum: number): string {
     );
   }
   return value;
+}
+
+function validateDirectAttestationComponent(value: ReactNativeDirectAttestationComponent): ReactNativeDirectAttestationComponent {
+  if (!isRecord(value) ||
+      !hasOnlyKeys(value, ["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"]) ||
+      typeof value.definitionID !== "string" || !validIdentifier(value.definitionID) ||
+      (value.kind !== "action_extension" && value.kind !== "sso_extension") ||
+      typeof value.keychainAccessGroup !== "string" ||
+      !/^[A-Za-z0-9._-]{1,255}$/u.test(value.keychainAccessGroup) ||
+      !Array.isArray(value.requestedFeatures) || value.requestedFeatures.length === 0 ||
+      value.requestedFeatures.length > 256 ||
+      !value.requestedFeatures.every((feature) => typeof feature === "string" && validIdentifier(feature)) ||
+      new Set(value.requestedFeatures).size !== value.requestedFeatures.length) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "The direct-attestation component descriptor is invalid.",
+    );
+  }
+  return {
+    definitionID: value.definitionID,
+    kind: value.kind,
+    keychainAccessGroup: value.keychainAccessGroup,
+    requestedFeatures: Array.from(value.requestedFeatures as string[]),
+  };
+}
+
+function validIdentifier(value: string): boolean {
+  return /^[a-z][a-z0-9_-]{0,62}$/u.test(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, names: readonly string[]): boolean {
+  const expected = new Set(names);
+  return Object.keys(value).every((name) => expected.has(name));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

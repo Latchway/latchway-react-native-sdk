@@ -8,22 +8,202 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
+permissions: {}
 
 concurrency:
   group: physical-react-native-production
   cancel-in-progress: false
 
 jobs:
+  authorize-source:
+    name: Authorize exact React Native source without executing candidate code
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact React Native source as data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Create the run-bound source authorization without executing repository code
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          root="$RUNNER_TEMP/latchway-rn-physical-source"
+          install -d -m 0700 "$root"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          [[ "$tree" =~ ^[0-9a-f]{40,64}$ ]]
+          jq -n -S \
+            --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg tree "$tree" --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg ref "$GITHUB_REF" \
+            '{schema_version:"latchway.physical-source-authorization.v1",repository:$repository,source:{commit:$commit,tree:$tree},workflow:{run_id:$run_id,run_attempt:$run_attempt,ref:$ref},audiences:["rn-android-play-integrity","rn-ios-app-attest"]}' \
+            > "$root/source-authorization.json"
+          jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg tree "$tree" --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
+              .schema_version == "latchway.physical-source-authorization.v1" and
+              .repository == $repository and .source == {commit:$commit,tree:$tree} and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,ref:"refs/heads/main"} and
+              .audiences == ["rn-android-play-integrity","rn-ios-app-attest"]
+            ' "$root/source-authorization.json" >/dev/null
+      - name: Attest the exact run-bound source authorization
+        id: source-attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ runner.temp }}/latchway-rn-physical-source/source-authorization.json
+      - name: Close the source authorization handoff
+        env:
+          BUNDLE_PATH: ${{ steps.source-attest.outputs.bundle-path }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-physical-source"
+          test -f "$BUNDLE_PATH" && test ! -L "$BUNDLE_PATH"
+          install -m 0600 -- "$BUNDLE_PATH" "$root/source-authorization.sigstore.json"
+          cd "$root"
+          sha256sum source-authorization.json source-authorization.sigstore.json > SHA256SUMS
+          test "$(find . -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          test -z "$(find . -mindepth 1 ! -type f -print -quit)"
+      - name: Retain the one-run source authorization
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-physical-source-authorization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-physical-source/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   ios:
     name: React Native App Attest on physical iOS
+    needs: authorize-source
     environment: react-native-ios-production
-    runs-on: [self-hosted, macOS, latchway-physical-ios]
+    runs-on: [self-hosted, macOS, latchway-physical-ios, latchway-ephemeral-jit]
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Verify the fresh one-job iOS collector lease before receiving source
+        shell: bash
+        env:
+          COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
+          COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
+          APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
+          NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_NAME" = "latchway-rn-ios-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -print -quit)"
+          if env | grep -Eq '^(ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_ID_TOKEN_REQUEST_TOKEN|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|NODE_AUTH_TOKEN|DOCKER_AUTH_CONFIG|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|GOOGLE_APPLICATION_CREDENTIALS|AZURE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN)='; then
+            echo "prohibited credential class is present on physical collector" >&2
+            exit 1
+          fi
+          lease=/etc/latchway/physical-collector/lease.json
+          signature=/etc/latchway/physical-collector/lease.sig
+          hook=/usr/local/libexec/latchway-physical-collector-finalize
+          for path in "$lease" "$signature" "$hook"; do
+            test -f "$path" && test ! -L "$path"
+            test "$(stat -f '%Su' "$path")" = root
+            mode=$(stat -f '%OLp' "$path")
+            (( (8#$mode & 0022) == 0 ))
+          done
+          test -x "$hook"
+          trust_root="$RUNNER_TEMP/latchway-collector-trust-root.pem"
+          isolation="$RUNNER_TEMP/latchway-rn-ios-isolation"
+          umask 077
+          printf '%s\n' "$COLLECTOR_TRUST_ROOT_PEM" > "$trust_root"
+          [[ "$COLLECTOR_TRUST_ROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$trust_root" | awk '{print $1}')" = "$COLLECTOR_TRUST_ROOT_SHA256"
+          openssl dgst -sha256 -verify "$trust_root" -signature "$signature" "$lease"
+          now=$(date +%s)
+          jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --arg grant "$DEVICE_GRANT_SHA256" --arg app "$APP_BINARY_SHA256" \
+            --arg js "$JAVASCRIPT_BUNDLE_SHA256" --arg native "$NATIVE_EVIDENCE_SHA256" \
+            --argjson now "$now" '
+              .schema_version == "latchway.physical-collector-lease.v1" and
+              .repository == $repository and .source_commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-ios-app-attest"} and
+              .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
+              .runner.max_jobs == 1 and .runner.fresh_boot == true and .runner.clean_workspace == true and
+              .runner.repository_scope == $repository and .runner.device_exclusive == true and
+              .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
+              .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .grant.audience == "latchway-physical-evidence/rn-ios-app-attest" and
+              .grant.source_commit == $commit and .grant.run_id == $run_id and
+              .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and
+              .grant.single_use == true and (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              (.grant.issued_at_unix | type == "number") and
+              (.grant.expires_at_unix | type == "number") and
+              .grant.issued_at_unix >= .issued_at_unix and .grant.issued_at_unix <= $now and
+              .grant.expires_at_unix >= $now and .grant.expires_at_unix <= .expires_at_unix and
+              .grant.expires_at_unix > .grant.issued_at_unix and
+              (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
+              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
+              .issued_at_unix <= $now and .expires_at_unix >= $now and
+              (.expires_at_unix - .issued_at_unix) <= 3600
+            ' "$lease" >/dev/null
+          install -d -m 0700 "$isolation"
+          install -m 0600 "$lease" "$isolation/collector-lease.json"
+          install -m 0600 "$signature" "$isolation/collector-lease.sig"
+      - name: Download the GitHub-hosted source authorization
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-physical-source-authorization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-physical-source
+      - name: Verify the exact source authorization before iOS checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-physical-source"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          test "$(find "$root" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          (cd "$root" && shasum -a 256 -c SHA256SUMS)
+          gh attestation verify "$root/source-authorization.json" \
+            --bundle "$root/source-authorization.sigstore.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/physical-device-evidence.yml" \
+            --source-digest "$SOURCE_COMMIT" --signer-digest "$SOURCE_COMMIT" \
+            --source-ref refs/heads/main --deny-self-hosted-runners >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
+              .schema_version == "latchway.physical-source-authorization.v1" and
+              .repository == $repository and .source.commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,ref:"refs/heads/main"} and
+              .audiences == ["rn-android-play-integrity","rn-ios-app-attest"] and
+              (.source.tree | test("^[0-9a-f]{40,64}$"))
+            ' "$root/source-authorization.json" >/dev/null
+          auth_sha=$(shasum -a 256 "$root/source-authorization.json" | awk '{print $1}')
+          test "$(jq -r '.source_authorization_sha256' /etc/latchway/physical-collector/lease.json)" = "$auth_sha"
+          isolation="$RUNNER_TEMP/latchway-rn-ios-isolation"
+          install -m 0600 "$root/source-authorization.json" "$isolation/source-authorization.json"
+          install -m 0600 "$root/source-authorization.sigstore.json" "$isolation/source-authorization.sigstore.json"
+          install -m 0600 "$root/SHA256SUMS" "$isolation/SOURCE_AUTHORIZATION_SHA256SUMS"
       - name: Check out exact React Native candidate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -35,13 +215,17 @@ jobs:
           REQUESTED_COMMIT: ${{ inputs.source_commit }}
           EXPECTED_XCODE: ${{ vars.LATCHWAY_XCODE_IDENTITY }}
         run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = refs/heads/main
           test "$REQUESTED_COMMIT" = "$EXPECTED_COMMIT"
           test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
           [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$(jq -r '.source.tree' "$RUNNER_TEMP/latchway-rn-physical-source/source-authorization.json")"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           test "$(xcodebuild -version | tr '\n' ' ' | sed 's/[[:space:]]*$//')" = "$EXPECTED_XCODE"
       - name: Collect and validate physical React Native iOS evidence
+        id: collect_ios
         env:
           LATCHWAY_EVIDENCE_OUTPUT_DIR: ${{ runner.temp }}/latchway-rn-ios-evidence
           LATCHWAY_IOS_DEVICE_ID: ${{ secrets.LATCHWAY_IOS_DEVICE_ID }}
@@ -77,33 +261,230 @@ jobs:
           LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_IOS_NATIVE_PROFILE_PATH }}
           LATCHWAY_RUN_ID: rn-ios-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/run-physical-react-native-ios.sh
-      - name: Attest the validated iOS profile and evidence
-        id: attest
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: |
-            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-profile.json
-            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-evidence.json
-            ${{ runner.temp }}/latchway-rn-ios-evidence/SHA256SUMS
-      - name: Retain the iOS GitHub Sigstore bundle with the report
+      - name: Wipe iOS app data even when collection fails
+        if: ${{ always() }}
+        shell: bash
         env:
-          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE_PATH" "${{ runner.temp }}/latchway-rn-ios-evidence/github-attestation.sigstore.json"
-      - name: Retain redacted iOS evidence and hashes
-        if: always()
+          LATCHWAY_IOS_DEVICE_ID: ${{ secrets.LATCHWAY_IOS_DEVICE_ID }}
+          LATCHWAY_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          isolation="$RUNNER_TEMP/latchway-rn-ios-isolation"
+          install -d -m 0700 "$isolation"
+          started=$(date +%s)
+          uninstall="$RUNNER_TEMP/latchway-rn-ios-uninstall.json"
+          inventory="$RUNNER_TEMP/latchway-rn-ios-post-wipe-apps.json"
+          xcrun devicectl device uninstall app --device "$LATCHWAY_IOS_DEVICE_ID" \
+            --timeout 60 --json-output "$uninstall" --omit-deprecated-fields-in-json \
+            "$LATCHWAY_BUNDLE_ID" >/dev/null
+          jq --exit-status '.info.outcome == "success"' "$uninstall" >/dev/null
+          xcrun devicectl device info apps --device "$LATCHWAY_IOS_DEVICE_ID" \
+            --bundle-id "$LATCHWAY_BUNDLE_ID" --include-all-apps --timeout 30 \
+            --json-output "$inventory" --omit-deprecated-fields-in-json >/dev/null
+          jq --exit-status --arg bundle "$LATCHWAY_BUNDLE_ID" \
+            '[.. | strings | select(. == $bundle)] | length == 0' "$inventory" >/dev/null
+          wipe="$isolation/device-wipe.json"
+          jq -n -S --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --argjson started "$started" --argjson finished "$(date +%s)" \
+            '{schema_version:"latchway.physical-device-wipe.v1",repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-ios-app-attest"},runner_name:$runner,method:"ios-uninstall",app_data_wiped:true,application_absent:true,started_at_unix:$started,finished_at_unix:$finished}' \
+            > "$wipe"
+      - name: Unconditionally finalize, deregister, and arm iOS collector destruction
+        if: ${{ always() }}
+        shell: bash
+        env:
+          LATCHWAY_IOS_DEVICE_ID: ${{ secrets.LATCHWAY_IOS_DEVICE_ID }}
+          LATCHWAY_BUNDLE_ID: ${{ vars.LATCHWAY_IOS_BUNDLE_ID }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          isolation="$RUNNER_TEMP/latchway-rn-ios-isolation"
+          evidence="$RUNNER_TEMP/latchway-rn-ios-evidence"
+          source="$RUNNER_TEMP/latchway-rn-physical-source"
+          install -d -m 0700 "$isolation"
+          /usr/local/libexec/latchway-physical-collector-finalize \
+            --lease /etc/latchway/physical-collector/lease.json \
+            --repository "$GITHUB_REPOSITORY" --source-commit "$SOURCE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job "$GITHUB_JOB" --audience rn-ios-app-attest --runner-name "$RUNNER_NAME" \
+            --source-authorization "$source/source-authorization.json" \
+            --evidence-directory "$evidence" --device-wipe-receipt "$isolation/device-wipe.json" \
+            --device-platform ios --device-selector "$LATCHWAY_IOS_DEVICE_ID" \
+            --application-id "$LATCHWAY_BUNDLE_ID" \
+            --output-json "$isolation/collector-teardown.json" \
+            --output-signature "$isolation/collector-teardown.sig"
+          openssl dgst -sha256 -verify "$RUNNER_TEMP/latchway-collector-trust-root.pem" \
+            -signature "$isolation/collector-teardown.sig" "$isolation/collector-teardown.json"
+          auth_sha=$(shasum -a 256 "$isolation/source-authorization.json" | awk '{print $1}')
+          lease_sha=$(shasum -a 256 "$isolation/collector-lease.json" | awk '{print $1}')
+          wipe_sha=$(shasum -a 256 "$isolation/device-wipe.json" | awk '{print $1}')
+          evidence_sha=$(shasum -a 256 "$evidence/SHA256SUMS" | awk '{print $1}')
+          device_sha=$(shasum -a 256 "$evidence/device-inventory.json" | awk '{print $1}')
+          provider_sha=$(shasum -a 256 "$evidence/react-native-ios-observation.json" | awk '{print $1}')
+          deployment_sha=$(shasum -a 256 "$evidence/gateway-deployment-verification.json" | awk '{print $1}')
+          now=$(date +%s)
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" --arg auth "$auth_sha" \
+            --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --argjson now "$now" '
+              .schema_version == "latchway.physical-collector-teardown.v1" and
+              .repository == $repository and .source_commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-ios-app-attest"} and
+              .runner.name == $runner and .runner.deregistered == true and
+              .runner.accepts_more_jobs == false and .runner.destroy_scheduled == true and
+              .runner.destroy_deadline_unix >= $now and .runner.destroy_deadline_unix <= ($now + 600) and
+              .evidence_eligible == true and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .observations.device_inventory_sha256 == $device and
+              .observations.provider_observation_sha256 == $provider and
+              .observations.gateway_deployment_verification_sha256 == $deployment and
+              (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
+              .device == {app_data_wiped:true,method:"ios-uninstall",receipt_sha256:$wipe} and
+              .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
+              .evidence_manifest_sha256 == $evidence
+            ' "$isolation/collector-teardown.json" >/dev/null
+          cd "$isolation"
+          shasum -a 256 SOURCE_AUTHORIZATION_SHA256SUMS collector-lease.json collector-lease.sig \
+            collector-teardown.json collector-teardown.sig device-wipe.json \
+            source-authorization.json source-authorization.sigstore.json > ISOLATION_SHA256SUMS
+          test "${{ steps.collect_ios.outcome }}" = success
+      - name: Retain bounded unsigned iOS evidence for the fresh signer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: react-native-ios-physical-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/latchway-rn-ios-evidence
-          if-no-files-found: warn
-          retention-days: 30
+          name: react-native-ios-physical-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Retain the bounded unsigned iOS collector-isolation proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-ios-collector-isolation-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-isolation/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   android:
     name: React Native Play Integrity on physical Android
+    needs: authorize-source
     environment: react-native-android-production
-    runs-on: [self-hosted, Linux, latchway-physical-android]
+    runs-on: [self-hosted, Linux, latchway-physical-android, latchway-ephemeral-jit]
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Verify the fresh one-job Android collector lease before receiving source
+        shell: bash
+        env:
+          COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
+          COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
+          APK_SET_SHA256: ${{ vars.LATCHWAY_ANDROID_INSTALLED_APK_SET_SHA256 }}
+          NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_NAME" = "latchway-rn-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -print -quit)"
+          if env | grep -Eq '^(ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_ID_TOKEN_REQUEST_TOKEN|GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|NODE_AUTH_TOKEN|DOCKER_AUTH_CONFIG|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|GOOGLE_APPLICATION_CREDENTIALS|AZURE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN)='; then
+            echo "prohibited credential class is present on physical collector" >&2
+            exit 1
+          fi
+          lease=/etc/latchway/physical-collector/lease.json
+          signature=/etc/latchway/physical-collector/lease.sig
+          hook=/usr/local/libexec/latchway-physical-collector-finalize
+          for path in "$lease" "$signature" "$hook"; do
+            test -f "$path" && test ! -L "$path"
+            test "$(stat -c '%U' "$path")" = root
+            mode=$(stat -c '%a' "$path")
+            (( (8#$mode & 0022) == 0 ))
+          done
+          test -x "$hook"
+          trust_root="$RUNNER_TEMP/latchway-collector-trust-root.pem"
+          isolation="$RUNNER_TEMP/latchway-rn-android-isolation"
+          umask 077
+          printf '%s\n' "$COLLECTOR_TRUST_ROOT_PEM" > "$trust_root"
+          [[ "$COLLECTOR_TRUST_ROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$trust_root" | awk '{print $1}')" = "$COLLECTOR_TRUST_ROOT_SHA256"
+          openssl dgst -sha256 -verify "$trust_root" -signature "$signature" "$lease"
+          now=$(date +%s)
+          jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --arg grant "$DEVICE_GRANT_SHA256" --arg apk "$APK_SET_SHA256" \
+            --arg native "$NATIVE_EVIDENCE_SHA256" --argjson now "$now" '
+              .schema_version == "latchway.physical-collector-lease.v1" and
+              .repository == $repository and .source_commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-android-play-integrity"} and
+              .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
+              .runner.max_jobs == 1 and .runner.fresh_boot == true and .runner.clean_workspace == true and
+              .runner.repository_scope == $repository and .runner.device_exclusive == true and
+              .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
+              .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .grant.audience == "latchway-physical-evidence/rn-android-play-integrity" and
+              .grant.source_commit == $commit and .grant.run_id == $run_id and
+              .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and
+              .grant.single_use == true and (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              (.grant.issued_at_unix | type == "number") and
+              (.grant.expires_at_unix | type == "number") and
+              .grant.issued_at_unix >= .issued_at_unix and .grant.issued_at_unix <= $now and
+              .grant.expires_at_unix >= $now and .grant.expires_at_unix <= .expires_at_unix and
+              .grant.expires_at_unix > .grant.issued_at_unix and
+              (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
+              .candidate.artifacts == {installed_apk_set_sha256:$apk,native_evidence_sha256:$native} and
+              .issued_at_unix <= $now and .expires_at_unix >= $now and
+              (.expires_at_unix - .issued_at_unix) <= 3600
+            ' "$lease" >/dev/null
+          install -d -m 0700 "$isolation"
+          install -m 0600 "$lease" "$isolation/collector-lease.json"
+          install -m 0600 "$signature" "$isolation/collector-lease.sig"
+      - name: Download the GitHub-hosted source authorization
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-physical-source-authorization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-physical-source
+      - name: Verify the exact source authorization before Android checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-physical-source"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          test "$(find "$root" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          (cd "$root" && sha256sum --check --strict SHA256SUMS)
+          gh attestation verify "$root/source-authorization.json" \
+            --bundle "$root/source-authorization.sigstore.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/physical-device-evidence.yml" \
+            --source-digest "$SOURCE_COMMIT" --signer-digest "$SOURCE_COMMIT" \
+            --source-ref refs/heads/main --deny-self-hosted-runners >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
+              .schema_version == "latchway.physical-source-authorization.v1" and
+              .repository == $repository and .source.commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,ref:"refs/heads/main"} and
+              .audiences == ["rn-android-play-integrity","rn-ios-app-attest"] and
+              (.source.tree | test("^[0-9a-f]{40,64}$"))
+            ' "$root/source-authorization.json" >/dev/null
+          auth_sha=$(sha256sum "$root/source-authorization.json" | awk '{print $1}')
+          test "$(jq -r '.source_authorization_sha256' /etc/latchway/physical-collector/lease.json)" = "$auth_sha"
+          isolation="$RUNNER_TEMP/latchway-rn-android-isolation"
+          install -m 0600 "$root/source-authorization.json" "$isolation/source-authorization.json"
+          install -m 0600 "$root/source-authorization.sigstore.json" "$isolation/source-authorization.sigstore.json"
+          install -m 0600 "$root/SHA256SUMS" "$isolation/SOURCE_AUTHORIZATION_SHA256SUMS"
       - name: Check out exact React Native candidate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -116,14 +497,18 @@ jobs:
           EXPECTED_ADB: ${{ vars.LATCHWAY_ADB_VERSION }}
           EXPECTED_APKSIGNER: ${{ vars.LATCHWAY_APKSIGNER_VERSION }}
         run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = refs/heads/main
           test "$REQUESTED_COMMIT" = "$EXPECTED_COMMIT"
           test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
           [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$(jq -r '.source.tree' "$RUNNER_TEMP/latchway-rn-physical-source/source-authorization.json")"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           test "$(adb version | head -n 1)" = "$EXPECTED_ADB"
           test "$(apksigner --version 2>&1 | head -n 1)" = "$EXPECTED_APKSIGNER"
       - name: Collect and validate physical React Native Android evidence
+        id: collect_android
         env:
           LATCHWAY_EVIDENCE_OUTPUT_DIR: ${{ runner.temp }}/latchway-rn-android-evidence
           LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
@@ -156,7 +541,605 @@ jobs:
           LATCHWAY_NATIVE_PROFILE_PATH: ${{ vars.LATCHWAY_ANDROID_NATIVE_PROFILE_PATH }}
           LATCHWAY_RUN_ID: rn-android-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/run-physical-react-native-android.sh
-      - name: Attest the validated Android profile and evidence
+      - name: Wipe Android app data even when collection fails
+        if: ${{ always() }}
+        shell: bash
+        env:
+          LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
+          LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          isolation="$RUNNER_TEMP/latchway-rn-android-isolation"
+          install -d -m 0700 "$isolation"
+          adb_device() { adb -s "$LATCHWAY_ANDROID_DEVICE_SERIAL" "$@"; }
+          started=$(date +%s)
+          adb_device shell am force-stop "$LATCHWAY_PACKAGE_NAME"
+          test "$(adb_device shell pm clear "$LATCHWAY_PACKAGE_NAME" | tr -d '\r')" = Success
+          test -z "$(adb_device shell pidof "$LATCHWAY_PACKAGE_NAME" 2>/dev/null | tr -d '\r' || true)"
+          wipe="$isolation/device-wipe.json"
+          jq -n -S --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" \
+            --argjson started "$started" --argjson finished "$(date +%s)" \
+            '{schema_version:"latchway.physical-device-wipe.v1",repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-android-play-integrity"},runner_name:$runner,method:"android-pm-clear",app_data_wiped:true,application_absent:false,process_absent:true,started_at_unix:$started,finished_at_unix:$finished}' \
+            > "$wipe"
+      - name: Unconditionally finalize, deregister, and arm Android collector destruction
+        if: ${{ always() }}
+        shell: bash
+        env:
+          LATCHWAY_ANDROID_DEVICE_SERIAL: ${{ secrets.LATCHWAY_ANDROID_DEVICE_SERIAL }}
+          LATCHWAY_PACKAGE_NAME: ${{ vars.LATCHWAY_ANDROID_PACKAGE_NAME }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          isolation="$RUNNER_TEMP/latchway-rn-android-isolation"
+          evidence="$RUNNER_TEMP/latchway-rn-android-evidence"
+          source="$RUNNER_TEMP/latchway-rn-physical-source"
+          install -d -m 0700 "$isolation"
+          /usr/local/libexec/latchway-physical-collector-finalize \
+            --lease /etc/latchway/physical-collector/lease.json \
+            --repository "$GITHUB_REPOSITORY" --source-commit "$SOURCE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job "$GITHUB_JOB" --audience rn-android-play-integrity --runner-name "$RUNNER_NAME" \
+            --source-authorization "$source/source-authorization.json" \
+            --evidence-directory "$evidence" --device-wipe-receipt "$isolation/device-wipe.json" \
+            --device-platform android --device-selector "$LATCHWAY_ANDROID_DEVICE_SERIAL" \
+            --application-id "$LATCHWAY_PACKAGE_NAME" \
+            --output-json "$isolation/collector-teardown.json" \
+            --output-signature "$isolation/collector-teardown.sig"
+          openssl dgst -sha256 -verify "$RUNNER_TEMP/latchway-collector-trust-root.pem" \
+            -signature "$isolation/collector-teardown.sig" "$isolation/collector-teardown.json"
+          auth_sha=$(sha256sum "$isolation/source-authorization.json" | awk '{print $1}')
+          lease_sha=$(sha256sum "$isolation/collector-lease.json" | awk '{print $1}')
+          wipe_sha=$(sha256sum "$isolation/device-wipe.json" | awk '{print $1}')
+          evidence_sha=$(sha256sum "$evidence/SHA256SUMS" | awk '{print $1}')
+          device_sha=$(sha256sum "$evidence/device-inventory.json" | awk '{print $1}')
+          provider_sha=$(sha256sum "$evidence/react-native-android-observation.json" | awk '{print $1}')
+          deployment_sha=$(sha256sum "$evidence/gateway-deployment-verification.json" | awk '{print $1}')
+          now=$(date +%s)
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg job "$GITHUB_JOB" --arg runner "$RUNNER_NAME" --arg auth "$auth_sha" \
+            --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" \
+            --argjson now "$now" '
+              .schema_version == "latchway.physical-collector-teardown.v1" and
+              .repository == $repository and .source_commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:$job,audience:"rn-android-play-integrity"} and
+              .runner.name == $runner and .runner.deregistered == true and
+              .runner.accepts_more_jobs == false and .runner.destroy_scheduled == true and
+              .runner.destroy_deadline_unix >= $now and .runner.destroy_deadline_unix <= ($now + 600) and
+              .evidence_eligible == true and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .observations.device_inventory_sha256 == $device and
+              .observations.provider_observation_sha256 == $provider and
+              .observations.gateway_deployment_verification_sha256 == $deployment and
+              (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
+              .device == {app_data_wiped:true,method:"android-pm-clear",receipt_sha256:$wipe} and
+              .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
+              .evidence_manifest_sha256 == $evidence
+            ' "$isolation/collector-teardown.json" >/dev/null
+          cd "$isolation"
+          sha256sum SOURCE_AUTHORIZATION_SHA256SUMS collector-lease.json collector-lease.sig \
+            collector-teardown.json collector-teardown.sig device-wipe.json \
+            source-authorization.json source-authorization.sigstore.json > ISOLATION_SHA256SUMS
+          test "${{ steps.collect_android.outcome }}" = success
+      - name: Retain bounded unsigned Android evidence for the fresh signer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-physical-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Retain the bounded unsigned Android collector-isolation proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-collector-isolation-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-isolation/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  ios-attest:
+    name: Attest validated React Native iOS evidence
+    needs: ios
+    if: github.ref == 'refs/heads/main'
+    environment: physical-evidence-signing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download unsigned iOS evidence without a checkout
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-ios-physical-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-evidence
+      - name: Download unsigned iOS collector-isolation proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-ios-collector-isolation-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-isolation
+      - name: Validate iOS source authorization, one-job lease, wipe, and teardown
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
+          COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_IOS_DEVICE_GRANT_SHA256 }}
+          APP_BINARY_SHA256: ${{ vars.LATCHWAY_IOS_APP_BINARY_SHA256 }}
+          JAVASCRIPT_BUNDLE_SHA256: ${{ vars.LATCHWAY_IOS_JAVASCRIPT_BUNDLE_SHA256 }}
+          NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_IOS_NATIVE_EVIDENCE_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-ios-isolation"
+          evidence="$RUNNER_TEMP/latchway-rn-ios-evidence"
+          expected="$RUNNER_TEMP/rn-ios-isolation-expected"
+          printf '%s\n' ISOLATION_SHA256SUMS SOURCE_AUTHORIZATION_SHA256SUMS \
+            collector-lease.json collector-lease.sig collector-teardown.json \
+            collector-teardown.sig device-wipe.json source-authorization.json \
+            source-authorization.sigstore.json | LC_ALL=C sort > "$expected"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          find "$root" -mindepth 1 -maxdepth 1 -type f -print | sed "s#^$root/##" \
+            | LC_ALL=C sort > "$RUNNER_TEMP/rn-ios-isolation-actual"
+          cmp --silent "$expected" "$RUNNER_TEMP/rn-ios-isolation-actual"
+          (cd "$root" && shasum -a 256 -c ISOLATION_SHA256SUMS)
+          (cd "$root" && sha256sum --check --strict SOURCE_AUTHORIZATION_SHA256SUMS)
+          gh attestation verify "$root/source-authorization.json" \
+            --bundle "$root/source-authorization.sigstore.json" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/physical-device-evidence.yml" \
+            --source-digest "$SOURCE_COMMIT" --signer-digest "$SOURCE_COMMIT" \
+            --source-ref refs/heads/main --deny-self-hosted-runners >/dev/null
+          trust="$RUNNER_TEMP/latchway-collector-trust-root.pem"
+          umask 077
+          printf '%s\n' "$COLLECTOR_TRUST_ROOT_PEM" > "$trust"
+          [[ "$COLLECTOR_TRUST_ROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$trust" | awk '{print $1}')" = "$COLLECTOR_TRUST_ROOT_SHA256"
+          openssl dgst -sha256 -verify "$trust" -signature "$root/collector-lease.sig" "$root/collector-lease.json"
+          openssl dgst -sha256 -verify "$trust" -signature "$root/collector-teardown.sig" "$root/collector-teardown.json"
+          auth_sha=$(sha256sum "$root/source-authorization.json" | awk '{print $1}')
+          lease_sha=$(sha256sum "$root/collector-lease.json" | awk '{print $1}')
+          wipe_sha=$(sha256sum "$root/device-wipe.json" | awk '{print $1}')
+          evidence_sha=$(sha256sum "$evidence/SHA256SUMS" | awk '{print $1}')
+          device_sha=$(sha256sum "$evidence/device-inventory.json" | awk '{print $1}')
+          provider_sha=$(sha256sum "$evidence/react-native-ios-observation.json" | awk '{print $1}')
+          deployment_sha=$(sha256sum "$evidence/gateway-deployment-verification.json" | awk '{print $1}')
+          runner="latchway-rn-ios-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
+              .schema_version == "latchway.physical-source-authorization.v1" and
+              .repository == $repository and .source.commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,ref:"refs/heads/main"} and
+              .audiences == ["rn-android-play-integrity","rn-ios-app-attest"] and
+              (.source.tree | test("^[0-9a-f]{40,64}$"))
+            ' "$root/source-authorization.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg runner "$runner" --arg auth "$auth_sha" --arg grant "$DEVICE_GRANT_SHA256" \
+            --arg app "$APP_BINARY_SHA256" --arg js "$JAVASCRIPT_BUNDLE_SHA256" \
+            --arg native "$NATIVE_EVIDENCE_SHA256" '
+              .schema_version == "latchway.physical-collector-lease.v1" and
+              .repository == $repository and .source_commit == $commit and .source_authorization_sha256 == $auth and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"ios",audience:"rn-ios-app-attest"} and
+              .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
+              .runner.max_jobs == 1 and .runner.fresh_boot == true and .runner.clean_workspace == true and
+              .runner.repository_scope == $repository and .runner.device_exclusive == true and
+              .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
+              .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .grant.audience == "latchway-physical-evidence/rn-ios-app-attest" and
+              .grant.source_commit == $commit and .grant.run_id == $run_id and
+              .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and .grant.single_use == true and
+              (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              (.grant.issued_at_unix | type == "number") and (.grant.expires_at_unix | type == "number") and
+              .grant.issued_at_unix >= .issued_at_unix and
+              .grant.expires_at_unix > .grant.issued_at_unix and
+              (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
+              .grant.expires_at_unix <= .expires_at_unix and
+              .candidate.artifacts == {ios_app_binary_sha256:$app,ios_javascript_bundle_sha256:$js,native_evidence_sha256:$native} and
+              (.expires_at_unix - .issued_at_unix) <= 3600
+            ' "$root/collector-lease.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" '
+              .schema_version == "latchway.physical-device-wipe.v1" and .repository == $repository and
+              .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"ios",audience:"rn-ios-app-attest"} and
+              .runner_name == $runner and .method == "ios-uninstall" and .app_data_wiped == true and
+              .application_absent == true and .started_at_unix <= .finished_at_unix
+            ' "$root/device-wipe.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" \
+            --arg auth "$auth_sha" --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" '
+              .schema_version == "latchway.physical-collector-teardown.v1" and .repository == $repository and
+              .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"ios",audience:"rn-ios-app-attest"} and
+              .runner.name == $runner and .runner.deregistered == true and .runner.accepts_more_jobs == false and
+              .runner.destroy_scheduled == true and .runner.destroy_deadline_unix >= .finished_at_unix and
+              .runner.destroy_deadline_unix <= (.finished_at_unix + 600) and .evidence_eligible == true and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .observations.device_inventory_sha256 == $device and
+              .observations.provider_observation_sha256 == $provider and
+              .observations.gateway_deployment_verification_sha256 == $deployment and
+              (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
+              .device == {app_data_wiped:true,method:"ios-uninstall",receipt_sha256:$wipe} and
+              .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
+              .evidence_manifest_sha256 == $evidence and (.finished_at_unix | type == "number")
+            ' "$root/collector-teardown.json" >/dev/null
+          issued=$(jq -r '.issued_at_unix' "$root/collector-lease.json")
+          expires=$(jq -r '.expires_at_unix' "$root/collector-lease.json")
+          started=$(jq -r '.started_at_unix' "$root/device-wipe.json")
+          finished=$(jq -r '.finished_at_unix' "$root/collector-teardown.json")
+          (( issued <= started && expires >= finished ))
+          jq -n -S --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg auth "$auth_sha" --arg lease "$lease_sha" \
+            --arg teardown "$(sha256sum "$root/collector-teardown.json" | awk '{print $1}')" \
+            --arg evidence "$evidence_sha" \
+            '{schema_version:"latchway.physical-collector-isolation-validation.v1",valid:true,repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,audience:"rn-ios-app-attest"},source_authorization_sha256:$auth,lease_sha256:$lease,teardown_sha256:$teardown,evidence_manifest_sha256:$evidence}' \
+            > "$root/collector-isolation-validation.json"
+      - name: Validate the fixed iOS receipt, hashes, and coordinates without candidate code
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_RUN_ID: rn-ios-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-ios-evidence"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -d "$root" && test ! -L "$root"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          expected="$RUNNER_TEMP/rn-ios-expected-files"
+          actual="$RUNNER_TEMP/rn-ios-actual-files"
+          payloads="$RUNNER_TEMP/rn-ios-expected-payloads"
+          printf '%s\n' \
+            SHA256SUMS \
+            device-inventory.json \
+            gateway-client-policy.json \
+            gateway-deployment-public-key.pem \
+            gateway-deployment-statement.json \
+            gateway-deployment-statement.sig \
+            gateway-deployment-verification.json \
+            linked-ios-native-evidence.json \
+            linked-ios-native-profile.json \
+            react-native-ios-collection.json \
+            react-native-ios-evidence.json \
+            react-native-ios-junit.xml \
+            react-native-ios-observation.json \
+            react-native-ios-profile.json \
+            react-native-ios-run.json \
+            react-native-ios-validation.json | LC_ALL=C sort > "$expected"
+          find "$root" -mindepth 1 -maxdepth 1 -type f -print \
+            | sed "s#^$root/##" | LC_ALL=C sort > "$actual"
+          cmp --silent "$expected" "$actual"
+          grep -v '^SHA256SUMS$' "$expected" > "$payloads"
+          total=0
+          while IFS= read -r name; do
+            bytes=$(stat -c '%s' "$root/$name")
+            (( bytes > 0 && bytes <= 33554432 ))
+            total=$((total + bytes))
+          done < "$expected"
+          (( total <= 62914560 ))
+          manifest="$root/SHA256SUMS"
+          test -z "$(tail -c 1 "$manifest")"
+          checksum_names="$RUNNER_TEMP/rn-ios-checksum-names"
+          : > "$checksum_names"
+          while IFS= read -r line; do
+            [[ "$line" =~ ^([0-9a-f]{64})\ \ ([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]
+            digest=${BASH_REMATCH[1]}
+            name=${BASH_REMATCH[2]}
+            test -f "$root/$name" && test ! -L "$root/$name"
+            test "$(sha256sum "$root/$name" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$name" >> "$checksum_names"
+          done < "$manifest"
+          LC_ALL=C sort -o "$checksum_names" "$checksum_names"
+          test -z "$(uniq -d "$checksum_names")"
+          cmp --silent "$payloads" "$checksum_names"
+          for document in "$root"/*.json; do jq --exit-status . "$document" >/dev/null; done
+          evidence_sha=$(sha256sum "$root/react-native-ios-evidence.json" | awk '{print $1}')
+          jq --exit-status --arg commit "$SOURCE_COMMIT" '
+            .schema_version == "latchway.physical-device-profile.v1" and
+            .platform == "react_native_ios_app_attest" and
+            .repository == "Latchway/latchway-react-native-sdk" and
+            .source.commit == $commit and .source.worktree_clean == true
+          ' "$root/react-native-ios-profile.json" >/dev/null
+          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" '
+            .schema_version == "latchway.physical-device-evidence.v1" and
+            .release_eligible == true and .platform == "react_native_ios_app_attest" and
+            .run.id == $run and .run.mode == "release" and
+            .source.repository == "Latchway/latchway-react-native-sdk" and
+            .source.commit == $commit and .source.worktree_clean == true and
+            .device.physical == true and .device.simulator == false and
+            .device.emulator == false and .device.testing == false and
+            .device.debugger_attached == false and
+            .provider.name == "app_attest" and .provider.environment == "production" and
+            (.tests | type == "array" and length > 0 and all(.[]; .status == "passed")) and
+            (.redaction | type == "object" and all(.[]; . == false))
+          ' "$root/react-native-ios-evidence.json" >/dev/null
+          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" --arg sha "$evidence_sha" '
+            .schema_version == "latchway.physical-device-validation.v1" and
+            .valid == true and .platform == "react_native_ios_app_attest" and
+            .source_commit == $commit and .run_id == $run and
+            .evidence_sha256 == $sha and .errors == []
+          ' "$root/react-native-ios-validation.json" >/dev/null
+      - name: Attest the exact validated iOS profile, evidence, and checksum manifest
+        id: attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-profile.json
+            ${{ runner.temp }}/latchway-rn-ios-evidence/react-native-ios-evidence.json
+            ${{ runner.temp }}/latchway-rn-ios-evidence/SHA256SUMS
+            ${{ runner.temp }}/latchway-rn-ios-isolation/collector-isolation-validation.json
+      - name: Retain the iOS GitHub Sigstore bundle with the report
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-ios-evidence"
+          destination="$root/github-attestation.sigstore.json"
+          test -f "$BUNDLE_PATH" && test ! -L "$BUNDLE_PATH"
+          install -m 0600 -- "$BUNDLE_PATH" "$destination"
+          install -m 0600 -- "$BUNDLE_PATH" "$RUNNER_TEMP/latchway-rn-ios-isolation/github-isolation-attestation.sigstore.json"
+          bytes=$(stat -c '%s' "$destination")
+          (( bytes > 0 && bytes <= 4194304 ))
+          test "$(find "$root" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 17
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          total=$(find "$root" -type f -printf '%s\n' | awk '{sum += $1} END {print sum + 0}')
+          (( total <= 67108864 ))
+      - name: Retain redacted iOS evidence, hashes, and attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-ios-physical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Retain the independently signed iOS collector-isolation proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-ios-collector-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-ios-isolation/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  android-attest:
+    name: Attest validated React Native Android evidence
+    needs: android
+    if: github.ref == 'refs/heads/main'
+    environment: physical-evidence-signing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download unsigned Android evidence without a checkout
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-android-physical-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-evidence
+      - name: Download unsigned Android collector-isolation proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: react-native-android-collector-isolation-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-isolation
+      - name: Validate Android source authorization, one-job lease, wipe, and teardown
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COLLECTOR_TRUST_ROOT_PEM: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_PEM }}
+          COLLECTOR_TRUST_ROOT_SHA256: ${{ vars.LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256 }}
+          DEVICE_GRANT_SHA256: ${{ vars.LATCHWAY_ANDROID_DEVICE_GRANT_SHA256 }}
+          APK_SET_SHA256: ${{ vars.LATCHWAY_ANDROID_INSTALLED_APK_SET_SHA256 }}
+          NATIVE_EVIDENCE_SHA256: ${{ vars.LATCHWAY_ANDROID_NATIVE_EVIDENCE_SHA256 }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-android-isolation"
+          evidence="$RUNNER_TEMP/latchway-rn-android-evidence"
+          expected="$RUNNER_TEMP/rn-android-isolation-expected"
+          printf '%s\n' ISOLATION_SHA256SUMS SOURCE_AUTHORIZATION_SHA256SUMS \
+            collector-lease.json collector-lease.sig collector-teardown.json \
+            collector-teardown.sig device-wipe.json source-authorization.json \
+            source-authorization.sigstore.json | LC_ALL=C sort > "$expected"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          find "$root" -mindepth 1 -maxdepth 1 -type f -print | sed "s#^$root/##" \
+            | LC_ALL=C sort > "$RUNNER_TEMP/rn-android-isolation-actual"
+          cmp --silent "$expected" "$RUNNER_TEMP/rn-android-isolation-actual"
+          (cd "$root" && sha256sum --check --strict ISOLATION_SHA256SUMS)
+          (cd "$root" && sha256sum --check --strict SOURCE_AUTHORIZATION_SHA256SUMS)
+          gh attestation verify "$root/source-authorization.json" \
+            --bundle "$root/source-authorization.sigstore.json" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/physical-device-evidence.yml" \
+            --source-digest "$SOURCE_COMMIT" --signer-digest "$SOURCE_COMMIT" \
+            --source-ref refs/heads/main --deny-self-hosted-runners >/dev/null
+          trust="$RUNNER_TEMP/latchway-collector-trust-root.pem"
+          umask 077
+          printf '%s\n' "$COLLECTOR_TRUST_ROOT_PEM" > "$trust"
+          [[ "$COLLECTOR_TRUST_ROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$trust" | awk '{print $1}')" = "$COLLECTOR_TRUST_ROOT_SHA256"
+          openssl dgst -sha256 -verify "$trust" -signature "$root/collector-lease.sig" "$root/collector-lease.json"
+          openssl dgst -sha256 -verify "$trust" -signature "$root/collector-teardown.sig" "$root/collector-teardown.json"
+          auth_sha=$(sha256sum "$root/source-authorization.json" | awk '{print $1}')
+          lease_sha=$(sha256sum "$root/collector-lease.json" | awk '{print $1}')
+          wipe_sha=$(sha256sum "$root/device-wipe.json" | awk '{print $1}')
+          evidence_sha=$(sha256sum "$evidence/SHA256SUMS" | awk '{print $1}')
+          device_sha=$(sha256sum "$evidence/device-inventory.json" | awk '{print $1}')
+          provider_sha=$(sha256sum "$evidence/react-native-android-observation.json" | awk '{print $1}')
+          deployment_sha=$(sha256sum "$evidence/gateway-deployment-verification.json" | awk '{print $1}')
+          runner="latchway-rn-android-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" '
+              .schema_version == "latchway.physical-source-authorization.v1" and
+              .repository == $repository and .source.commit == $commit and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,ref:"refs/heads/main"} and
+              .audiences == ["rn-android-play-integrity","rn-ios-app-attest"] and
+              (.source.tree | test("^[0-9a-f]{40,64}$"))
+            ' "$root/source-authorization.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg runner "$runner" --arg auth "$auth_sha" --arg grant "$DEVICE_GRANT_SHA256" \
+            --arg apk "$APK_SET_SHA256" --arg native "$NATIVE_EVIDENCE_SHA256" '
+              .schema_version == "latchway.physical-collector-lease.v1" and
+              .repository == $repository and .source_commit == $commit and .source_authorization_sha256 == $auth and
+              .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"android",audience:"rn-android-play-integrity"} and
+              .runner.name == $runner and .runner.ephemeral == true and .runner.jit == true and
+              .runner.max_jobs == 1 and .runner.fresh_boot == true and .runner.clean_workspace == true and
+              .runner.repository_scope == $repository and .runner.device_exclusive == true and
+              .runner.destroy_after_job == true and (.runner.image_digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.runner.boot_id_sha256 | test("^[0-9a-f]{64}$")) and
+              .credentials == {long_lived:false,organization:false,administration:false,registry:false,oidc:false} and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verification:true,one_use_invocation:true,out_of_band_watchdog:true,destroy_on_disconnect:true} and
+              .grant.audience == "latchway-physical-evidence/rn-android-play-integrity" and
+              .grant.source_commit == $commit and .grant.run_id == $run_id and
+              .grant.run_attempt == $run_attempt and .grant.sha256 == $grant and .grant.single_use == true and
+              (.grant.jti_sha256 | test("^[0-9a-f]{64}$")) and
+              (.grant.issued_at_unix | type == "number") and (.grant.expires_at_unix | type == "number") and
+              .grant.issued_at_unix >= .issued_at_unix and
+              .grant.expires_at_unix > .grant.issued_at_unix and
+              (.grant.expires_at_unix - .grant.issued_at_unix) <= 300 and
+              .grant.expires_at_unix <= .expires_at_unix and
+              .candidate.artifacts == {installed_apk_set_sha256:$apk,native_evidence_sha256:$native} and
+              (.expires_at_unix - .issued_at_unix) <= 3600
+            ' "$root/collector-lease.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" '
+              .schema_version == "latchway.physical-device-wipe.v1" and .repository == $repository and
+              .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"android",audience:"rn-android-play-integrity"} and
+              .runner_name == $runner and .method == "android-pm-clear" and .app_data_wiped == true and
+              .application_absent == false and .process_absent == true and .started_at_unix <= .finished_at_unix
+            ' "$root/device-wipe.json" >/dev/null
+          jq --exit-status --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" --arg runner "$runner" \
+            --arg auth "$auth_sha" --arg lease "$lease_sha" --arg wipe "$wipe_sha" --arg evidence "$evidence_sha" \
+            --arg device "$device_sha" --arg provider "$provider_sha" --arg deployment "$deployment_sha" '
+              .schema_version == "latchway.physical-collector-teardown.v1" and .repository == $repository and
+              .source_commit == $commit and .workflow == {run_id:$run_id,run_attempt:$run_attempt,job:"android",audience:"rn-android-play-integrity"} and
+              .runner.name == $runner and .runner.deregistered == true and .runner.accepts_more_jobs == false and
+              .runner.destroy_scheduled == true and .runner.destroy_deadline_unix >= .finished_at_unix and
+              .runner.destroy_deadline_unix <= (.finished_at_unix + 600) and .evidence_eligible == true and
+              .supervisor == {private_key_isolated:true,caller_supplied_claims_accepted:false,independent_device_verification:true,independent_provider_verification:true,gateway_run_receipt_verified:true,one_use_invocation:true,watchdog_armed:true} and
+              .observations.device_inventory_sha256 == $device and
+              .observations.provider_observation_sha256 == $provider and
+              .observations.gateway_deployment_verification_sha256 == $deployment and
+              (.observations.gateway_run_receipt_sha256 | test("^[0-9a-f]{64}$")) and
+              .device == {app_data_wiped:true,method:"android-pm-clear",receipt_sha256:$wipe} and
+              .source_authorization_sha256 == $auth and .lease_sha256 == $lease and
+              .evidence_manifest_sha256 == $evidence and (.finished_at_unix | type == "number")
+            ' "$root/collector-teardown.json" >/dev/null
+          issued=$(jq -r '.issued_at_unix' "$root/collector-lease.json")
+          expires=$(jq -r '.expires_at_unix' "$root/collector-lease.json")
+          started=$(jq -r '.started_at_unix' "$root/device-wipe.json")
+          finished=$(jq -r '.finished_at_unix' "$root/collector-teardown.json")
+          (( issued <= started && expires >= finished ))
+          jq -n -S --arg repository "$GITHUB_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg auth "$auth_sha" --arg lease "$lease_sha" \
+            --arg teardown "$(sha256sum "$root/collector-teardown.json" | awk '{print $1}')" \
+            --arg evidence "$evidence_sha" \
+            '{schema_version:"latchway.physical-collector-isolation-validation.v1",valid:true,repository:$repository,source_commit:$commit,workflow:{run_id:$run_id,run_attempt:$run_attempt,audience:"rn-android-play-integrity"},source_authorization_sha256:$auth,lease_sha256:$lease,teardown_sha256:$teardown,evidence_manifest_sha256:$evidence}' \
+            > "$root/collector-isolation-validation.json"
+      - name: Validate the fixed Android receipt, hashes, and coordinates without candidate code
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          EXPECTED_RUN_ID: rn-android-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-android-evidence"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test -d "$root" && test ! -L "$root"
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          expected="$RUNNER_TEMP/rn-android-expected-files"
+          actual="$RUNNER_TEMP/rn-android-actual-files"
+          payloads="$RUNNER_TEMP/rn-android-expected-payloads"
+          printf '%s\n' \
+            SHA256SUMS \
+            device-inventory.json \
+            gateway-client-policy.json \
+            gateway-deployment-public-key.pem \
+            gateway-deployment-statement.json \
+            gateway-deployment-statement.sig \
+            gateway-deployment-verification.json \
+            installed-apk-set.sha256 \
+            linked-android-native-evidence.json \
+            linked-android-native-profile.json \
+            react-native-android-collection.json \
+            react-native-android-evidence.json \
+            react-native-android-junit.xml \
+            react-native-android-observation.json \
+            react-native-android-profile.json \
+            react-native-android-run.json \
+            react-native-android-validation.json | LC_ALL=C sort > "$expected"
+          find "$root" -mindepth 1 -maxdepth 1 -type f -print \
+            | sed "s#^$root/##" | LC_ALL=C sort > "$actual"
+          cmp --silent "$expected" "$actual"
+          grep -v '^SHA256SUMS$' "$expected" > "$payloads"
+          total=0
+          while IFS= read -r name; do
+            bytes=$(stat -c '%s' "$root/$name")
+            (( bytes > 0 && bytes <= 33554432 ))
+            total=$((total + bytes))
+          done < "$expected"
+          (( total <= 62914560 ))
+          manifest="$root/SHA256SUMS"
+          test -z "$(tail -c 1 "$manifest")"
+          checksum_names="$RUNNER_TEMP/rn-android-checksum-names"
+          : > "$checksum_names"
+          while IFS= read -r line; do
+            [[ "$line" =~ ^([0-9a-f]{64})\ \ ([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]]
+            digest=${BASH_REMATCH[1]}
+            name=${BASH_REMATCH[2]}
+            test -f "$root/$name" && test ! -L "$root/$name"
+            test "$(sha256sum "$root/$name" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$name" >> "$checksum_names"
+          done < "$manifest"
+          LC_ALL=C sort -o "$checksum_names" "$checksum_names"
+          test -z "$(uniq -d "$checksum_names")"
+          cmp --silent "$payloads" "$checksum_names"
+          for document in "$root"/*.json; do jq --exit-status . "$document" >/dev/null; done
+          evidence_sha=$(sha256sum "$root/react-native-android-evidence.json" | awk '{print $1}')
+          jq --exit-status --arg commit "$SOURCE_COMMIT" '
+            .schema_version == "latchway.physical-device-profile.v1" and
+            .platform == "react_native_android_play_integrity" and
+            .repository == "Latchway/latchway-react-native-sdk" and
+            .source.commit == $commit and .source.worktree_clean == true
+          ' "$root/react-native-android-profile.json" >/dev/null
+          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" '
+            .schema_version == "latchway.physical-device-evidence.v1" and
+            .release_eligible == true and .platform == "react_native_android_play_integrity" and
+            .run.id == $run and .run.mode == "release" and
+            .source.repository == "Latchway/latchway-react-native-sdk" and
+            .source.commit == $commit and .source.worktree_clean == true and
+            .device.physical == true and .device.simulator == false and
+            .device.emulator == false and .device.testing == false and
+            .device.debugger_attached == false and
+            .provider.name == "play_integrity" and .provider.environment == "production" and
+            (.tests | type == "array" and length > 0 and all(.[]; .status == "passed")) and
+            (.redaction | type == "object" and all(.[]; . == false))
+          ' "$root/react-native-android-evidence.json" >/dev/null
+          jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" --arg sha "$evidence_sha" '
+            .schema_version == "latchway.physical-device-validation.v1" and
+            .valid == true and .platform == "react_native_android_play_integrity" and
+            .source_commit == $commit and .run_id == $run and
+            .evidence_sha256 == $sha and .errors == []
+          ' "$root/react-native-android-validation.json" >/dev/null
+      - name: Attest the exact validated Android profile, evidence, and checksum manifest
         id: attest
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
@@ -164,15 +1147,36 @@ jobs:
             ${{ runner.temp }}/latchway-rn-android-evidence/react-native-android-profile.json
             ${{ runner.temp }}/latchway-rn-android-evidence/react-native-android-evidence.json
             ${{ runner.temp }}/latchway-rn-android-evidence/SHA256SUMS
+            ${{ runner.temp }}/latchway-rn-android-isolation/collector-isolation-validation.json
       - name: Retain the Android GitHub Sigstore bundle with the report
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE_PATH" "${{ runner.temp }}/latchway-rn-android-evidence/github-attestation.sigstore.json"
-      - name: Retain redacted Android evidence and hashes
-        if: always()
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/latchway-rn-android-evidence"
+          destination="$root/github-attestation.sigstore.json"
+          test -f "$BUNDLE_PATH" && test ! -L "$BUNDLE_PATH"
+          install -m 0600 -- "$BUNDLE_PATH" "$destination"
+          install -m 0600 -- "$BUNDLE_PATH" "$RUNNER_TEMP/latchway-rn-android-isolation/github-isolation-attestation.sigstore.json"
+          bytes=$(stat -c '%s' "$destination")
+          (( bytes > 0 && bytes <= 4194304 ))
+          test "$(find "$root" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 18
+          test -z "$(find "$root" -mindepth 1 ! -type f -print -quit)"
+          total=$(find "$root" -type f -printf '%s\n' | awk '{sum += $1} END {print sum + 0}')
+          (( total <= 67108864 ))
+      - name: Retain redacted Android evidence, hashes, and attestation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: react-native-android-physical-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/latchway-rn-android-evidence
-          if-no-files-found: warn
+          path: ${{ runner.temp }}/latchway-rn-android-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Retain the independently signed Android collector-isolation proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: react-native-android-collector-isolation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latchway-rn-android-isolation/
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 30

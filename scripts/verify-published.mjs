@@ -2,7 +2,7 @@ import { createHash, X509Certificate } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -22,6 +22,11 @@ import {
 
 const REGISTRY_URL = "https://registry.npmjs.org/";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const trustedNpmCLI = process.env.LATCHWAY_NPM_CLI;
+if (typeof trustedNpmCLI !== "string" || !isAbsolute(trustedNpmCLI)
+    || basename(trustedNpmCLI) !== "npm-cli.js") {
+  throw new Error("LATCHWAY_NPM_CLI must identify the authenticated absolute npm CLI handoff.");
+}
 const archiveArgument = process.argv.slice(2).find((argument) => argument !== "--" && !argument.startsWith("--"));
 if (archiveArgument === undefined) throw new Error("usage: node scripts/verify-published.mjs /path/to/package.tgz");
 const localArchive = resolve(archiveArgument);
@@ -295,8 +300,7 @@ function runNpmCaptured(arguments_, cwd, maximumBytes, operation, userconfig) {
   );
   environment.NPM_CONFIG_USERCONFIG = userconfig ?? join(tmpdir(), "latchway-empty-release.npmrc");
   environment.NPM_CONFIG_CACHE = join(tmpdir(), `latchway-npm-read-cache-${process.pid}`);
-  const command = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(command, arguments_, {
+  const result = spawnSync(process.execPath, [trustedNpmCLI, ...arguments_], {
     cwd, env: environment, encoding: "buffer", maxBuffer: maximumBytes, stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error !== undefined || result.status !== 0 || !Buffer.isBuffer(result.stdout)) {

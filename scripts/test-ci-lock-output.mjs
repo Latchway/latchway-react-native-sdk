@@ -19,7 +19,7 @@ test("CI lock exposes exact published Android toolchain package versions", () =>
 
 test("Android workflows install packages from the immutable compatibility lock", async () => {
   for (const path of [
-    ".github/workflows/ci.yml",
+    ".github/workflows/locked-sources.yml",
     ".github/workflows/native-consumer.yml",
     ".github/workflows/release.yml",
   ]) {

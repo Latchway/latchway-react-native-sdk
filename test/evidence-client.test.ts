@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { freshClientAfterRevocation } from "../example/src/evidence-client.js";
 
 describe("physical evidence client rotation", () => {
-  it("revokes and disposes the terminal client before authorizing with a fresh client", async () => {
+  it("revokes and disposes the terminal client before fetching with a fresh client", async () => {
     const events: string[] = [];
     const current = {
       ready: Promise.resolve().then(() => { events.push("current.ready"); }),
       async revokeCurrentInstallation(): Promise<void> { events.push("current.revoke"); },
       async dispose(): Promise<void> { events.push("current.dispose"); },
-      async authorize(): Promise<void> { throw new Error("terminal client must not be reused"); },
+      async fetch(): Promise<void> { throw new Error("terminal client must not be reused"); },
     };
     const rotated = await freshClientAfterRevocation(current, () => {
       events.push("replacement.create");
@@ -16,10 +16,10 @@ describe("physical evidence client rotation", () => {
         ready: Promise.resolve().then(() => { events.push("replacement.ready"); }),
         async revokeCurrentInstallation(): Promise<void> { events.push("replacement.revoke"); },
         async dispose(): Promise<void> { events.push("replacement.dispose"); },
-        async authorize(): Promise<void> { events.push("replacement.authorize"); },
+        async fetch(): Promise<void> { events.push("replacement.fetch"); },
       };
     });
-    await rotated.authorize();
+    await rotated.fetch();
 
     expect(events).toEqual([
       "current.ready",
@@ -27,7 +27,7 @@ describe("physical evidence client rotation", () => {
       "current.dispose",
       "replacement.create",
       "replacement.ready",
-      "replacement.authorize",
+      "replacement.fetch",
     ]);
   });
 

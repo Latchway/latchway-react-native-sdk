@@ -29,7 +29,9 @@ export interface AndroidSecurityOptions {
   keyPolicy?: AndroidKeyPolicy;
 }
 
-export type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+export type LatchwayFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+/** @deprecated Use `LatchwayFetch`; JavaScript fetch injection is no longer a client option. */
+export type FetchImplementation = LatchwayFetch;
 
 export interface LatchwayOptions {
   baseURL: string;
@@ -42,7 +44,6 @@ export interface LatchwayOptions {
   appVersion?: string;
   apple?: AppleSecurityOptions;
   android?: AndroidSecurityOptions;
-  fetch?: FetchImplementation;
   /** Limited to loopback HTTP origins for local conformance. */
   allowInsecureLoopback?: boolean;
 }
@@ -70,8 +71,8 @@ export interface QuotaSnapshot {
 export interface ReactNativeDiagnostics {
   sdkVersion: string;
   nativeSDKVersion: string;
-  contractVersion: "0.5.1";
-  protocolVersion: 1;
+  contractVersion: "1.0.0";
+  protocolVersion: 2;
   platform: ReactNativePlatform;
   keyStorage: string;
   attestation: {
@@ -98,16 +99,91 @@ export interface ReactNativeDiagnostics {
   lastErrorCode?: string;
 }
 
+/** iOS component kinds whose native extension runtime can perform App Attest step-up. */
+export type ReactNativeDirectAttestationComponentKind =
+  | "action_extension"
+  | "sso_extension";
+
+/**
+ * Public, non-secret descriptor for one independently keyed iOS component.
+ *
+ * `keychainAccessGroup` must be the fully resolved access group present in the
+ * signed entitlements of both the containing application and the component.
+ */
+export interface ReactNativeDirectAttestationComponent {
+  definitionID: string;
+  kind: ReactNativeDirectAttestationComponentKind;
+  keychainAccessGroup: string;
+  requestedFeatures: readonly string[];
+}
+
+export interface ReactNativeComponentAppleOptions {
+  /** A non-secret namespace for caller-managed, component-scoped App Attest accepted-key state. */
+  storageNamespace?: string;
+  softwareKeyFallbackPolicy?: AppleSoftwareKeyFallbackPolicy;
+}
+
+/** Configuration for JavaScript executing inside the signed iOS extension bundle. */
+export interface LatchwayComponentOptions {
+  baseURL: string;
+  applicationID: string;
+  environment: string;
+  component: ReactNativeDirectAttestationComponent;
+  appVersion?: string;
+  apple?: ReactNativeComponentAppleOptions;
+  /** Limited to loopback HTTP origins for local conformance. */
+  allowInsecureLoopback?: boolean;
+}
+
+export type ReactNativeComponentTrustSource =
+  | "direct_attested"
+  | "delegated_from_attested_root"
+  | "delegated_identity_only"
+  | "delegated_direct_attested"
+  | "identity_only"
+  | "web_risk_verified"
+  | "debug";
+
+/** Redacted native state for one independently keyed component. */
+export interface ReactNativeComponentDiagnostics {
+  familyID?: string;
+  componentID?: string;
+  definitionID: string;
+  keychainAccessGroup: string;
+  keyAvailable: boolean;
+  keyStorage: string;
+  grantAvailable: boolean;
+  sessionAvailable: boolean;
+  trustSource?: ReactNativeComponentTrustSource;
+  trustExpiresAt?: string;
+  containingAppActionRequired: boolean;
+}
+
+/**
+ * A component-scoped client for React Native JavaScript executing inside an
+ * iOS extension process. It has no root identity or containing-app API.
+ */
+export interface LatchwayComponentClient {
+  readonly ready: Promise<void>;
+  establishDirectAttestation(): Promise<void>;
+  diagnostics(): Promise<ReactNativeComponentDiagnostics>;
+  dispose(): Promise<void>;
+}
+
 export interface LatchwayClient {
   /** Resolves after the native runtime proves contract compatibility. */
   readonly ready: Promise<void>;
   fetch(input: RequestInfo | URL, init?: LatchwayFetchInit): Promise<Response>;
-  authorize(request: Request, feature: string): Promise<Request>;
+  /** Returns a WHATWG fetch-shaped function permanently bound to one Latchway feature. */
+  fetchFor(feature: string): LatchwayFetch;
   quota(feature: string): Promise<QuotaSnapshot>;
   diagnostics(): Promise<ReactNativeDiagnostics>;
   /** Explicitly rotates the native session credentials for this installation. */
   refresh(): Promise<void>;
+  /** Revokes this installation while leaving independently provisioned family components addressable. */
   revokeCurrentInstallation(): Promise<void>;
+  /** Revokes the complete Installation Family and retires the root native key and session state. */
+  revokeCurrentInstallationFamily(): Promise<void>;
   /** Releases this JavaScript instance. Secure installation state remains until revocation. */
   dispose(): Promise<void>;
 }

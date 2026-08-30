@@ -22,35 +22,490 @@ env:
   PNPM_VERSION: 10.15.0
 
 jobs:
+  authenticate-inputs:
+    name: Authenticate locked inputs without candidate checkout
+    if: >-
+      github.repository == 'Latchway/latchway-react-native-sdk' &&
+      github.ref == 'refs/heads/main' &&
+      (inputs.android || inputs.ios)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: private-sibling-read
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      archive_sha256: ${{ steps.seal.outputs.archive_sha256 }}
+    steps:
+      - name: Require fixed GitHub release tooling without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_line=$(gh version | head -n 1)
+          [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
+          major=${BASH_REMATCH[1]}
+          minor=${BASH_REMATCH[2]}
+          patch=${BASH_REMATCH[3]}
+          (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
+          gh release verify --help | grep --fixed-strings -- '--format' >/dev/null
+          gh release verify-asset --help | grep --fixed-strings -- '--format' >/dev/null
+          gh attestation verify --help >/dev/null
+      - name: Fetch, authenticate, and seal exact consumer inputs with fixed commands
+        id: seal
+        shell: bash
+        env:
+          CURRENT_REPOSITORY_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$CURRENT_REPOSITORY_TOKEN"
+          test -n "$GH_TOKEN"
+          test "$GITHUB_REPOSITORY" = Latchway/latchway-react-native-sdk
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          sealed="$RUNNER_TEMP/authenticated-native-consumer-inputs"
+          published="$sealed/published-dependency-inputs"
+          mkdir -m 700 "$sealed" "$published"
+
+          fetch_candidate_file() {
+            local path=$1 maximum_bytes=$2 output=$3 response="$RUNNER_TEMP/$(basename "$path").response.json"
+            GH_TOKEN="$CURRENT_REPOSITORY_TOKEN" \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" > "$response"
+            jq --exit-status --arg path "$path" --argjson maximum "$maximum_bytes" '
+              type == "object" and .type == "file" and .path == $path and
+              (.size | type == "number" and . > 0 and . <= $maximum) and
+              .encoding == "base64" and (.content | type == "string" and length > 0)
+            ' "$response" >/dev/null
+            jq --raw-output .content "$response" | tr -d '\n' | base64 --decode > "$output"
+            test -s "$output"
+            test "$(wc -c < "$output" | tr -d ' ')" -le "$maximum_bytes"
+          }
+
+          fetch_candidate_file release-compatibility.json 262144 \
+            "$sealed/release-compatibility.json"
+          fetch_candidate_file contract.lock 65536 "$sealed/contract.lock"
+
+          jq --exit-status '
+            def semver:
+              type == "string" and
+              test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$");
+            def commit: type == "string" and test("^[0-9a-f]{40}$");
+            def digest: type == "string" and test("^[0-9a-f]{64}$");
+            type == "object" and
+            keys == ["$schema", "android", "contract", "ios", "javascript", "react_native", "schema_version"] and
+            .["$schema"] == "https://json-schema.org/draft/2020-12/schema" and
+            .schema_version == 1 and
+            (.contract | type == "object" and
+              keys == ["bundle_sha256", "core_commit", "fixtures", "repository", "version", "wire_protocol"] and
+              .repository == "https://github.com/Latchway/latchway.git" and
+              (.version | semver) and .wire_protocol == 2 and
+              (.core_commit | commit) and (.bundle_sha256 | digest) and
+              (.fixtures | type == "object" and
+                keys == ["attestation-binding-v1.json", "component-attestation-binding-v2.json", "dpop-v1.json", "installation-family-v2.json", "protocol-version.json"] and
+                all(.[]; digest))) and
+            (.react_native | type == "object" and
+              keys == ["baseline", "cli", "firebase", "new_architecture", "node_linker", "package", "react", "react_peer", "version"] and
+              .package == "@latchway/react-native" and (.version | semver) and
+              (.baseline | semver) and (.cli | semver) and (.react | semver) and
+              (.react_peer | type == "string" and test("^[0-9]+\\.[0-9]+\\.x$")) and
+              .new_architecture == true and .node_linker == "hoisted" and
+              (.firebase | type == "object" and
+                keys == ["android_bom", "apple_sdk", "react_native"] and
+                all(.[]; semver))) and
+            (.javascript | type == "object" and
+              keys == ["package", "repository", "source_commit", "version"] and
+              .package == "@latchway/client" and
+              .repository == "https://github.com/Latchway/latchway-js.git" and
+              (.version | semver) and (.source_commit | commit)) and
+            (.ios | type == "object" and
+              keys == ["minimum_platform", "pod", "repository", "source_commit", "version"] and
+              .pod == "Latchway/AppAttest" and
+              .repository == "https://github.com/Latchway/latchway-ios-sdk.git" and
+              (.version | semver) and (.source_commit | commit) and
+              (.minimum_platform | type == "string" and test("^[0-9]+\\.[0-9]+$"))) and
+            (.android as $android | $android | type == "object" and
+              keys == ["artifacts", "build_tools_version", "compile_sdk", "consumer_android_gradle_plugin", "group", "kotlin", "minimum_sdk", "ndk_version", "publisher_android_gradle_plugin", "repository", "sdk_platform_version", "source_commit", "version"] and
+              .group == "dev.latchway" and
+              .repository == "https://github.com/Latchway/latchway-android.git" and
+              .artifacts == ["latchway-okhttp", "latchway-play-integrity"] and
+              (.version | semver) and (.source_commit | commit) and
+              (.minimum_sdk | type == "number" and floor == . and . >= 24) and
+              (.compile_sdk | type == "number" and floor == . and . >= $android.minimum_sdk) and
+              (.sdk_platform_version | type == "string" and test("^[0-9]+\\.[0-9]+$")) and
+              (.build_tools_version | semver) and
+              (.ndk_version | type == "string" and test("^[0-9]+(\\.[0-9]+){2,3}$")) and
+              (.publisher_android_gradle_plugin | semver) and
+              (.consumer_android_gradle_plugin | semver) and (.kotlin | semver))
+          ' "$sealed/release-compatibility.json" >/dev/null
+
+          test "$(wc -l < "$sealed/contract.lock" | tr -d ' ')" -eq 7
+          CONTRACT_VERSION=$(sed -n 's/^contract_version: //p' "$sealed/contract.lock")
+          WIRE_PROTOCOL=$(sed -n 's/^wire_protocol: //p' "$sealed/contract.lock")
+          CORE_TAG=$(sed -n 's/^core_release: //p' "$sealed/contract.lock")
+          CORE_COMMIT=$(sed -n 's/^core_commit: //p' "$sealed/contract.lock")
+          BUNDLE_SHA256=$(sed -n 's/^bundle_sha256: "\([0-9a-f]*\)"$/\1/p' "$sealed/contract.lock")
+          MINIMUM_SERVER_VERSION=$(sed -n 's/^minimum_server_version: //p' "$sealed/contract.lock")
+          MAXIMUM_SERVER_VERSION=$(sed -n 's/^maximum_tested_server_version: //p' "$sealed/contract.lock")
+          [[ "$CONTRACT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$WIRE_PROTOCOL" = 2
+          [[ "$CORE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$MINIMUM_SERVER_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$MAXIMUM_SERVER_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+          test "$CONTRACT_VERSION" = "$(jq --raw-output .contract.version "$sealed/release-compatibility.json")"
+          test "$WIRE_PROTOCOL" = "$(jq --raw-output .contract.wire_protocol "$sealed/release-compatibility.json")"
+          test "$CORE_COMMIT" = "$(jq --raw-output .contract.core_commit "$sealed/release-compatibility.json")"
+          test "$BUNDLE_SHA256" = "$(jq --raw-output .contract.bundle_sha256 "$sealed/release-compatibility.json")"
+
+          JAVASCRIPT_COMMIT=$(jq --raw-output .javascript.source_commit "$sealed/release-compatibility.json")
+          JAVASCRIPT_VERSION=$(jq --raw-output .javascript.version "$sealed/release-compatibility.json")
+          IOS_COMMIT=$(jq --raw-output .ios.source_commit "$sealed/release-compatibility.json")
+          IOS_VERSION=$(jq --raw-output .ios.version "$sealed/release-compatibility.json")
+          ANDROID_COMMIT=$(jq --raw-output .android.source_commit "$sealed/release-compatibility.json")
+          ANDROID_VERSION=$(jq --raw-output .android.version "$sealed/release-compatibility.json")
+
+          git_askpass="$RUNNER_TEMP/latchway-native-consumer-askpass.sh"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            'case "$1" in' \
+            '*Username*) printf "%s\\n" x-access-token ;;' \
+            '*Password*) printf "%s\\n" "${GH_TOKEN:?}" ;;' \
+            '*) exit 1 ;;' \
+            'esac' > "$git_askpass"
+          chmod 700 "$git_askpass"
+          trap 'rm -f -- "$git_askpass"' EXIT
+          javascript_repository="$RUNNER_TEMP/latchway-js.git"
+          git init --bare "$javascript_repository"
+          GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 \
+            git -c credential.helper= -C "$javascript_repository" fetch \
+              --no-tags https://github.com/Latchway/latchway-js.git \
+              "$JAVASCRIPT_COMMIT:refs/heads/authenticated"
+          test "$(git -C "$javascript_repository" rev-parse --verify refs/heads/authenticated)" = "$JAVASCRIPT_COMMIT"
+          test -z "$(git -C "$javascript_repository" config --local --get-all http.https://github.com/.extraheader || true)"
+          git -C "$javascript_repository" symbolic-ref HEAD refs/heads/authenticated
+          git -C "$javascript_repository" bundle create "$sealed/locked-latchway-js.bundle" --all
+          git -C "$javascript_repository" bundle verify "$sealed/locked-latchway-js.bundle"
+          rm -f -- "$git_askpass"
+          trap - EXIT
+
+          retry_to_file() {
+            local output=$1 maximum_bytes=$2
+            shift 2
+            local temporary_output="${output}.partial"
+            for attempt in $(seq 1 180); do
+              if "$@" > "$temporary_output"; then
+                local bytes
+                bytes=$(wc -c < "$temporary_output" | tr -d ' ')
+                if [[ "$bytes" =~ ^[1-9][0-9]*$ ]] && (( bytes <= maximum_bytes )); then
+                  mv -- "$temporary_output" "$output"
+                  return 0
+                fi
+              fi
+              rm -f -- "$temporary_output"
+              if [[ "$attempt" -eq 180 ]]; then
+                echo "Authenticated dependency input did not become available within 90 minutes." >&2
+                return 1
+              fi
+              sleep 30
+            done
+          }
+
+          authenticate_tag() {
+            local repository=$1 tag=$2 commit=$3 directory=$4
+            retry_to_file "$directory/tag-ref.json" 1048576 \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/git/ref/tags/$tag"
+            local tag_object
+            tag_object=$(jq --exit-status --raw-output \
+              '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              "$directory/tag-ref.json")
+            test "$(jq --raw-output .object.type "$directory/tag-ref.json")" = tag
+            retry_to_file "$directory/tag-object.json" 1048576 \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/git/tags/$tag_object"
+            jq --exit-status --arg tag "$tag" --arg commit "$commit" --arg object "$tag_object" '
+              .sha == $object and .tag == $tag and .object.type == "commit" and .object.sha == $commit
+            ' "$directory/tag-object.json" >/dev/null
+          }
+
+          requires_build_attestation() {
+            local kind=$1 name=$2
+            if [[ "$kind" == android ]]; then return 0; fi
+            if [[ "$kind" == ios ]]; then [[ "$name" != *.tar.gz.sha256 ]]; return; fi
+            case "$name" in
+              latchway-client-*.tgz|build-reproducibility.json|package-evidence.json|post-publish-evidence.json|\
+              npm-registry-version.json|npm-registry-view.json|npm-attestations.json|\
+              npm-audit-signatures.json|npm-registry-evidence-manifest.json|npm-release-adoption-*.json)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          authenticate_release() {
+            local kind=$1 repository=$2 tag=$3 commit=$4
+            shift 4
+            local directory="$published/$kind"
+            mkdir -m 700 "$directory" "$directory/assets" "$directory/asset-attestations" \
+              "$directory/build-attestations"
+            authenticate_tag "$repository" "$tag" "$commit" "$directory"
+            retry_to_file "$directory/release.json" 2097152 \
+              gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/releases/tags/$tag"
+            local fixed_json
+            fixed_json=$(printf '%s\n' "$@" | sort | jq --raw-input --slurp 'split("\n")[:-1]')
+            test "$(jq --argjson fixed "$fixed_json" '$fixed | length == ($fixed | unique | length)' \
+              "$directory/release.json")" = true
+            jq --exit-status --arg tag "$tag" --arg kind "$kind" --argjson fixed "$fixed_json" '
+              . as $release |
+              .tag_name == $tag and .draft == false and .immutable == true and
+              ([.assets[].name] | length) == ([.assets[].name] | unique | length) and
+              all($fixed[] as $name; ($release.assets | map(.name) | index($name)) != null) and
+              if $kind == "javascript" then
+                all($release.assets[].name as $name;
+                  ($fixed | index($name)) != null or
+                  ($name | test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))) and
+                ([$release.assets[].name |
+                  select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length) >= 1
+              else
+                ([$release.assets[].name] | sort) == ($fixed | sort)
+              end
+            ' "$directory/release.json" >/dev/null
+
+            while IFS=$'\t' read -r asset_id name expected_size expected_digest; do
+              [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+              [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]]
+              [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
+              (( expected_size <= 536870912 ))
+              [[ -z "$expected_digest" || "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              local asset="$directory/assets/$name"
+              gh api --method GET \
+                -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$repository/releases/assets/$asset_id" > "$asset"
+              test -s "$asset"
+              test "$(wc -c < "$asset" | tr -d ' ')" = "$expected_size"
+              if [[ -n "$expected_digest" ]]; then
+                test "sha256:$(shasum -a 256 "$asset" | awk '{print $1}')" = "$expected_digest"
+              fi
+            done < <(jq --raw-output '.assets[] |
+              [.id, .name, .size, (.digest // "")] | @tsv' "$directory/release.json")
+
+            retry_to_file "$directory/release-attestation.json" 16777216 \
+              gh release verify "$tag" --repo "$repository" --format json
+            while IFS= read -r name; do
+              local asset="$directory/assets/$name"
+              retry_to_file "$directory/asset-attestations/$name.json" 16777216 \
+                gh release verify-asset "$tag" "$asset" --repo "$repository" --format json
+              if requires_build_attestation "$kind" "$name"; then
+                retry_to_file "$directory/build-attestations/$name.gh-output" 16777216 \
+                  gh attestation verify "$asset" \
+                    --repo "$repository" \
+                    --signer-workflow "$repository/.github/workflows/release.yml" \
+                    --source-ref refs/heads/main \
+                    --source-digest "$commit" \
+                    --deny-self-hosted-runners
+                jq --null-input --arg repository "$repository" --arg asset "$name" \
+                  --arg source_commit "$commit" '{
+                    schema_version: 1,
+                    kind: "latchway_authenticated_build_attestation",
+                    repository: $repository,
+                    asset: $asset,
+                    source_commit: $source_commit,
+                    status: "verified"
+                  }' > "$directory/build-attestations/$name.json"
+              fi
+            done < <(jq --raw-output '.assets[].name' "$directory/release.json")
+          }
+
+          javascript_assets=(
+            "latchway-client-$JAVASCRIPT_VERSION.tgz"
+            SHA256SUMS
+            build-reproducibility.json
+            contract-evidence.json
+            package-evidence.json
+            post-publish-evidence.json
+            publish-input-evidence.json
+            release-candidate-evidence.json
+            tag-evidence.json
+            npm-registry-version.json
+            npm-registry-view.json
+            npm-attestations.json
+            npm-audit-signatures.json
+            npm-registry-evidence-manifest.json
+          )
+          ios_assets=(
+            "latchway-ios-sdk-$IOS_VERSION.tar.gz"
+            "latchway-ios-sdk-$IOS_VERSION.tar.gz.sha256"
+            cocoapods-published-podspec.json
+            cocoapods-reviewed-podspec.json
+            cocoapods-release-evidence.json
+            cocoapods-release-evidence.SHA256SUMS
+          )
+          android_assets=(
+            "latchway-android-$ANDROID_VERSION-maven-repository.zip"
+            "latchway-android-$ANDROID_VERSION-central-portal.zip"
+            SHA256SUMS
+            github-release-tag-binding.json
+            latchway-maven-signing-public-key.asc
+            maven-central-upload-intent.json
+            maven-central-deployment.json
+            maven-central-deployment-status.json
+            maven-central-release-evidence.json
+          )
+          authenticate_release javascript Latchway/latchway-js \
+            "v$JAVASCRIPT_VERSION" "$JAVASCRIPT_COMMIT" "${javascript_assets[@]}"
+          authenticate_release ios Latchway/latchway-ios-sdk \
+            "v$IOS_VERSION" "$IOS_COMMIT" "${ios_assets[@]}"
+          authenticate_release android Latchway/latchway-android \
+            "v$ANDROID_VERSION" "$ANDROID_COMMIT" "${android_assets[@]}"
+          mkdir -m 700 "$published/core"
+          authenticate_tag Latchway/latchway "$CORE_TAG" "$CORE_COMMIT" "$published/core"
+
+          manifest="$sealed/MANIFEST.sha256"
+          while IFS= read -r relative; do
+            [[ "$relative" =~ ^\./[A-Za-z0-9._/-]+$ ]]
+            [[ "$relative" != *"/../"* ]]
+            bytes=$(wc -c < "$sealed/${relative#./}" | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 536870912 ))
+            digest=$(shasum -a 256 "$sealed/${relative#./}" | awk '{print $1}')
+            printf '%s %s\n' "$digest" "$relative"
+          done < <(cd "$sealed" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) \
+            > "$manifest"
+          file_count=$(wc -l < "$manifest" | tr -d ' ')
+          [[ "$file_count" =~ ^[1-9][0-9]*$ ]]
+          (( file_count <= 4096 ))
+          total_kib=$(du -sk "$sealed" | awk '{print $1}')
+          [[ "$total_kib" =~ ^[1-9][0-9]*$ ]]
+          (( total_kib <= 1572864 ))
+
+          archive="$RUNNER_TEMP/native-consumer-inputs.tar"
+          tar --format=posix --sort=name --mtime='UTC 1970-01-01' \
+            --owner=0 --group=0 --numeric-owner -cf "$archive" \
+            -C "$RUNNER_TEMP" authenticated-native-consumer-inputs
+          archive_bytes=$(wc -c < "$archive" | tr -d ' ')
+          [[ "$archive_bytes" =~ ^[1-9][0-9]*$ ]]
+          (( archive_bytes <= 1717986918 ))
+          archive_sha256=$(shasum -a 256 "$archive" | awk '{print $1}')
+          [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'archive_sha256=%s\n' "$archive_sha256" >> "$GITHUB_OUTPUT"
+      - name: Transfer one exact bounded input artifact to credential-free consumers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-consumer-inputs.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   android:
-    if: inputs.android
+    name: Verify published Android consumer without credentials
+    if: inputs.android && github.ref == 'refs/heads/main'
+    needs: authenticate-inputs
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      contents: read
     steps:
-      - name: Check out React Native SDK
+      - name: Check out exact React Native SDK without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
           path: latchway-react-native-sdk
           persist-credentials: false
-      - name: Read immutable compatibility lock
-        id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
-        working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK for workspace compilation
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download authenticated inputs without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
+          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-consumer-artifact
+      - name: Validate and materialize exact authenticated inputs without candidate code
+        shell: bash
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.authenticate-inputs.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          artifact="$RUNNER_TEMP/native-consumer-artifact/native-consumer-inputs.tar"
+          test -f "$artifact"
+          test "$(find "$RUNNER_TEMP/native-consumer-artifact" -type f | wc -l | tr -d ' ')" -eq 1
+          bytes=$(wc -c < "$artifact" | tr -d ' ')
+          [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+          (( bytes <= 1717986918 ))
+          test "$(shasum -a 256 "$artifact" | awk '{print $1}')" = "$EXPECTED_ARCHIVE_SHA256"
+          entries="$RUNNER_TEMP/native-consumer-tar-entries.txt"
+          tar -tf "$artifact" > "$entries"
+          entry_count=$(wc -l < "$entries" | tr -d ' ')
+          [[ "$entry_count" =~ ^[1-9][0-9]*$ ]]
+          (( entry_count <= 8192 ))
+          while IFS= read -r entry; do
+            [[ "$entry" == authenticated-native-consumer-inputs ||
+              "$entry" == authenticated-native-consumer-inputs/ ||
+              "$entry" =~ ^authenticated-native-consumer-inputs/[A-Za-z0-9._/-]+$ ]]
+            [[ "/${entry%/}/" != *"/../"* ]]
+          done < "$entries"
+          extraction="$RUNNER_TEMP/native-consumer-inputs"
+          mkdir -m 700 "$extraction"
+          tar -xf "$artifact" -C "$extraction"
+          root="$extraction/authenticated-native-consumer-inputs"
+          test -d "$root/published-dependency-inputs"
+          test -f "$root/release-compatibility.json"
+          test -f "$root/contract.lock"
+          test -f "$root/locked-latchway-js.bundle"
+          test -f "$root/MANIFEST.sha256"
+          test -z "$(find "$root" ! -type d ! -type f -print)"
+          expected_paths="$RUNNER_TEMP/native-consumer-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/native-consumer-actual-paths.txt"
+          while IFS=' ' read -r digest relative extra; do
+            [[ -z "${extra:-}" ]]
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$relative" =~ ^\./[A-Za-z0-9._/-]+$ ]]
+            [[ "$relative" != *"/../"* ]]
+            file="$root/${relative#./}"
+            test -f "$file"
+            file_bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$file_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( file_bytes <= 536870912 ))
+            test "$(shasum -a 256 "$file" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$relative" >> "$expected_paths"
+          done < "$root/MANIFEST.sha256"
+          (cd "$root" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) > "$actual_paths"
+          LC_ALL=C sort -o "$expected_paths" "$expected_paths"
+          test "$(uniq "$expected_paths" | wc -l | tr -d ' ')" = "$(wc -l < "$expected_paths" | tr -d ' ')"
+          cmp -s "$expected_paths" "$actual_paths"
+          cmp -s "$root/release-compatibility.json" latchway-react-native-sdk/release-compatibility.json
+          cmp -s "$root/contract.lock" latchway-react-native-sdk/contract.lock
+          javascript_commit=$(jq --exit-status --raw-output \
+            '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$root/release-compatibility.json")
+          git clone --no-local "$root/locked-latchway-js.bundle" latchway-js
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "$javascript_commit"
+          test -z "$(git -C latchway-js status --porcelain)"
+          printf 'LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS=%s\n' \
+            "$root/published-dependency-inputs" >> "$GITHUB_ENV"
+      - name: Read immutable compatibility lock without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          registry-url: https://registry.npmjs.org
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
@@ -61,82 +516,195 @@ jobs:
           "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
           "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
           "ndk;${{ steps.lock.outputs.android_ndk_version }}"
-      - name: Build exact JavaScript source and install workspace
+      - name: Build exact JavaScript source and install workspace without credentials
         run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
           pnpm --dir ../latchway-js install --frozen-lockfile
           pnpm --dir ../latchway-js build
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
-      - name: Verify immutable public dependency releases
-        env:
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-        run: node scripts/verify-published-dependencies.mjs --all
+      - name: Verify immutable public dependency releases from authenticated inputs
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          test -n "$LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS"
+          node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Verify clean npm dependency consumer
         run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
           pnpm pack:check
           pnpm consumer:check --published
         working-directory: latchway-react-native-sdk
       - name: Compile standalone bridge against public Maven coordinates
-        run: ./android/gradlew -p android clean check --no-daemon
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          ./android/gradlew -p android clean check --no-daemon
         working-directory: latchway-react-native-sdk
       - name: Compile and lint official Android host against public Maven coordinates
-        run: ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
         working-directory: latchway-react-native-sdk
 
   ios:
-    if: inputs.ios
+    name: Verify published iOS consumer without credentials
+    if: inputs.ios && github.ref == 'refs/heads/main'
+    needs: authenticate-inputs
     runs-on: macos-15
     timeout-minutes: 35
+    permissions:
+      contents: read
     steps:
-      - name: Check out React Native SDK
+      - name: Check out exact React Native SDK without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.sha }}
           path: latchway-react-native-sdk
           persist-credentials: false
-      - name: Read immutable compatibility lock
-        id: lock
-        run: node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
-        working-directory: latchway-react-native-sdk
-      - name: Check out locked JavaScript SDK for workspace compilation
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download authenticated inputs without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-          ref: ${{ steps.lock.outputs.javascript_commit }}
-          path: latchway-js
-          persist-credentials: false
+          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-consumer-artifact
+      - name: Validate and materialize exact authenticated inputs without candidate code
+        shell: bash
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.authenticate-inputs.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          artifact="$RUNNER_TEMP/native-consumer-artifact/native-consumer-inputs.tar"
+          test -f "$artifact"
+          test "$(find "$RUNNER_TEMP/native-consumer-artifact" -type f | wc -l | tr -d ' ')" -eq 1
+          bytes=$(wc -c < "$artifact" | tr -d ' ')
+          [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+          (( bytes <= 1717986918 ))
+          test "$(shasum -a 256 "$artifact" | awk '{print $1}')" = "$EXPECTED_ARCHIVE_SHA256"
+          entries="$RUNNER_TEMP/native-consumer-tar-entries.txt"
+          tar -tf "$artifact" > "$entries"
+          entry_count=$(wc -l < "$entries" | tr -d ' ')
+          [[ "$entry_count" =~ ^[1-9][0-9]*$ ]]
+          (( entry_count <= 8192 ))
+          while IFS= read -r entry; do
+            [[ "$entry" == authenticated-native-consumer-inputs ||
+              "$entry" == authenticated-native-consumer-inputs/ ||
+              "$entry" =~ ^authenticated-native-consumer-inputs/[A-Za-z0-9._/-]+$ ]]
+            [[ "/${entry%/}/" != *"/../"* ]]
+          done < "$entries"
+          extraction="$RUNNER_TEMP/native-consumer-inputs"
+          mkdir -m 700 "$extraction"
+          tar -xf "$artifact" -C "$extraction"
+          root="$extraction/authenticated-native-consumer-inputs"
+          test -d "$root/published-dependency-inputs"
+          test -f "$root/release-compatibility.json"
+          test -f "$root/contract.lock"
+          test -f "$root/locked-latchway-js.bundle"
+          test -f "$root/MANIFEST.sha256"
+          test -z "$(find "$root" ! -type d ! -type f -print)"
+          expected_paths="$RUNNER_TEMP/native-consumer-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/native-consumer-actual-paths.txt"
+          while IFS=' ' read -r digest relative extra; do
+            [[ -z "${extra:-}" ]]
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$relative" =~ ^\./[A-Za-z0-9._/-]+$ ]]
+            [[ "$relative" != *"/../"* ]]
+            file="$root/${relative#./}"
+            test -f "$file"
+            file_bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$file_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( file_bytes <= 536870912 ))
+            test "$(shasum -a 256 "$file" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$relative" >> "$expected_paths"
+          done < "$root/MANIFEST.sha256"
+          (cd "$root" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) > "$actual_paths"
+          LC_ALL=C sort -o "$expected_paths" "$expected_paths"
+          test "$(uniq "$expected_paths" | wc -l | tr -d ' ')" = "$(wc -l < "$expected_paths" | tr -d ' ')"
+          cmp -s "$expected_paths" "$actual_paths"
+          cmp -s "$root/release-compatibility.json" latchway-react-native-sdk/release-compatibility.json
+          cmp -s "$root/contract.lock" latchway-react-native-sdk/contract.lock
+          javascript_commit=$(jq --exit-status --raw-output \
+            '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$root/release-compatibility.json")
+          git clone --no-local "$root/locked-latchway-js.bundle" latchway-js
+          test "$(git -C latchway-js rev-parse --verify HEAD)" = "$javascript_commit"
+          test -z "$(git -C latchway-js status --porcelain)"
+          printf 'LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS=%s\n' \
+            "$root/published-dependency-inputs" >> "$GITHUB_ENV"
+      - name: Read immutable compatibility lock without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          registry-url: https://registry.npmjs.org
-      - name: Build exact JavaScript source and install workspace
+      - name: Build exact JavaScript source and install workspace without credentials
         run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
           pnpm --dir ../latchway-js install --frozen-lockfile
           pnpm --dir ../latchway-js build
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
-      - name: Verify immutable public dependency releases
-        env:
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
-        run: node scripts/verify-published-dependencies.mjs --all
+      - name: Verify immutable public dependency releases from authenticated inputs
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          test -n "$LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS"
+          node scripts/verify-published-dependencies.mjs --all
         working-directory: latchway-react-native-sdk
       - name: Resolve public CocoaPods dependency in official React Native host
         env:
           RCT_NEW_ARCH_ENABLED: "1"
-        run: pod install --repo-update
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          pod install --repo-update
         working-directory: latchway-react-native-sdk/example/ios
       - name: Build official iOS host against public CocoaPods dependency
-        run: >-
-          xcodebuild
-          -workspace LatchwayExample.xcworkspace
-          -scheme LatchwayExample
-          -configuration Debug
-          -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-published"
-          CODE_SIGNING_ALLOWED=NO
-          build
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
+            test -z "${!name:-}"
+          done
+          xcodebuild \
+            -workspace LatchwayExample.xcworkspace \
+            -scheme LatchwayExample \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-published" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
         working-directory: latchway-react-native-sdk/example/ios

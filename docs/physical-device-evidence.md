@@ -12,6 +12,15 @@ protected, manually dispatched `Physical React Native evidence` workflow can
 collect a candidate report, and the final cross-repository adapter requires all
 four independently validated native and React Native reports.
 
+> **Gate migration required:** the repaired production bridge no longer exports
+> an authorized `Request`, access token, or DPoP proof. The existing raw report
+> schema still expects JavaScript to replay/mutate those credentials and hash a
+> session credential. The example now fails those legacy fields deliberately.
+> Promotion stays blocked until the finalizer takes replay, tamper, refresh
+> rotation, protocol rejection, and revocation proof from the already linked
+> native report while the React Native report proves bridge reachability,
+> native-owned dispatch, streaming, cancellation, safe errors, and quota.
+
 ## What the run proves
 
 Each platform run uses the real example application and verifies:
@@ -19,8 +28,9 @@ Each platform run uses the real example application and verifies:
 - the React Native New Architecture bridge reached the locked native SDK;
 - a production App Attest session with a Secure Enclave key on iOS, or a Play
   Integrity session with hardware-backed Android Keystore key material;
-- a DPoP-authorized request, rejection of an exact proof replay, and rejection
-  of a fresh request whose DPoP proof was bit-tampered;
+- a DPoP-authorized request through the opaque native dispatch boundary; proof
+  replay and proof-tamper rejection come from the linked native report after
+  the gate migration above;
 - the concrete React Native `LatchwayError` mapping for a canonical 404,
   credential rotation across an explicit refresh for the same installation,
   rejection of protocol version zero, and rejection of a request authorized
@@ -75,15 +85,87 @@ an added, removed, or substituted split changes the protected set hash.
 
 The protected GitHub environments are:
 
-- `react-native-ios-production`, on a self-hosted runner labelled
-  `macOS` and `latchway-physical-ios`;
-- `react-native-android-production`, on a self-hosted runner labelled
-  `Linux` and `latchway-physical-android`.
+- `react-native-ios-production`, on a newly booted repository-scoped JIT
+  runner registered with `--ephemeral`, labelled `macOS`,
+  `latchway-physical-ios`, and `latchway-ephemeral-jit`, and named exactly
+  `latchway-rn-ios-<run-id>-<run-attempt>`;
+- `react-native-android-production`, on the equivalent one-job runner labelled
+  `Linux`, `latchway-physical-android`, and `latchway-ephemeral-jit`, and named
+  exactly `latchway-rn-android-<run-id>-<run-attempt>`.
+
+Reusable runners, runners able to accept a second job, surviving workspaces,
+and shared devices are ineligible. Each environment configures the public
+collector trust root and SHA-256 plus its platform-specific one-use device
+grant SHA-256. The grant is provisioned after the run ID and attempt exist,
+records its issuance and expiry, remains valid for at most five minutes and no
+later than the runner lease, is accepted once, and is bound
+to repository, source commit, run/attempt, application, a unique `jti`, and
+audience `latchway-physical-evidence/rn-ios-app-attest` or
+`latchway-physical-evidence/rn-android-play-integrity`. No reusable identity
+session, organization/admin token, PAT, registry/cloud credential, or OIDC
+authority may be present on a collector. If platform application setup cannot
+consume that one-use grant, the physical gate cannot run.
+
+The variable names are `LATCHWAY_COLLECTOR_TRUST_ROOT_PEM`,
+`LATCHWAY_COLLECTOR_TRUST_ROOT_SHA256`, and respectively
+`LATCHWAY_IOS_DEVICE_GRANT_SHA256` or
+`LATCHWAY_ANDROID_DEVICE_GRANT_SHA256`. The public trust root and expected
+hashes are repeated in `physical-evidence-signing`; no private supervisor key,
+device selector, application credential, or grant value is present there.
+
+Create a third reviewed environment, `physical-evidence-signing`, in this
+repository. It must contain no device, identity, application, native-evidence,
+or runner credentials. Require independent reviewers and restrict deployments
+to `main`.
 
 Environment protection should require an independent reviewer and prevent
 untrusted pull-request code from reaching the devices or application accounts.
 Toolchain identities are compared byte-for-byte with the protected expected
 Xcode, `adb`, and `apksigner` versions before collection.
+
+## Ephemeral runner identity and teardown
+
+The GitHub-hosted `authorize-source` job checks out the React Native candidate
+only as data, executes no repository code, records its exact commit and Git
+tree for both platform audiences and this run/attempt, and creates a GitHub
+Sigstore attestation. Each collector verifies that bundle with
+`--deny-self-hosted-runners` before checking out or executing candidate code.
+
+Every JIT image exposes root-owned, non-writable
+`/etc/latchway/physical-collector/lease.json` and `lease.sig`, and the
+root-owned client `/usr/local/libexec/latchway-physical-collector-finalize`.
+The ECDSA/SHA-256 lease is signed outside the candidate VM and binds repository,
+source commit and authorization hash, workflow run/attempt/job/audience,
+runner name/image/boot identity, one-job/fresh/JIT flags, the exact signed app
+or installed APK-set, JavaScript bundle and linked-native evidence hashes, and
+the one-use grant hash/`jti`/issuance/expiry. Its credential declaration must deny
+long-lived, organization, administration, registry, and OIDC credentials.
+
+The finalizer is a client for an authenticated privileged supervisor, not a
+general signing utility. The signing key and gateway observer capability stay
+outside candidate control. The service accepts file paths rather than
+caller-supplied digest claims, independently hashes and validates the source,
+evidence, and wipe receipt, independently observes the device and the
+gateway's server-side App Attest or Play Integrity run receipt, and permits one
+invocation per lease. It deregisters the runner, prevents another job, and
+schedules VM destruction within ten minutes. Candidate code can force a
+failure, but it cannot obtain a signature over arbitrary hashes or a synthetic
+device/provider verdict.
+
+The supervisor's out-of-band watchdog must revoke the JIT registration,
+invalidate the one-use grant, wipe/reset the attached device, and destroy the
+VM after cancellation, timeout, runner crash, network loss, or a missing
+finalizer receipt. This path cannot depend on candidate code or a final Actions
+step executing.
+
+Platform app-data wipe and supervisor finalization are separate unconditional
+`if: always()` steps. iOS uninstalls the conformance app and confirms absence;
+Android runs `pm clear` and confirms no process remains. Finalization still
+runs if lease, source, toolchain, grant, collection, or wipe validation fails.
+Only a signed teardown with `evidence_eligible=true`, independent
+device/provider and gateway-receipt verification, successful wipe, JIT
+deregistration, no further jobs, and a bounded destruction deadline can be
+handed to the signer.
 
 Both environments configure `LATCHWAY_GATEWAY_ORIGIN`, the deployment key ID,
 the exact statement SHA-256, the local P-256 public-key path and SPKI SHA-256,
@@ -120,13 +202,45 @@ fixed protected file; they do not accept an arbitrary output path. Successful
 artifacts contain the profile, sanitized observation, schema-validated evidence,
 JUnit, validation summary, device inventory, linked native report/profile,
 signed statement, signature, public key, exact client policy, verification
-result, and `SHA256SUMS`. A failed run never becomes a passing report. GitHub
-Sigstore attests the profile, evidence, and manifest and its bundle is retained.
+result, and `SHA256SUMS`. A failed run never becomes a passing report.
+
+Each protected JIT collector runs with only repository-scoped `actions: read`
+and `contents: read`: candidate
+checkout, native/device execution, and access to app/device credentials have no
+OIDC, attestation, or artifact-metadata authority. It uploads a bounded one-day
+`react-native-<platform>-physical-unsigned-<run>-<attempt>` handoff. A fresh
+GitHub-hosted Ubuntu job behind `physical-evidence-signing` downloads that
+handoff without checking out source and uses only fixed inline shell, `jq`, and
+hash checks to enforce the exact file set, size limits, manifest, source
+commit, run/attempt, platform, physical-device, production-provider,
+passing-test, and redaction coordinates. Only that job receives OIDC and
+attestation permissions. It emits the observer-compatible final artifacts
+`react-native-ios-physical-<run>-<attempt>` and
+`react-native-android-physical-<run>-<attempt>`, with the GitHub Sigstore bundle
+at exactly `github-attestation.sigstore.json` beside the attested profile,
+evidence, and `SHA256SUMS`.
+
+The signer additionally verifies the GitHub-hosted source authorization,
+trust-root signatures on the lease and teardown, exact run/grant/artifact
+coordinates, device-wipe receipt, evidence-manifest binding, independent
+supervisor verdict, and destruction deadline. It attests a
+`collector-isolation-validation.json` subject and retains separate
+`react-native-<platform>-collector-isolation-<run>-<attempt>` artifacts for 30
+days. The observer-compatible physical artifact file sets remain unchanged.
+
+Repository validation cannot create hardware, a JIT provisioning service, the
+root supervisor, isolated signing key/observer capability, one-use grant
+issuer, protected environments, or a post-job hypervisor destruction record.
+Those remain external release prerequisites. Operators must independently
+retain a destruction log bound to the same lease/run as each final artifact;
+the signed teardown proves deregistration and scheduled destruction, not that
+the hypervisor later completed it.
 
 Repository-only validation is safe to run anywhere:
 
 ```sh
 python3 scripts/test-device-evidence.py
+python3 scripts/test-physical-evidence-workflow.py
 python3 scripts/test-finalize-react-native-device-run.py
 python3 scripts/test-export-core-physical-evidence.py
 python3 scripts/test-verify-gateway-deployment.py

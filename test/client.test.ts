@@ -1,13 +1,24 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LatchwayError } from "@latchway/client";
-import { createLatchwayClient, errorFromResponse } from "../src/index.js";
-import type { LatchwayClient } from "../src/types.js";
+import type { LatchwayErrorCode } from "@latchway/client";
+import { createLatchwayClient, createLatchwayComponentClient, errorFromResponse } from "../src/index.js";
+import { fromNativeError } from "../src/errors.js";
+import type { LatchwayClient, LatchwayComponentClient } from "../src/types.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 interface ProtocolFixture {
   contract_version: string;
-  wire_protocol: { current: number };
+  contract_status: string;
+  wire_protocol: { current: number; supported: number[] };
+  bundle: { required_entries: string[] };
+  component_attestation_binding: {
+    version: number;
+    purpose: string;
+    canonicalization: string;
+    hash: string;
+  };
   sdk_kinds: string[];
 }
 
@@ -19,119 +30,376 @@ interface BindingFixture {
   vectors: Array<{ sha256_base64url: string }>;
 }
 
+interface ComponentBindingFixture {
+  contract_version: string;
+  binding_version: number;
+  canonicalization: string;
+  hash: string;
+  vectors: Array<{
+    id: string;
+    input: {
+      version: number;
+      purpose: string;
+      component_definition_id: string;
+      platform: string;
+    };
+    canonical_json: string;
+    utf8_hex: string;
+    sha256_hex: string;
+    sha256_base64url: string;
+  }>;
+}
+
+interface InstallationFamilyFixture {
+  contract_version: string;
+  wire_protocol_version: number;
+  family: { id: string; status: string };
+  root_component: { installation_family_id?: string; is_root: boolean };
+  provisioned_components: Array<{ response: { installation_family_id: string } }>;
+  revocations: Array<{ scope: string; expected_family_status: string }>;
+}
+
+interface NativeRequestRecord {
+  encoded: string;
+  identityToken: string;
+  operationID: string;
+  request: {
+    url: string;
+    method: string;
+    feature: string;
+    headers: Array<[string, string]>;
+    bodyBase64: string | null;
+  };
+}
+
+interface ResponseFixture {
+  status?: number;
+  statusText?: string;
+  headers?: Array<[string, string]>;
+  chunks?: string[];
+}
+
 const clients: LatchwayClient[] = [];
-const ANDROID_REQUEST_ID = "android:550e8400-e29b-41d4-a716-446655440000";
+const componentClients: LatchwayComponentClient[] = [];
+const REQUEST_ID = "android:550e8400-e29b-41d4-a716-446655440000";
 const OPERATION_ID = "arq_0123456789ABCDEFGHJKMNPQRS";
+const DIRECT_COMPONENT = {
+  definitionID: "action_extension",
+  kind: "action_extension",
+  keychainAccessGroup: "ABCDE12345.com.example.app.action-extension",
+  requestedFeatures: ["habit_assistant"],
+} as const;
 let restoreNative: (() => void) | undefined;
 
 afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map(async (client) => { await client.dispose(); }));
+  await Promise.allSettled(componentClients.splice(0).map(async (client) => { await client.dispose(); }));
   restoreNative?.();
   restoreNative = undefined;
+  vi.unstubAllGlobals();
 });
 
-describe("React Native Latchway client", () => {
-  it("authorizes exact-origin fetches and strips caller-supplied credentials", async () => {
+describe("React Native Latchway native-owned fetch", () => {
+  it("dispatches through native and exposes only safe response metadata and streamed bytes", async () => {
     const native = new FakeNativeModule();
-    install(native);
-    let outbound: Request | undefined;
-    const client = create({
-      fetch: async (request) => {
-        outbound = request as Request;
-        return new Response("ok");
-      },
+    native.responses.push({
+      status: 201,
+      headers: [
+        ["content-type", "text/event-stream"],
+        ["x-latchway-request-id", REQUEST_ID],
+      ],
+      chunks: ["data: first\n", "data: [DONE]\n\n"],
     });
+    install(native);
+    const javascriptFetch = vi.fn(async () => new Response("credential leak"));
+    vi.stubGlobal("fetch", javascriptFetch);
+    const client = create();
 
     const response = await client.fetch("/v1/responses", {
+      method: "POST",
       latchwayFeature: "habit_assistant",
-      headers: {
-        Authorization: "Bearer caller-secret",
-        "X-Api-Key": "upstream-secret",
-        "Anthropic-Api-Key": "upstream-secret",
-        "OpenAI_Api_Key": "upstream-secret",
-        "X-Amz-Security-Token": "upstream-secret",
-        "X-Goog-Credential": "upstream-secret",
-        DPoP: "caller-proof",
-        "X-Latchway-Request-ID": "caller-request",
-      },
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "hello" }),
     });
 
-    expect(await response.text()).toBe("ok");
-    expect(outbound?.headers.get("Authorization")).toBe("DPoP native-access-token");
-    expect(outbound?.headers.get("X-Api-Key")).toBeNull();
-    expect(outbound?.headers.get("Anthropic-Api-Key")).toBeNull();
-    expect(outbound?.headers.get("OpenAI_Api_Key")).toBeNull();
-    expect(outbound?.headers.get("X-Amz-Security-Token")).toBeNull();
-    expect(outbound?.headers.get("X-Goog-Credential")).toBeNull();
-    expect(outbound?.headers.get("DPoP")).toBe("header.payload.signature");
-    expect(outbound?.headers.get("X-Latchway-Feature")).toBe("habit_assistant");
-    expect(outbound?.headers.get("X-Latchway-SDK")).toBe("react-native");
-    expect(outbound?.headers.get("X-Latchway-Protocol-Version")).toBe("1");
-    expect(outbound?.headers.get("X-Latchway-Request-ID")).toBe(ANDROID_REQUEST_ID);
-    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
-    expect(native.authorizations[0]?.encoded).not.toContain("app-owned-identity-token");
+    expect(response.status).toBe(201);
+    expect(response.headers.get("x-latchway-request-id")).toBe(REQUEST_ID);
+    expect(await response.text()).toBe("data: first\ndata: [DONE]\n\n");
+    expect(javascriptFetch).not.toHaveBeenCalled();
+    expect(native.requests).toHaveLength(1);
+    expect(native.requests[0]?.request).toMatchObject({
+      url: "https://gateway.example.test/v1/responses",
+      method: "POST",
+      feature: "habit_assistant",
+    });
+    expect(native.requests[0]?.request.headers).toContainEqual(["content-type", "application/json"]);
+    expect(decodeBase64(native.requests[0]?.request.bodyBase64)).toBe('{"prompt":"hello"}');
+    expect(native.requests[0]?.encoded).not.toContain("app-owned-identity-token");
+    expect(native.requests[0]?.identityToken).toBe("app-owned-identity-token");
   });
 
-  it("rejects cross-origin targets before requesting identity", async () => {
+  it("returns a fetch-compatible function permanently bound to one feature", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    const chatFetch = client.fetchFor("chat");
+
+    await expect((await chatFetch("/v1/chat/completions", { method: "POST", body: "{}" })).text())
+      .resolves.toBe("ok");
+    expect(native.requests[0]?.request.feature).toBe("chat");
+  });
+
+  it("dispatches a canonical feature-bound opaque route", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    await expect((await client.fetch("/proxy/chat/vendor/v1/models", {
+      method: "GET",
+      latchwayFeature: "chat",
+    })).text()).resolves.toBe("ok");
+    expect(native.requests[0]?.request).toMatchObject({
+      url: "https://gateway.example.test/proxy/chat/vendor/v1/models",
+      method: "GET",
+      feature: "chat",
+    });
+  });
+
+  it("rejects methods and paths outside the structured and opaque route contract before identity", async () => {
     const native = new FakeNativeModule();
     install(native);
     const getIdentityToken = vi.fn(async () => "identity");
     const client = create({ getIdentityToken });
-    await expect(client.fetch("https://attacker.invalid/v1", { latchwayFeature: "chat" }))
-      .rejects.toMatchObject({ code: "client_configuration_invalid" });
+    const invalidTargets = [
+      ["GET", "/v1/responses"],
+      ["OPTIONS", "/proxy/chat/vendor/models"],
+      ["GET", "/proxy/other/vendor/models"],
+      ["GET", "/proxy/chat/"],
+      ["GET", "/proxy/chat/vendor/models?region=us"],
+      ["GET", "/proxy/chat/vendor//models"],
+      ["GET", "/proxy/chat/vendor/%2Fmodels"],
+      ["GET", "/proxy/chat/vendor/%5Cmodels"],
+      ["GET", "/proxy/chat/vendor/%2emodels"],
+      ["GET", "/proxy/chat/http:attacker.invalid"],
+    ] as const;
+
+    for (const [method, target] of invalidTargets) {
+      await expect(client.fetch(target, { method, latchwayFeature: "chat" })).rejects.toMatchObject({
+        code: "transport_destination_not_allowed",
+      });
+    }
     expect(getIdentityToken).not.toHaveBeenCalled();
-    expect(native.authorizations).toHaveLength(0);
+    expect(native.requests).toHaveLength(0);
   });
 
-  it("rejects encoded and case-varied provider credentials in the query before authorization or dispatch", async () => {
+  it("strips caller credentials and native-owned protocol headers before crossing the bridge", async () => {
     const native = new FakeNativeModule();
     install(native);
     const getIdentityToken = vi.fn(async () => "identity");
-    const dispatch = vi.fn(async () => new Response("must not dispatch"));
-    const client = create({ getIdentityToken, fetch: dispatch });
-    const credential = "synthetic-provider-secret-marker";
+    const client = create({ getIdentityToken });
 
-    for (const name of [
-      "AUTHORIZATION",
-      "Proxy-Authorization",
-      "Api-Key",
-      "API_KEY",
-      "%61pi%5Fkey",
-      "X-Api-Key",
-      "OpenAI-Api-Key",
-      "OPENAI_API_KEY",
-      "X-OpenAI-Api-Key",
-      "Anthropic-Api-Key",
-      "ANTHROPIC_API_KEY",
-      "X-Goog-Api-Key",
-      "X-Goog_API_KEY",
-      "Access%5FToken",
-      "AUTH_TOKEN",
-      "X-Auth-Token",
-      "Cookie",
-      "KEY",
-      "ToKeN",
-      "X-Amz-Credential",
-      "X-Amz-Security-Token",
-      "x-amz-signature",
-      "X-Goog-Credential",
-      "X-Goog-Signature",
-    ]) {
-      const failure: unknown = await client.fetch(`/v1/models?${name}=${credential}`, { latchwayFeature: "chat" })
-        .then(() => undefined, (error: unknown) => error);
-      expect(failure).toMatchObject({
-        code: "request_invalid",
-        message: "Upstream provider credentials must not be supplied in the request URL.",
-      });
-      expect(String(failure)).not.toContain(credential);
-    }
+    await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      headers: { Authorization: "Bearer provider-secret" },
+    });
+    expect(getIdentityToken).toHaveBeenCalledTimes(1);
+    expect(native.requests[0]?.request.headers).toEqual([]);
 
-    expect(getIdentityToken).not.toHaveBeenCalled();
-    expect(native.authorizations).toHaveLength(0);
-    expect(dispatch).not.toHaveBeenCalled();
+    await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      headers: {
+        "X-Latchway-Feature": "caller-feature",
+        "X-Latchway-Request-ID": "caller-request-id",
+        "X-Latchway-Protocol-Version": "0",
+      },
+    });
+    expect(native.requests[1]?.request.headers).toEqual([]);
   });
 
-  it("shares one native client across equivalent JavaScript instances", async () => {
+  it.each([
+    "access-token",
+    "AccessToken",
+    "client-secret",
+    "x-provider-credential",
+    "DPoP",
+  ])("normalizes and strips credential-shaped request header %s", async (header) => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      headers: { [header]: "synthetic-secret" },
+    });
+    expect(native.requests[0]?.request.headers).toEqual([]);
+  });
+
+  it("rejects cross-origin, disallowed-path, fragment, and credential-query targets before identity", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const getIdentityToken = vi.fn(async () => "identity");
+    const client = create({ getIdentityToken });
+    const targets = [
+      "https://attacker.invalid/v1/responses",
+      "/v1/models",
+      "/v1/responses#fragment",
+      "/v1/responses?%2561ccess_token=provider-secret",
+      "/v1/responses?%2525252561ccess_token=provider-secret",
+      "/v1/responses?X-Amz-Security-Token=provider-secret",
+      "/v1/responses?access-token=provider-secret",
+      "/v1/responses?clientSecret=provider-secret",
+      "/v1/responses?provider_credential=provider-secret",
+    ];
+
+    for (const target of targets) {
+      await expect(client.fetch(target, { method: "POST", latchwayFeature: "chat" }))
+        .rejects.toBeInstanceOf(LatchwayError);
+    }
+    expect(getIdentityToken).not.toHaveBeenCalled();
+    expect(native.requests).toHaveLength(0);
+  });
+
+  it("buffers a bounded request body for native dispatch and fails before identity above 8 MiB", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const getIdentityToken = vi.fn(async () => "identity");
+    const client = create({ getIdentityToken });
+    const oversized = new Uint8Array(8 * 1024 * 1024 + 1);
+
+    await expect(client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      body: oversized,
+    })).rejects.toMatchObject({ code: "request_invalid" });
+    expect(getIdentityToken).not.toHaveBeenCalled();
+    expect(native.requests).toHaveLength(0);
+  });
+
+  it("pulls native response chunks on demand and closes the opaque handle after EOF", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ chunks: ["one", "two"] });
+    install(native);
+    const client = create();
+    const response = await client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing response stream");
+
+    expect(native.readCalls).toBe(0);
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("one");
+    expect(native.readCalls).toBe(1);
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("two");
+    expect(native.readCalls).toBe(2);
+    expect((await reader.read()).done).toBe(true);
+    expect(native.readCalls).toBe(3);
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("closes a native response when the JavaScript consumer cancels", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ chunks: ["first", "second"] });
+    install(native);
+    const client = create();
+    const response = await client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing response stream");
+    await reader.cancel("done");
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("cancels native dispatch when aborted before response headers", async () => {
+    const native = new FakeNativeModule();
+    native.startGate = new Promise<string>(() => {});
+    install(native);
+    const controller = new AbortController();
+    const client = create();
+    const pending = client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => { expect(native.requests).toHaveLength(1); });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(native.cancelCalls).toHaveLength(1);
+  });
+
+  it("cancels an active native read and closes its response on abort", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ chunks: ["blocked"] });
+    native.readGate = new Promise<void>(() => {});
+    install(native);
+    const controller = new AbortController();
+    const client = create();
+    const response = await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      signal: controller.signal,
+    });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing response stream");
+    const pending = reader.read();
+    await vi.waitFor(() => { expect(native.readCalls).toBe(1); });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(native.cancelCalls).toHaveLength(1);
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("closes bodyless native responses without requesting a chunk", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ status: 204, chunks: [] });
+    install(native);
+    const client = create();
+    const response = await client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" });
+    expect(response.body).toBeNull();
+    expect(native.readCalls).toBe(0);
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it.each([
+    "authorization",
+    "dpop",
+    "accessToken",
+    "refresh_token",
+    "privateKey",
+    "session_token",
+    "attestationEvidence",
+  ])("fails closed if native response metadata contains credential field %s", async (field) => {
+    const native = new FakeNativeModule();
+    native.metadataExtra = { [field]: "synthetic-secret" };
+    install(native);
+    const client = create();
+    await expect(client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" }))
+      .rejects.toMatchObject({
+      code: "protocol_response_invalid",
+      message: "Latchway native output crossed the credential boundary.",
+    });
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("fails closed if native metadata exposes a credential header", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ headers: [["authorization", "DPoP secret"]] });
+    install(native);
+    const client = create();
+    await expect(client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" }))
+      .rejects.toMatchObject({ code: "protocol_response_invalid" });
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("fails closed and closes the response if a chunk envelope contains a credential field", async () => {
+    const native = new FakeNativeModule();
+    native.chunkExtra = { refreshToken: "synthetic-secret" };
+    install(native);
+    const client = create();
+    const response = await client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" });
+    await expect(response.text()).rejects.toMatchObject({ code: "protocol_response_invalid" });
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("shares one compatible native client and disposes it after the final JavaScript lease", async () => {
     const native = new FakeNativeModule();
     install(native);
     const first = create();
@@ -144,211 +412,25 @@ describe("React Native Latchway client", () => {
     expect(native.disposeCalls).toBe(1);
   });
 
-  it("rejects conflicting active native configuration for one scope", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const first = create();
-    await first.ready;
-    const second = create({ android: { keyPolicy: "software_allowed" } });
-    await expect(second.ready).rejects.toMatchObject({ code: "client_configuration_invalid" });
-  });
-
-  it("fails closed on a native contract mismatch and disposes partial native state", async () => {
+  it("fails closed on a native contract mismatch and disposes partial state", async () => {
     const native = new FakeNativeModule();
     native.compatibility = { contractVersion: "9.9.9" };
     install(native);
     const client = create();
-
     await expect(client.ready).rejects.toMatchObject({ code: "protocol_response_invalid" });
     expect(native.disposeCalls).toBe(1);
   });
 
-  it("performs one safe DPoP nonce retry and preserves the request ID", async () => {
+  it("fails closed if native compatibility metadata contains credential fields", async () => {
     const native = new FakeNativeModule();
-    install(native);
-    let calls = 0;
-    const client = create({
-      fetch: async () => {
-        calls += 1;
-        if (calls === 1) {
-          return problem("dpop_nonce_required", {
-            "DPoP-Nonce": "nonce-0123456789abcdef",
-          });
-        }
-        return new Response("retried");
-      },
-    });
-
-    expect(await (await client.fetch("/v1/models", { latchwayFeature: "chat" })).text()).toBe("retried");
-    expect(calls).toBe(2);
-    expect(native.authorizations).toHaveLength(2);
-    expect(native.authorizations[1]?.request.nonce).toBe("nonce-0123456789abcdef");
-    expect(native.authorizations[1]?.request.requestID).toBe(ANDROID_REQUEST_ID);
-  });
-
-  it("refreshes once after a validated bodyless session-expired rejection", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    let calls = 0;
-    const client = create({
-      fetch: async () => ++calls === 1 ? problem("session_expired") : new Response("refreshed"),
-    });
-    expect(await (await client.fetch("/v1/models", { latchwayFeature: "chat" })).text()).toBe("refreshed");
-    expect(native.refreshCalls).toBe(1);
-    expect(calls).toBe(2);
-  });
-
-  it("exposes explicit session rotation without returning credentials", async () => {
-    const native = new FakeNativeModule();
+    native.compatibility = { accessToken: "synthetic-secret" };
     install(native);
     const client = create();
-    await expect(client.refresh()).resolves.toBeUndefined();
-    expect(native.refreshCalls).toBe(1);
-    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
-  });
-
-  it("does not replay requests with a body", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    let calls = 0;
-    const client = create({ fetch: async () => { calls += 1; return problem("session_expired"); } });
-    const response = await client.fetch("/v1/responses", {
-      method: "POST",
-      body: "prompt",
-      latchwayFeature: "chat",
+    await expect(client.ready).rejects.toMatchObject({
+      code: "protocol_response_invalid",
+      message: "Latchway native output crossed the credential boundary.",
     });
-    expect(response.status).toBe(401);
-    expect(calls).toBe(1);
-    expect(native.refreshCalls).toBe(0);
-  });
-
-  it("does not clone or replay a streamed request body", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const clone = vi.spyOn(Request.prototype, "clone");
-    let calls = 0;
-    const client = create({
-      fetch: async (request) => {
-        calls += 1;
-        expect(await (request as Request).text()).toBe("streamed-prompt");
-        return problem("session_expired");
-      },
-    });
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("streamed-"));
-        controller.enqueue(new TextEncoder().encode("prompt"));
-        controller.close();
-      },
-    });
-    const request = new Request("https://gateway.example.test/v1/responses", {
-      method: "POST",
-      body: source,
-      duplex: "half",
-    } as RequestInit & { duplex: "half" });
-
-    const response = await client.fetch(request, { latchwayFeature: "chat" });
-
-    expect(response.status).toBe(401);
-    expect(calls).toBe(1);
-    expect(native.refreshCalls).toBe(0);
-    expect(clone).not.toHaveBeenCalled();
-  });
-
-  it("requires retryable and request-correlated problem metadata before replay", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const responses = [
-      problem("session_expired", {}, false),
-      problem("session_expired", { "X-Latchway-Request-ID": "request-00000002" }),
-    ];
-    let calls = 0;
-    const client = create({
-      fetch: async () => {
-        calls += 1;
-        const response = responses.shift();
-        if (response === undefined) throw new Error("unexpected replay");
-        return response;
-      },
-    });
-
-    const notRetryable = await client.fetch("/v1/models?case=retryable", { latchwayFeature: "chat" });
-    const mismatched = await client.fetch("/v1/models?case=request-id", { latchwayFeature: "chat" });
-
-    expect(notRetryable.status).toBe(401);
-    expect(mismatched.status).toBe(401);
-    expect(calls).toBe(2);
-    expect(native.refreshCalls).toBe(0);
-  });
-
-  it("requires the exact canonical pre-dispatch problem before replay", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const responses = [
-      problem("session_expired", {}, true, { type: "https://example.test/problems/session_expired" }),
-      problem("session_expired", {}, true, { title: "Request rejected" }),
-      problem("session_expired", {}, true, { detail: "Please refresh this session." }),
-      problem("session_expired", {}, true, { status: 400 }),
-      problem("session_expired", {}, true, { feature: "chat" }),
-      problem("session_expired", {}, true, { detail: undefined }),
-      problem("dpop_nonce_required"),
-      problem("dpop_nonce_required", { "DPoP-Nonce": "nonce-0123456789,second-nonce" }),
-      problem("dpop_nonce_required", { "DPoP-Nonce": "nonce-0123456789 abcdef" }),
-      problem("session_expired", { "DPoP-Nonce": "nonce-0123456789abcdef" }),
-      duplicateProblem(false),
-      duplicateProblem(true),
-      oversizedProblem(),
-    ];
-    const invalidCount = responses.length;
-    const dispatch = vi.fn(async () => {
-      const response = responses.shift();
-      if (response === undefined) throw new Error("unexpected replay");
-      return response;
-    });
-    const client = create({ fetch: dispatch });
-
-    for (let index = 0; index < invalidCount; index += 1) {
-      const response = await client.fetch(`/v1/models?case=invalid-${index}`, { latchwayFeature: "chat" });
-      expect(response.status).toBe(401);
-      if (index === invalidCount - 1) expect(await response.text()).toHaveLength(65_537);
-    }
-
-    expect(dispatch).toHaveBeenCalledTimes(invalidCount);
-    expect(native.authorizations).toHaveLength(invalidCount);
-    expect(native.refreshCalls).toBe(0);
-  });
-
-  it("returns the fetch response stream without consuming or replacing it", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("data: first\n\n"));
-        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
-        controller.close();
-      },
-    });
-    const delivered = new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
-    const client = create({ fetch: async () => delivered });
-
-    const received = await client.fetch("/v1/responses", { latchwayFeature: "chat" });
-
-    expect(received).toBe(delivered);
-    expect(received.body).toBe(stream);
-    await expect(received.text()).resolves.toBe("data: first\n\ndata: [DONE]\n\n");
-  });
-
-  it("cancels the native operation when the fetch signal aborts", async () => {
-    const native = new FakeNativeModule();
-    native.authorizationGate = new Promise<string>(() => {});
-    install(native);
-    const controller = new AbortController();
-    const client = create();
-    const pending = client.fetch("/v1/models", { latchwayFeature: "chat", signal: controller.signal });
-    await vi.waitFor(() => { expect(native.authorizations).toHaveLength(1); });
-    controller.abort();
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(native.cancelCalls).toHaveLength(1);
+    expect(native.disposeCalls).toBe(1);
   });
 
   it("maps quota and redacted diagnostics without credential material", async () => {
@@ -363,38 +445,90 @@ describe("React Native Latchway client", () => {
     const diagnostics = await client.diagnostics();
     expect(diagnostics).toMatchObject({
       platform: "react_native_ios",
-      contractVersion: "0.5.1",
-      protocolVersion: 1,
+      contractVersion: "1.0.0",
+      protocolVersion: 2,
       keyStorage: "secure_enclave",
-      attestation: { provider: "app_attest", trustLevel: "device_verified" },
       session: { state: "active" },
     });
     expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private/iu);
   });
 
-  it("redacts secret-shaped native error messages", async () => {
+  it("performs direct component attestation entirely inside iOS native code", async () => {
     const native = new FakeNativeModule();
-    native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), {
-      code: "identity_token_invalid",
-      requestID: ANDROID_REQUEST_ID,
-    });
     install(native);
-    const client = create();
-    await expect(client.quota("chat")).rejects.toMatchObject({
-      name: "LatchwayError",
-      code: "identity_token_invalid",
-      message: "Sensitive native error detail was redacted.",
-      requestID: ANDROID_REQUEST_ID,
+    const client = createComponent();
+
+    await client.establishDirectAttestation();
+    const diagnostics = await client.diagnostics();
+
+    expect(native.componentConfigureInputs).toHaveLength(1);
+    expect(native.directAttestationCalls).toBe(1);
+    const configured = native.componentConfigureInputs[0];
+    expect(JSON.parse(configured?.componentJSON ?? "null")).toEqual(DIRECT_COMPONENT);
+    expect(configured?.configurationJSON).not.toMatch(/identity|token|evidence|proof|client.?data|request.?hash/iu);
+    expect(diagnostics).toEqual({
+      familyID: "fam_0000000000000001",
+      componentID: "cmp_0000000000000001",
+      definitionID: DIRECT_COMPONENT.definitionID,
+      keychainAccessGroup: DIRECT_COMPONENT.keychainAccessGroup,
+      keyAvailable: true,
+      keyStorage: "secure_enclave",
+      grantAvailable: true,
+      sessionAvailable: true,
+      trustSource: "delegated_direct_attested",
+      trustExpiresAt: "2026-08-28T00:00:00Z",
+      containingAppActionRequired: false,
+    });
+    expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private|client.?data|request.?hash/iu);
+  });
+
+  it("rejects malformed or evidence-bearing component descriptors before native dispatch", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const invalid = [
+      { ...DIRECT_COMPONENT, kind: "widget" },
+      { ...DIRECT_COMPONENT, kind: "watch_extension" },
+      { ...DIRECT_COMPONENT, keychainAccessGroup: "$(AppIdentifierPrefix).unsafe" },
+      { ...DIRECT_COMPONENT, requestedFeatures: ["habit_assistant", "habit_assistant"] },
+      { ...DIRECT_COMPONENT, attestationEvidence: "synthetic" },
+    ];
+
+    for (const component of invalid) {
+      expect(() => createLatchwayComponentClient(componentOptions(component as never))).toThrowError(
+        expect.objectContaining({ code: "client_configuration_invalid" }),
+      );
+    }
+    expect(native.componentConfigureInputs).toHaveLength(0);
+  });
+
+  it("fails closed if component diagnostics contain credential material", async () => {
+    const native = new FakeNativeModule();
+    native.componentDiagnosticsExtra = { attestationEvidence: "synthetic-secret" };
+    install(native);
+    const client = createComponent();
+    await expect(client.diagnostics()).rejects.toMatchObject({
+      code: "protocol_response_invalid",
+      message: "Latchway native output crossed the credential boundary.",
     });
   });
 
-  it("preserves a canonical native reconciliation ID for indeterminate operations", async () => {
+  it("preserves Android's explicit unsupported component-client failure", async () => {
+    const native = new FakeNativeModule();
+    native.componentConfigureError = Object.assign(new Error("unsupported"), {
+      code: "attestation_unsupported",
+    });
+    install(native);
+    const client = createComponent();
+    await expect(client.ready).rejects.toMatchObject({ code: "attestation_unsupported" });
+  });
+
+  it("redacts secret-shaped native errors and preserves canonical reconciliation metadata", async () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), {
       code: "operation_indeterminate",
       userInfo: {
         code: "operation_indeterminate",
-        requestID: ANDROID_REQUEST_ID,
+        requestID: REQUEST_ID,
         operationID: OPERATION_ID,
         status: 503,
         retryable: true,
@@ -402,11 +536,9 @@ describe("React Native Latchway client", () => {
     });
     install(native);
     const client = create();
-
     await expect(client.quota("chat")).rejects.toMatchObject({
-      name: "LatchwayError",
       code: "operation_indeterminate",
-      requestID: ANDROID_REQUEST_ID,
+      requestID: REQUEST_ID,
       operationID: OPERATION_ID,
       status: 503,
       retryable: true,
@@ -414,80 +546,87 @@ describe("React Native Latchway client", () => {
     });
   });
 
-  it("fails closed on missing, malformed, conflicting, or forbidden native operation IDs", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const client = create();
-    const failures = [
-      { code: "operation_indeterminate" },
-      { code: "operation_indeterminate", operationID: "arq_invalid" },
-      {
-        code: "operation_indeterminate",
-        operationID: OPERATION_ID,
-        userInfo: { operation_id: "arq_0ZZZZZZZZZZZZZZZZZZZZZZZZZ" },
-      },
-      {
-        code: "operation_indeterminate",
-        requestID: ANDROID_REQUEST_ID,
-        operationID: OPERATION_ID,
-        status: 500,
-        retryable: true,
-      },
-      { code: "internal_error", operationID: OPERATION_ID },
-    ];
+  it("preserves every v1 family, component, framework, and transport native error code", () => {
+    const v1Codes = [
+      "installation_family_revoked",
+      "installation_family_not_found",
+      "component_definition_not_found",
+      "component_not_configured",
+      "component_not_provisioned",
+      "component_revoked",
+      "component_key_invalid",
+      "component_key_replaced",
+      "component_delegation_expired",
+      "component_feature_not_granted",
+      "component_parent_trust_expired",
+      "component_direct_attestation_required",
+      "containing_app_setup_required",
+      "framework_integration_unsupported",
+      "framework_version_unsupported",
+      "transport_destination_not_allowed",
+      "transport_request_not_replayable",
+    ] as const satisfies readonly LatchwayErrorCode[];
 
-    for (const metadata of failures) {
-      native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), metadata);
-      await expect(client.quota("chat")).rejects.toMatchObject({
-        code: "protocol_response_invalid",
-        message: "Latchway returned invalid native error metadata.",
-        operationID: undefined,
-        retryable: false,
-      });
+    for (const code of v1Codes) {
+      expect(fromNativeError({ code, message: `Synthetic ${code}` })).toMatchObject({ code });
     }
   });
 
-  it("exports HTTP problem conversion with canonical operation reconciliation metadata", async () => {
+  it("fails closed if a native rejection envelope contains credential fields", async () => {
+    const native = new FakeNativeModule();
+    native.error = Object.assign(new Error("synthetic failure"), {
+      code: "network_unavailable",
+      userInfo: { code: "network_unavailable", refreshToken: "synthetic-secret" },
+    });
+    install(native);
+    const client = create();
+    await expect(client.quota("chat")).rejects.toMatchObject({
+      code: "protocol_response_invalid",
+      message: "Latchway native output crossed the credential boundary.",
+    });
+  });
+
+  it("supports explicit native session rotation without exposing credentials", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    await client.refresh();
+    expect(native.refreshCalls).toBe(1);
+    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
+  });
+
+  it("revokes the complete installation family through the native boundary", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    await client.revokeCurrentInstallationFamily();
+    expect(native.revokeFamilyCalls).toBe(1);
+    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
+  });
+
+  it("exports canonical HTTP problem conversion", async () => {
     const error = await errorFromResponse(new Response(JSON.stringify({
       type: "https://latchway.dev/problems/operation_indeterminate",
       title: "Operation outcome indeterminate",
       status: 503,
       detail: "The administrative operation outcome must be reconciled.",
       code: "operation_indeterminate",
-      request_id: ANDROID_REQUEST_ID,
+      request_id: REQUEST_ID,
       retryable: true,
       operation_id: OPERATION_ID,
     }), {
       status: 503,
       headers: {
         "Content-Type": "application/problem+json",
-        "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
+        "X-Latchway-Request-ID": REQUEST_ID,
       },
     }));
-
     expect(error).toMatchObject({
       code: "operation_indeterminate",
-      requestID: ANDROID_REQUEST_ID,
+      requestID: REQUEST_ID,
       operationID: OPERATION_ID,
       status: 503,
       retryable: true,
-    });
-  });
-
-  it("does not misclassify a server configuration error as local SDK configuration", async () => {
-    const native = new FakeNativeModule();
-    native.error = Object.assign(new Error("The active server revision is invalid."), {
-      code: "configuration_invalid",
-      requestID: ANDROID_REQUEST_ID,
-      status: 503,
-    });
-    install(native);
-    const client = create();
-
-    await expect(client.quota("chat")).rejects.toMatchObject({
-      code: "configuration_invalid",
-      requestID: ANDROID_REQUEST_ID,
-      status: 503,
     });
   });
 
@@ -501,30 +640,79 @@ describe("React Native Latchway client", () => {
     expect(() => createLatchwayClient(baseOptions({
       android: { playIntegrityCloudProjectNumber: "not-a-project-number" },
     }))).toThrow(/Google Cloud project number/iu);
-    for (const applicationID of [
-      "habitify",
-      "app_habitify",
-      "app_81J00000000000000000000000",
-      "app_01j00000000000000000000000",
-      "app_01J0000000000000000000000",
-    ]) {
-      expect(() => createLatchwayClient(baseOptions({ applicationID })))
-        .toThrow(/canonical app_ resource ID/iu);
-    }
   });
 
-  it("consumes the pinned canonical protocol and DPoP vectors", async () => {
+  it("consumes the pinned canonical protocol and cryptographic vectors", async () => {
     const fixtureRoot = new URL("fixtures/contract/", import.meta.url);
     const protocol = JSON.parse(await readFile(new URL("protocol-version.json", fixtureRoot), "utf8")) as ProtocolFixture;
     const dpop = JSON.parse(await readFile(new URL("dpop-v1.json", fixtureRoot), "utf8")) as DPoPFixture;
     const binding = JSON.parse(await readFile(new URL("attestation-binding-v1.json", fixtureRoot), "utf8")) as BindingFixture;
-    expect(protocol.contract_version).toBe("0.5.1");
-    expect(protocol.wire_protocol.current).toBe(1);
+    const componentBinding = JSON.parse(
+      await readFile(new URL("component-attestation-binding-v2.json", fixtureRoot), "utf8"),
+    ) as ComponentBindingFixture;
+    const family = JSON.parse(
+      await readFile(new URL("installation-family-v2.json", fixtureRoot), "utf8"),
+    ) as InstallationFamilyFixture;
+    expect(protocol.contract_version).toBe("1.0.0");
+    expect(protocol.contract_status).toBe("draft");
+    expect(protocol.wire_protocol.current).toBe(2);
+    expect(protocol.wire_protocol.supported).toEqual([1, 2]);
+    expect(protocol.bundle.required_entries).toContain("component-attestation-binding.schema.json");
+    expect(protocol.component_attestation_binding).toEqual({
+      version: 2,
+      purpose: "component_attestation_step_up",
+      canonicalization: "RFC 8785 JCS",
+      hash: "SHA-256",
+    });
     expect(protocol.sdk_kinds).toContain("react-native");
-    expect(dpop.vectors.filter((vector: { expected: { valid: boolean } }) => vector.expected.valid)).toHaveLength(3);
-    expect(dpop.vectors.at(2)?.proof.split(".")).toHaveLength(3);
+    expect(dpop.vectors.filter((vector) => vector.expected.valid)).toHaveLength(3);
     expect(binding.vectors.map((vector) => vector.sha256_base64url))
       .toEqual(expect.arrayContaining([expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)]));
+    expect(componentBinding).toMatchObject({
+      contract_version: "1.0.0",
+      binding_version: 2,
+      canonicalization: "RFC 8785 JCS",
+      hash: "SHA-256",
+    });
+    expect(componentBinding.vectors).toHaveLength(1);
+    const componentVector = componentBinding.vectors.at(0);
+    if (componentVector === undefined) throw new Error("missing component attestation binding vector");
+    expect(componentVector.id).toBe("ios_action_extension_app_attest");
+    expect(componentVector.input).toEqual({
+      version: 2,
+      purpose: "component_attestation_step_up",
+      component_definition_id: "action_extension",
+      platform: "ios",
+      challenge_id: "chl_01J00000000000000000000003",
+      challenge_nonce: "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+      application_id: "app_habitify",
+      environment: "production",
+      principal_id: "usr_01J00000000000000000000000",
+      installation_family_id: "fam_01J00000000000000000000000",
+      client_component_id: "cmp_01J00000000000000000000003",
+      component_key_id: "cky_01J00000000000000000000003",
+      dpop_jkt: "bX0yCl562RPdpf8cJHVLBeUXu6PWExYJ0w-Bydre3q8",
+      issued_at: 1787820003,
+    });
+    expect(componentVector.sha256_hex)
+      .toBe("531faf52c337ce4d1eb9e10c702ca282b713e7a0556e8200c44362d6299c9c18");
+    expect(componentVector.sha256_base64url).toBe("Ux-vUsM3zk0eueEMcCyigrcT56BVboIAxENi1imcnBg");
+    expect(Buffer.from(componentVector.utf8_hex, "hex").toString("utf8"))
+      .toBe(componentVector.canonical_json);
+    expect(createHash("sha256").update(componentVector.canonical_json).digest("hex"))
+      .toBe(componentVector.sha256_hex);
+    expect(createHash("sha256").update(componentVector.canonical_json).digest("base64url"))
+      .toBe(componentVector.sha256_base64url);
+    expect(family).toMatchObject({
+      contract_version: "1.0.0",
+      wire_protocol_version: 2,
+      family: { status: "active" },
+      root_component: { is_root: true },
+    });
+    expect(family.provisioned_components.every(
+      (component) => component.response.installation_family_id === family.family.id,
+    )).toBe(true);
+    expect(family.revocations.map((revocation) => revocation.scope)).toEqual(["component", "family"]);
   });
 });
 
@@ -538,7 +726,26 @@ function create(overrides: Partial<Parameters<typeof createLatchwayClient>[0]> =
   return client;
 }
 
-function baseOptions(overrides: Partial<Parameters<typeof createLatchwayClient>[0]> = {}): Parameters<typeof createLatchwayClient>[0] {
+function createComponent(): LatchwayComponentClient {
+  const client = createLatchwayComponentClient(componentOptions());
+  componentClients.push(client);
+  return client;
+}
+
+function componentOptions(
+  component: typeof DIRECT_COMPONENT = DIRECT_COMPONENT,
+): Parameters<typeof createLatchwayComponentClient>[0] {
+  return {
+    baseURL: "https://gateway.example.test",
+    applicationID: "app_01J00000000000000000000000",
+    environment: "production",
+    component,
+  };
+}
+
+function baseOptions(
+  overrides: Partial<Parameters<typeof createLatchwayClient>[0]> = {},
+): Parameters<typeof createLatchwayClient>[0] {
   return {
     baseURL: "https://gateway.example.test",
     applicationID: "app_01J00000000000000000000000",
@@ -548,112 +755,114 @@ function baseOptions(overrides: Partial<Parameters<typeof createLatchwayClient>[
   };
 }
 
-function problem(
-  code: "dpop_nonce_required" | "session_expired",
-  extraHeaders: Record<string, string> = {},
-  retryable = true,
-  overrides: Record<string, unknown> = {},
-): Response {
-  const definition = code === "dpop_nonce_required"
-    ? { title: "DPoP nonce required", detail: "A fresh server DPoP nonce is required." }
-    : { title: "Session expired", detail: "The Latchway session is expired." };
-  return new Response(JSON.stringify({
-    type: `https://latchway.dev/problems/${code}`,
-    title: definition.title,
-    status: 401,
-    detail: definition.detail,
-    code,
-    request_id: ANDROID_REQUEST_ID,
-    retryable,
-    ...overrides,
-  }), {
-    status: 401,
-    headers: {
-      "Content-Type": "application/problem+json",
-      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
-      ...extraHeaders,
-    },
-  });
-}
-
-function oversizedProblem(): Response {
-  return new Response("x".repeat(65_537), {
-    status: 401,
-    headers: {
-      "Content-Type": "application/problem+json",
-      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
-    },
-  });
-}
-
-function duplicateProblem(escaped: boolean): Response {
-  const duplicate = escaped ? "c\\u006fde" : "code";
-  const body = `{` +
-    `"type":"https://latchway.dev/problems/session_expired",` +
-    `"title":"Session expired",` +
-    `"status":401,` +
-    `"detail":"The Latchway session is expired.",` +
-    `"code":"session_expired",` +
-    `"${duplicate}":"session_expired",` +
-    `"request_id":"${ANDROID_REQUEST_ID}",` +
-    `"retryable":true` +
-    `}`;
-  return new Response(body, {
-    status: 401,
-    headers: {
-      "Content-Type": "application/problem+json",
-      "X-Latchway-Request-ID": ANDROID_REQUEST_ID,
-    },
-  });
+function decodeBase64(value: string | null | undefined): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  return new TextDecoder().decode(Uint8Array.from(atob(value), (character) => character.charCodeAt(0)));
 }
 
 class FakeNativeModule {
   configureCalls = 0;
   disposeCalls = 0;
   refreshCalls = 0;
-  readonly cancelCalls: string[] = [];
-  readonly authorizations: Array<{
-    encoded: string;
-    request: { url: string; method: string; feature: string; nonce: string | null; requestID: string | null };
-  }> = [];
+  revokeFamilyCalls = 0;
+  readCalls = 0;
   lastIdentityToken: string | undefined;
-  authorizationGate: Promise<string> | undefined;
   error: Error | undefined;
+  startGate: Promise<string> | undefined;
+  readGate: Promise<void> | undefined;
+  metadataExtra: Record<string, unknown> = {};
+  chunkExtra: Record<string, unknown> = {};
+  componentDiagnosticsExtra: Record<string, unknown> = {};
+  readonly requests: NativeRequestRecord[] = [];
+  directAttestationCalls = 0;
+  componentConfigureError: Error | undefined;
+  readonly componentConfigureInputs: Array<{ configurationJSON: string; componentJSON: string }> = [];
+  readonly configuredComponents = new Map<string, typeof DIRECT_COMPONENT>();
+  readonly cancelCalls: string[] = [];
+  readonly closeCalls: string[] = [];
+  readonly responses: ResponseFixture[] = [];
+  readonly active = new Map<string, { chunks: string[] }>();
   compatibility: Partial<{
     platform: string;
     nativeSDKVersion: string;
     contractVersion: string;
     protocolVersion: number;
+    accessToken: string;
   }> = {};
+  private nextResponse = 1;
 
   async configure(_clientID: string, configurationJSON: string): Promise<string> {
     this.configureCalls += 1;
     const config = JSON.parse(configurationJSON) as { contractVersion: string; protocolVersion: number };
     return JSON.stringify({
       platform: "react_native_ios",
-      nativeSDKVersion: "0.1.0",
+      nativeSDKVersion: "1.0.0",
       contractVersion: config.contractVersion,
       protocolVersion: config.protocolVersion,
       ...this.compatibility,
     });
   }
 
-  async authorize(
+  async configureComponent(
+    clientID: string,
+    configurationJSON: string,
+    componentJSON: string,
+  ): Promise<string> {
+    if (this.componentConfigureError !== undefined) throw this.componentConfigureError;
+    const config = JSON.parse(configurationJSON) as { contractVersion: string; protocolVersion: number };
+    const component = JSON.parse(componentJSON) as typeof DIRECT_COMPONENT;
+    this.componentConfigureInputs.push({ configurationJSON, componentJSON });
+    this.configuredComponents.set(clientID, component);
+    return JSON.stringify({
+      platform: "react_native_ios",
+      nativeSDKVersion: "1.0.0",
+      contractVersion: config.contractVersion,
+      protocolVersion: config.protocolVersion,
+    });
+  }
+
+  async startRequest(
     _clientID: string,
-    _operationID: string,
+    operationID: string,
     identityToken: string,
     encoded: string,
   ): Promise<string> {
     this.lastIdentityToken = identityToken;
-    const request = JSON.parse(encoded) as FakeNativeModule["authorizations"][number]["request"];
-    this.authorizations.push({ encoded, request });
+    const request = JSON.parse(encoded) as NativeRequestRecord["request"];
+    this.requests.push({ encoded, identityToken, operationID, request });
     if (this.error !== undefined) throw this.error;
-    if (this.authorizationGate !== undefined) return this.authorizationGate;
+    if (this.startGate !== undefined) return this.startGate;
+    const fixture = this.responses.shift() ?? {};
+    const responseID = `rsp_${String(this.nextResponse++).padStart(16, "0")}`;
+    this.active.set(responseID, { chunks: [...(fixture.chunks ?? ["ok"])] });
     return JSON.stringify({
-      authorization: "DPoP native-access-token",
-      dpop: "header.payload.signature",
-      requestID: request.requestID ?? ANDROID_REQUEST_ID,
+      responseID,
+      status: fixture.status ?? 200,
+      statusText: fixture.statusText ?? "",
+      headers: fixture.headers ?? [["content-type", "text/plain"]],
+      ...this.metadataExtra,
     });
+  }
+
+  async readResponseChunk(
+    _clientID: string,
+    _operationID: string,
+    responseID: string,
+    _maximumBytes: number,
+  ): Promise<string> {
+    this.readCalls += 1;
+    if (this.error !== undefined) throw this.error;
+    if (this.readGate !== undefined) await this.readGate;
+    const response = this.active.get(responseID);
+    if (response === undefined) throw Object.assign(new Error("missing response"), { code: "request_invalid" });
+    const chunk = response.chunks.shift();
+    if (chunk === undefined) return JSON.stringify({ done: true, ...this.chunkExtra });
+    return JSON.stringify({ done: false, chunk: bytesToBase64(new TextEncoder().encode(chunk)), ...this.chunkExtra });
+  }
+
+  async closeResponse(_clientID: string, responseID: string): Promise<void> {
+    this.closeCalls.push(responseID);
+    this.active.delete(responseID);
   }
 
   async refresh(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
@@ -676,18 +885,56 @@ class FakeNativeModule {
     this.lastIdentityToken = identityToken;
     if (this.error !== undefined) throw this.error;
     return JSON.stringify({
-      contractVersion: "0.5.1",
-      protocolVersion: 1,
+      contractVersion: "1.0.0",
+      protocolVersion: 2,
       keyStorage: "secure_enclave",
       attestation: { support: "supported", provider: "app_attest", trustLevel: "device_verified" },
       session: { state: "active", expiresAt: "2026-08-28T00:00:00Z", refreshAvailable: true },
       installation: { id: "ins_0000000000000001", status: "active" },
-      server: { version: "0.1.0", lastRequestID: "request-00000001" },
+      server: { version: "1.0.0", lastRequestID: REQUEST_ID },
+    });
+  }
+
+  async establishDirectAttestation(
+    clientID: string,
+    _operationID: string,
+  ): Promise<void> {
+    if (this.error !== undefined) throw this.error;
+    if (!this.configuredComponents.has(clientID)) throw new Error("component client is not configured");
+    this.directAttestationCalls += 1;
+  }
+
+  async componentDiagnostics(
+    clientID: string,
+    _operationID: string,
+  ): Promise<string> {
+    if (this.error !== undefined) throw this.error;
+    const component = this.configuredComponents.get(clientID);
+    if (component === undefined) throw new Error("component client is not configured");
+    return JSON.stringify({
+      familyID: "fam_0000000000000001",
+      componentID: "cmp_0000000000000001",
+      definitionID: component.definitionID,
+      keychainAccessGroup: component.keychainAccessGroup,
+      keyAvailable: true,
+      keyStorage: "secure_enclave",
+      grantAvailable: true,
+      sessionAvailable: true,
+      trustSource: "delegated_direct_attested",
+      trustExpiresAt: "2026-08-28T00:00:00Z",
+      containingAppActionRequired: false,
+      ...this.componentDiagnosticsExtra,
     });
   }
 
   async revoke(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
     this.lastIdentityToken = identityToken;
+    if (this.error !== undefined) throw this.error;
+  }
+
+  async revokeFamily(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
+    this.lastIdentityToken = identityToken;
+    this.revokeFamilyCalls += 1;
     if (this.error !== undefined) throw this.error;
   }
 
@@ -697,5 +944,13 @@ class FakeNativeModule {
 
   async dispose(_clientID: string): Promise<void> {
     this.disposeCalls += 1;
+    this.active.clear();
+    this.configuredComponents.delete(_clientID);
   }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }

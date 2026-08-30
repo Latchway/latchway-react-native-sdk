@@ -229,7 +229,7 @@ class ExportCoreEvidenceTest(unittest.TestCase):
             "schema_version": 1,
             "core_commit": "7" * 40,
             "core_release": f"v{versions['core']}",
-            "contract_version": "0.5.1",
+            "contract_version": "1.0.0",
             "bundle_sha256": "3" * 64,
             "oci_image_digest": "ghcr.io/latchway/latchway@sha256:" + "4" * 64,
             "gateway_configuration_sha256": "5" * 64,

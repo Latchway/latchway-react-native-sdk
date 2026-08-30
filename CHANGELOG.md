@@ -9,10 +9,24 @@ Versioning once package publication begins.
 
 ### Changed
 
-- Advanced the exact JavaScript source pin to the candidate whose live release
-  evidence requires both Firebase App Check and Cloudflare Turnstile.
+- Replaced JavaScript-owned authorization envelopes and network dispatch with
+  native URLSession/OkHttp dispatch, opaque response handles, pull-streamed
+  response chunks, cancellation, exact origin/path enforcement, and strict
+  safe response metadata. The removed `authorize` API is an intentional
+  security-boundary break; `fetchFor(feature)` supplies framework adapters
+  without exposing reusable credentials.
+- Advanced the exact JavaScript source pin to the reviewed final source commit
+  whose protected release evidence requires both Firebase App Check and
+  Cloudflare Turnstile.
+- Synchronized the candidate to draft contract 1.0.0, current wire protocol 2,
+  and the canonical installation-family and component-attestation binding v2
+  fixtures while preserving wire 1 in the core compatibility window.
+- Added an extension-process component client for iOS Action and SSO
+  extensions. It performs native App Attest step-up without a containing-app
+  identity callback and reports composite `delegated_direct_attested` trust;
+  Android reports direct component attestation as unsupported.
 
-## [1.0.0] - 2026-08-29
+## [1.0.0]
 
 ### Changed
 
@@ -26,9 +40,9 @@ Versioning once package publication begins.
   Firebase 25.1.0, Firebase Apple 12.15.0, and Firebase Android BoM 34.15.0 set,
   and repository installs use pnpm's hoisted linker for CocoaPods framework
   compatibility.
-- Synchronized the SDK contract lock, compatibility constant, and canonical
-  fixtures to released Latchway contract checkpoint 0.5.1 while keeping wire
-  protocol 1 and pinning the exact reviewed JavaScript, iOS, and Android heads.
+- The version 1 release candidate uses the exact reviewed JavaScript, iOS,
+  Android, and core source commits recorded by the synchronized compatibility
+  lock.
 - The Firebase example now selects the Firebase identity provider explicitly
   and uses the currently supported OpenAI Chat route and request shape.
 - Automatic bodyless retries now require exact canonical, correlated

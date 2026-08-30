@@ -1,0 +1,751 @@
+name: Locked source conformance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: locked-sources-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.19.0
+  PNPM_VERSION: 10.15.0
+
+jobs:
+  authenticate-inputs:
+    name: Authenticate locked sources without candidate checkout
+    if: >-
+      github.repository == 'Latchway/latchway-react-native-sdk' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: private-sibling-read
+    permissions:
+      contents: read
+    outputs:
+      archive_sha256: ${{ steps.seal.outputs.archive_sha256 }}
+    steps:
+      - name: Fetch and strictly validate exact candidate locks
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$GH_TOKEN"
+          test -z "${LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN:-}"
+          test "$GITHUB_REPOSITORY" = Latchway/latchway-react-native-sdk
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          sealed="$RUNNER_TEMP/authenticated-locked-sources"
+          mkdir -m 700 "$sealed"
+
+          fetch_candidate_file() {
+            local path=$1 maximum_bytes=$2 maximum_response_bytes=$3 output=$4
+            local response="$RUNNER_TEMP/$(basename "$path").response.json"
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" > "$response"
+            local response_bytes
+            response_bytes=$(wc -c < "$response" | tr -d ' ')
+            [[ "$response_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( response_bytes <= maximum_response_bytes ))
+            jq --exit-status --arg path "$path" --argjson maximum "$maximum_bytes" '
+              type == "object" and .type == "file" and .path == $path and
+              (.size | type == "number" and . > 0 and . <= $maximum) and
+              .encoding == "base64" and (.content | type == "string" and length > 0)
+            ' "$response" >/dev/null
+            jq --raw-output .content "$response" | tr -d '\n' | base64 --decode > "$output"
+            test -s "$output"
+            test "$(wc -c < "$output" | tr -d ' ')" -le "$maximum_bytes"
+          }
+
+          fetch_candidate_file release-compatibility.json 262144 524288 \
+            "$sealed/release-compatibility.json"
+          fetch_candidate_file contract.lock 65536 196608 "$sealed/contract.lock"
+
+          jq --exit-status '
+            def semver:
+              type == "string" and
+              test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$");
+            def commit: type == "string" and test("^[0-9a-f]{40}$");
+            def digest: type == "string" and test("^[0-9a-f]{64}$");
+            type == "object" and
+            keys == ["$schema", "android", "contract", "ios", "javascript", "react_native", "schema_version"] and
+            .["$schema"] == "https://json-schema.org/draft/2020-12/schema" and
+            .schema_version == 1 and
+            (.contract | type == "object" and
+              keys == ["bundle_sha256", "core_commit", "fixtures", "repository", "version", "wire_protocol"] and
+              .repository == "https://github.com/Latchway/latchway.git" and
+              (.version | semver) and .wire_protocol == 2 and
+              (.core_commit | commit) and (.bundle_sha256 | digest) and
+              (.fixtures | type == "object" and
+                keys == ["attestation-binding-v1.json", "component-attestation-binding-v2.json", "dpop-v1.json", "installation-family-v2.json", "protocol-version.json"] and
+                all(.[]; digest))) and
+            (.react_native | type == "object" and
+              keys == ["baseline", "cli", "firebase", "new_architecture", "node_linker", "package", "react", "react_peer", "version"] and
+              .package == "@latchway/react-native" and (.version | semver) and
+              (.baseline | semver) and (.cli | semver) and (.react | semver) and
+              (.react_peer | type == "string" and test("^[0-9]+\\.[0-9]+\\.x$")) and
+              .new_architecture == true and .node_linker == "hoisted" and
+              (.firebase | type == "object" and
+                keys == ["android_bom", "apple_sdk", "react_native"] and
+                all(.[]; semver))) and
+            (.javascript | type == "object" and
+              keys == ["package", "repository", "source_commit", "version"] and
+              .package == "@latchway/client" and
+              .repository == "https://github.com/Latchway/latchway-js.git" and
+              (.version | semver) and (.source_commit | commit)) and
+            (.ios | type == "object" and
+              keys == ["minimum_platform", "pod", "repository", "source_commit", "version"] and
+              .pod == "Latchway/AppAttest" and
+              .repository == "https://github.com/Latchway/latchway-ios-sdk.git" and
+              (.version | semver) and (.source_commit | commit) and
+              (.minimum_platform | type == "string" and test("^[0-9]+\\.[0-9]+$"))) and
+            (.android as $android | $android | type == "object" and
+              keys == ["artifacts", "build_tools_version", "compile_sdk", "consumer_android_gradle_plugin", "group", "kotlin", "minimum_sdk", "ndk_version", "publisher_android_gradle_plugin", "repository", "sdk_platform_version", "source_commit", "version"] and
+              .group == "dev.latchway" and
+              .repository == "https://github.com/Latchway/latchway-android.git" and
+              .artifacts == ["latchway-okhttp", "latchway-play-integrity"] and
+              (.version | semver) and (.source_commit | commit) and
+              (.minimum_sdk | type == "number" and floor == . and . >= 24) and
+              (.compile_sdk | type == "number" and floor == . and . >= $android.minimum_sdk) and
+              (.sdk_platform_version | type == "string" and test("^[0-9]+\\.[0-9]+$")) and
+              (.build_tools_version | semver) and
+              (.ndk_version | type == "string" and test("^[0-9]+(\\.[0-9]+){2,3}$")) and
+              (.publisher_android_gradle_plugin | semver) and
+              (.consumer_android_gradle_plugin | semver) and (.kotlin | semver))
+          ' "$sealed/release-compatibility.json" >/dev/null
+
+          test "$(wc -l < "$sealed/contract.lock" | tr -d ' ')" -eq 7
+          CONTRACT_VERSION=$(sed -n 's/^contract_version: //p' "$sealed/contract.lock")
+          WIRE_PROTOCOL=$(sed -n 's/^wire_protocol: //p' "$sealed/contract.lock")
+          CORE_TAG=$(sed -n 's/^core_release: //p' "$sealed/contract.lock")
+          CORE_COMMIT=$(sed -n 's/^core_commit: //p' "$sealed/contract.lock")
+          BUNDLE_SHA256=$(sed -n 's/^bundle_sha256: "\([0-9a-f]*\)"$/\1/p' "$sealed/contract.lock")
+          MINIMUM_SERVER_VERSION=$(sed -n 's/^minimum_server_version: //p' "$sealed/contract.lock")
+          MAXIMUM_SERVER_VERSION=$(sed -n 's/^maximum_tested_server_version: //p' "$sealed/contract.lock")
+          [[ "$CONTRACT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$WIRE_PROTOCOL" = 2
+          [[ "$CORE_TAG" == "unreleased" || "$CORE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          [[ "$CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$MINIMUM_SERVER_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$MAXIMUM_SERVER_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+          test "$CONTRACT_VERSION" = "$(jq --raw-output .contract.version "$sealed/release-compatibility.json")"
+          test "$WIRE_PROTOCOL" = "$(jq --raw-output .contract.wire_protocol "$sealed/release-compatibility.json")"
+          test "$CORE_COMMIT" = "$(jq --raw-output .contract.core_commit "$sealed/release-compatibility.json")"
+          test "$BUNDLE_SHA256" = "$(jq --raw-output .contract.bundle_sha256 "$sealed/release-compatibility.json")"
+          canonical_lock="$RUNNER_TEMP/canonical-contract.lock"
+          printf '%s\n' \
+            "contract_version: $CONTRACT_VERSION" \
+            "wire_protocol: $WIRE_PROTOCOL" \
+            "core_release: $CORE_TAG" \
+            "core_commit: $CORE_COMMIT" \
+            "bundle_sha256: \"$BUNDLE_SHA256\"" \
+            "minimum_server_version: $MINIMUM_SERVER_VERSION" \
+            "maximum_tested_server_version: $MAXIMUM_SERVER_VERSION" > "$canonical_lock"
+          cmp -s "$canonical_lock" "$sealed/contract.lock"
+
+      - name: Fetch and bundle only the four exact locked sibling objects
+        shell: bash
+        env:
+          LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN"
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN; do
+            test -z "${!name:-}"
+          done
+          sealed="$RUNNER_TEMP/authenticated-locked-sources"
+          test -f "$sealed/release-compatibility.json"
+          test -f "$sealed/contract.lock"
+
+          JAVASCRIPT_COMMIT=$(jq --exit-status --raw-output \
+            '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$sealed/release-compatibility.json")
+          ANDROID_COMMIT=$(jq --exit-status --raw-output \
+            '.android.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$sealed/release-compatibility.json")
+          IOS_COMMIT=$(jq --exit-status --raw-output \
+            '.ios.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$sealed/release-compatibility.json")
+          CORE_COMMIT=$(jq --exit-status --raw-output \
+            '.contract.core_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$sealed/release-compatibility.json")
+
+          git_askpass="$RUNNER_TEMP/latchway-locked-sources-askpass.sh"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            'case "$1" in' \
+            '*Username*) printf "%s\\n" x-access-token ;;' \
+            '*Password*) printf "%s\\n" "${LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN:?}" ;;' \
+            '*) exit 1 ;;' \
+            'esac' > "$git_askpass"
+          chmod 700 "$git_askpass"
+          trap 'rm -f -- "$git_askpass"' EXIT
+
+          bundle_locked_repository() {
+            local repository=$1 commit=$2 name=$3
+            local bare="$RUNNER_TEMP/$name.git"
+            local bundle="$sealed/locked-$name.bundle"
+            git init --bare "$bare"
+            GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0 \
+              git -c credential.helper= -C "$bare" fetch --no-tags \
+                "https://github.com/$repository.git" \
+                "$commit:refs/heads/authenticated"
+            test "$(git -C "$bare" rev-parse --verify refs/heads/authenticated)" = "$commit"
+            test -z "$(git -C "$bare" config --local --get-all http.https://github.com/.extraheader || true)"
+            git -C "$bare" fsck --full --strict --no-reflogs
+            git -C "$bare" bundle create "$bundle" refs/heads/authenticated
+            git -C "$bare" bundle verify "$bundle"
+            test "$(git bundle list-heads "$bundle")" = "$commit refs/heads/authenticated"
+            local bytes
+            bytes=$(wc -c < "$bundle" | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 536870912 ))
+          }
+
+          bundle_locked_repository Latchway/latchway-js "$JAVASCRIPT_COMMIT" latchway-js
+          bundle_locked_repository Latchway/latchway-android "$ANDROID_COMMIT" latchway-android
+          bundle_locked_repository Latchway/latchway-ios-sdk "$IOS_COMMIT" latchway-ios-sdk
+          bundle_locked_repository Latchway/latchway "$CORE_COMMIT" latchway
+
+          rm -f -- "$git_askpass"
+          trap - EXIT
+
+      - name: Seal the exact bounded source closure without credentials
+        id: seal
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          sealed="$RUNNER_TEMP/authenticated-locked-sources"
+          expected_files=(
+            contract.lock
+            locked-latchway-android.bundle
+            locked-latchway-ios-sdk.bundle
+            locked-latchway-js.bundle
+            locked-latchway.bundle
+            release-compatibility.json
+          )
+          expected_paths="$RUNNER_TEMP/locked-sources-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/locked-sources-actual-paths.txt"
+          printf './%s\n' "${expected_files[@]}" | LC_ALL=C sort > "$expected_paths"
+          (cd "$sealed" && find . -type f -print | LC_ALL=C sort) > "$actual_paths"
+          cmp -s "$expected_paths" "$actual_paths"
+
+          manifest="$sealed/MANIFEST.sha256"
+          while IFS= read -r relative; do
+            file="$sealed/${relative#./}"
+            bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 536870912 ))
+            digest=$(shasum -a 256 "$file" | awk '{print $1}')
+            printf '%s %s\n' "$digest" "$relative"
+          done < "$expected_paths" > "$manifest"
+          test "$(wc -l < "$manifest" | tr -d ' ')" -eq 6
+          total_kib=$(du -sk "$sealed" | awk '{print $1}')
+          [[ "$total_kib" =~ ^[1-9][0-9]*$ ]]
+          (( total_kib <= 1572864 ))
+
+          archive="$RUNNER_TEMP/locked-sources-inputs.tar"
+          tar --format=posix --sort=name --mtime='UTC 1970-01-01' \
+            --owner=0 --group=0 --numeric-owner -cf "$archive" \
+            -C "$RUNNER_TEMP" authenticated-locked-sources
+          archive_bytes=$(wc -c < "$archive" | tr -d ' ')
+          [[ "$archive_bytes" =~ ^[1-9][0-9]*$ ]]
+          (( archive_bytes <= 1717986918 ))
+          archive_sha256=$(shasum -a 256 "$archive" | awk '{print $1}')
+          [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'archive_sha256=%s\n' "$archive_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer one exact bounded input artifact to credential-free consumers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: authenticated-locked-sources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-sources-inputs.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  javascript:
+    name: JavaScript, contracts, and package consumer without credentials
+    if: github.ref == 'refs/heads/main'
+    needs: authenticate-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact React Native candidate without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: latchway-react-native-sdk
+          persist-credentials: false
+      - name: Download authenticated locked sources without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: authenticated-locked-sources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-sources-artifact
+      - name: Validate exact closure and import every locked source offline
+        shell: bash
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.authenticate-inputs.outputs.archive_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          artifact="$RUNNER_TEMP/locked-sources-artifact/locked-sources-inputs.tar"
+          test -f "$artifact"
+          test "$(find "$RUNNER_TEMP/locked-sources-artifact" -type f | wc -l | tr -d ' ')" -eq 1
+          bytes=$(wc -c < "$artifact" | tr -d ' ')
+          [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+          (( bytes <= 1717986918 ))
+          test "$(shasum -a 256 "$artifact" | awk '{print $1}')" = "$EXPECTED_ARCHIVE_SHA256"
+
+          expected_files=(
+            contract.lock
+            locked-latchway-android.bundle
+            locked-latchway-ios-sdk.bundle
+            locked-latchway-js.bundle
+            locked-latchway.bundle
+            release-compatibility.json
+          )
+          expected_entries="$RUNNER_TEMP/locked-sources-expected-entries.txt"
+          actual_entries="$RUNNER_TEMP/locked-sources-tar-entries.txt"
+          {
+            printf '%s\n' authenticated-locked-sources/
+            printf 'authenticated-locked-sources/%s\n' "${expected_files[@]}"
+            printf '%s\n' authenticated-locked-sources/MANIFEST.sha256
+          } | LC_ALL=C sort > "$expected_entries"
+          tar -tf "$artifact" | LC_ALL=C sort > "$actual_entries"
+          cmp -s "$expected_entries" "$actual_entries"
+
+          extraction="$RUNNER_TEMP/locked-sources-inputs"
+          mkdir -m 700 "$extraction"
+          tar -xf "$artifact" -C "$extraction"
+          root="$extraction/authenticated-locked-sources"
+          test -z "$(find "$root" ! -type d ! -type f -print)"
+          expected_paths="$RUNNER_TEMP/locked-sources-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/locked-sources-actual-paths.txt"
+          manifest_paths="$RUNNER_TEMP/locked-sources-manifest-paths.txt"
+          printf './%s\n' "${expected_files[@]}" | LC_ALL=C sort > "$expected_paths"
+          (cd "$root" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) > "$actual_paths"
+          cmp -s "$expected_paths" "$actual_paths"
+          while IFS=' ' read -r digest relative extra; do
+            test -z "${extra:-}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            grep -F -x -- "$relative" "$expected_paths" >/dev/null
+            file="$root/${relative#./}"
+            test -f "$file"
+            file_bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$file_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( file_bytes <= 536870912 ))
+            test "$(shasum -a 256 "$file" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$relative" >> "$manifest_paths"
+          done < "$root/MANIFEST.sha256"
+          LC_ALL=C sort -o "$manifest_paths" "$manifest_paths"
+          cmp -s "$expected_paths" "$manifest_paths"
+          cmp -s "$root/release-compatibility.json" latchway-react-native-sdk/release-compatibility.json
+          cmp -s "$root/contract.lock" latchway-react-native-sdk/contract.lock
+
+          materialize_bundle() {
+            local bundle=$1 directory=$2 commit=$3
+            test "$(git bundle list-heads "$bundle")" = "$commit refs/heads/authenticated"
+            git clone --no-local --branch authenticated --single-branch "$bundle" "$directory"
+            test "$(git -C "$directory" rev-parse --verify HEAD)" = "$commit"
+            test -z "$(git -C "$directory" status --porcelain)"
+          }
+          JAVASCRIPT_COMMIT=$(jq --exit-status --raw-output '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          ANDROID_COMMIT=$(jq --exit-status --raw-output '.android.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          IOS_COMMIT=$(jq --exit-status --raw-output '.ios.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          CORE_COMMIT=$(jq --exit-status --raw-output '.contract.core_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          materialize_bundle "$root/locked-latchway-js.bundle" latchway-js "$JAVASCRIPT_COMMIT"
+          materialize_bundle "$root/locked-latchway-android.bundle" latchway-android "$ANDROID_COMMIT"
+          materialize_bundle "$root/locked-latchway-ios-sdk.bundle" latchway-ios-sdk "$IOS_COMMIT"
+          materialize_bundle "$root/locked-latchway.bundle" latchway "$CORE_COMMIT"
+      - name: Read the authenticated immutable compatibility lock without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build the exact JavaScript dependency without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+          pnpm build
+        working-directory: latchway-js
+      - name: Install exact React Native dependencies without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+        working-directory: latchway-react-native-sdk
+      - name: Verify all locked source commits and contracts
+        run: pnpm verify:compatibility --sources
+        working-directory: latchway-react-native-sdk
+      - name: Build and verify the locked core contract bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/latchway-contract"
+          python3 scripts/build-contract-bundle.py --output-directory "$RUNNER_TEMP/latchway-contract"
+          pnpm --dir ../latchway-react-native-sdk verify:bundle -- "$RUNNER_TEMP/latchway-contract/latchway-contract-${{ steps.lock.outputs.contract_version }}.tar.gz"
+        working-directory: latchway
+      - name: Verify source, tests, codegen, example, and boundaries
+        run: pnpm check
+        working-directory: latchway-react-native-sdk
+      - name: Verify workflow and physical-device evidence validators fail closed
+        run: |
+          python3 scripts/test-locked-sources-workflow.py
+          python3 scripts/test-device-evidence.py
+          python3 scripts/test-finalize-react-native-device-run.py
+          python3 scripts/test-export-core-physical-evidence.py
+          python3 scripts/test-verify-gateway-deployment.py
+          bash -n scripts/gateway-deployment-evidence.sh
+          bash -n scripts/run-physical-react-native-ios.sh
+          bash -n scripts/run-physical-react-native-android.sh
+        working-directory: latchway-react-native-sdk
+      - name: Pack exact JavaScript dependency
+        run: pnpm pack:check
+        working-directory: latchway-js
+      - name: Verify deterministic React Native package
+        run: |
+          pnpm pack:check
+          pnpm verify:reproducible
+        working-directory: latchway-react-native-sdk
+      - name: Verify a clean packed-package consumer
+        run: pnpm consumer:check
+        working-directory: latchway-react-native-sdk
+      - name: Upload verified npm archive
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: latchway-react-native-npm
+          path: |
+            latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
+            latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  android-source:
+    name: Android source publication and RN 0.82 host without credentials
+    if: github.ref == 'refs/heads/main'
+    needs: authenticate-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact React Native candidate without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: latchway-react-native-sdk
+          persist-credentials: false
+      - name: Download authenticated locked sources without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: authenticated-locked-sources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-sources-artifact
+      - name: Validate exact closure and import every locked source offline
+        shell: bash
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.authenticate-inputs.outputs.archive_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          artifact="$RUNNER_TEMP/locked-sources-artifact/locked-sources-inputs.tar"
+          test -f "$artifact"
+          test "$(find "$RUNNER_TEMP/locked-sources-artifact" -type f | wc -l | tr -d ' ')" -eq 1
+          bytes=$(wc -c < "$artifact" | tr -d ' ')
+          [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+          (( bytes <= 1717986918 ))
+          test "$(shasum -a 256 "$artifact" | awk '{print $1}')" = "$EXPECTED_ARCHIVE_SHA256"
+          expected_files=(
+            contract.lock
+            locked-latchway-android.bundle
+            locked-latchway-ios-sdk.bundle
+            locked-latchway-js.bundle
+            locked-latchway.bundle
+            release-compatibility.json
+          )
+          expected_entries="$RUNNER_TEMP/locked-sources-expected-entries.txt"
+          actual_entries="$RUNNER_TEMP/locked-sources-tar-entries.txt"
+          {
+            printf '%s\n' authenticated-locked-sources/
+            printf 'authenticated-locked-sources/%s\n' "${expected_files[@]}"
+            printf '%s\n' authenticated-locked-sources/MANIFEST.sha256
+          } | LC_ALL=C sort > "$expected_entries"
+          tar -tf "$artifact" | LC_ALL=C sort > "$actual_entries"
+          cmp -s "$expected_entries" "$actual_entries"
+          extraction="$RUNNER_TEMP/locked-sources-inputs"
+          mkdir -m 700 "$extraction"
+          tar -xf "$artifact" -C "$extraction"
+          root="$extraction/authenticated-locked-sources"
+          test -z "$(find "$root" ! -type d ! -type f -print)"
+          expected_paths="$RUNNER_TEMP/locked-sources-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/locked-sources-actual-paths.txt"
+          manifest_paths="$RUNNER_TEMP/locked-sources-manifest-paths.txt"
+          printf './%s\n' "${expected_files[@]}" | LC_ALL=C sort > "$expected_paths"
+          (cd "$root" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) > "$actual_paths"
+          cmp -s "$expected_paths" "$actual_paths"
+          while IFS=' ' read -r digest relative extra; do
+            test -z "${extra:-}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            grep -F -x -- "$relative" "$expected_paths" >/dev/null
+            file="$root/${relative#./}"
+            test -f "$file"
+            file_bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$file_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( file_bytes <= 536870912 ))
+            test "$(shasum -a 256 "$file" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$relative" >> "$manifest_paths"
+          done < "$root/MANIFEST.sha256"
+          LC_ALL=C sort -o "$manifest_paths" "$manifest_paths"
+          cmp -s "$expected_paths" "$manifest_paths"
+          cmp -s "$root/release-compatibility.json" latchway-react-native-sdk/release-compatibility.json
+          cmp -s "$root/contract.lock" latchway-react-native-sdk/contract.lock
+          materialize_bundle() {
+            local bundle=$1 directory=$2 commit=$3
+            test "$(git bundle list-heads "$bundle")" = "$commit refs/heads/authenticated"
+            git clone --no-local --branch authenticated --single-branch "$bundle" "$directory"
+            test "$(git -C "$directory" rev-parse --verify HEAD)" = "$commit"
+            test -z "$(git -C "$directory" status --porcelain)"
+          }
+          JAVASCRIPT_COMMIT=$(jq --exit-status --raw-output '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          ANDROID_COMMIT=$(jq --exit-status --raw-output '.android.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          IOS_COMMIT=$(jq --exit-status --raw-output '.ios.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          CORE_COMMIT=$(jq --exit-status --raw-output '.contract.core_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          materialize_bundle "$root/locked-latchway-js.bundle" latchway-js "$JAVASCRIPT_COMMIT"
+          materialize_bundle "$root/locked-latchway-android.bundle" latchway-android "$ANDROID_COMMIT"
+          materialize_bundle "$root/locked-latchway-ios-sdk.bundle" latchway-ios-sdk "$IOS_COMMIT"
+          materialize_bundle "$root/locked-latchway.bundle" latchway "$CORE_COMMIT"
+      - name: Read the authenticated immutable compatibility lock without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      - name: Install locked Android build platforms
+        run: >-
+          sdkmanager
+          "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
+          "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
+          "ndk;${{ steps.lock.outputs.android_ndk_version }}"
+      - name: Build the exact JavaScript dependency without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+          pnpm build
+        working-directory: latchway-js
+      - name: Install exact React Native dependencies without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+        working-directory: latchway-react-native-sdk
+      - name: Verify exact Android Maven publications and isolated consumers
+        env:
+          LATCHWAY_PUBLICATION_TEST_VERSION: ${{ steps.lock.outputs.android_version }}
+        run: ./scripts/verify-local-publication.sh
+        working-directory: latchway-android
+      - name: Compile and lint standalone React Native library
+        env:
+          LATCHWAY_NATIVE_REPOSITORY: ${{ github.workspace }}/latchway-android/build/publication-test-repository
+        run: ./android/gradlew -p android clean check --no-daemon
+        working-directory: latchway-react-native-sdk
+      - name: Compile and lint official React Native Android host
+        env:
+          LATCHWAY_NATIVE_REPOSITORY: ${{ github.workspace }}/latchway-android/build/publication-test-repository
+        run: ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
+        working-directory: latchway-react-native-sdk
+
+  ios-source:
+    name: iOS source pod and RN 0.82 host without credentials
+    if: github.ref == 'refs/heads/main'
+    needs: authenticate-inputs
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact React Native candidate without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: latchway-react-native-sdk
+          persist-credentials: false
+      - name: Download authenticated locked sources without credentials
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: authenticated-locked-sources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/locked-sources-artifact
+      - name: Validate exact closure and import every locked source offline
+        shell: bash
+        env:
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.authenticate-inputs.outputs.archive_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          artifact="$RUNNER_TEMP/locked-sources-artifact/locked-sources-inputs.tar"
+          test -f "$artifact"
+          test "$(find "$RUNNER_TEMP/locked-sources-artifact" -type f | wc -l | tr -d ' ')" -eq 1
+          bytes=$(wc -c < "$artifact" | tr -d ' ')
+          [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+          (( bytes <= 1717986918 ))
+          test "$(shasum -a 256 "$artifact" | awk '{print $1}')" = "$EXPECTED_ARCHIVE_SHA256"
+          expected_files=(
+            contract.lock
+            locked-latchway-android.bundle
+            locked-latchway-ios-sdk.bundle
+            locked-latchway-js.bundle
+            locked-latchway.bundle
+            release-compatibility.json
+          )
+          expected_entries="$RUNNER_TEMP/locked-sources-expected-entries.txt"
+          actual_entries="$RUNNER_TEMP/locked-sources-tar-entries.txt"
+          {
+            printf '%s\n' authenticated-locked-sources/
+            printf 'authenticated-locked-sources/%s\n' "${expected_files[@]}"
+            printf '%s\n' authenticated-locked-sources/MANIFEST.sha256
+          } | LC_ALL=C sort > "$expected_entries"
+          tar -tf "$artifact" | LC_ALL=C sort > "$actual_entries"
+          cmp -s "$expected_entries" "$actual_entries"
+          extraction="$RUNNER_TEMP/locked-sources-inputs"
+          mkdir -m 700 "$extraction"
+          tar -xf "$artifact" -C "$extraction"
+          root="$extraction/authenticated-locked-sources"
+          test -z "$(find "$root" ! -type d ! -type f -print)"
+          expected_paths="$RUNNER_TEMP/locked-sources-expected-paths.txt"
+          actual_paths="$RUNNER_TEMP/locked-sources-actual-paths.txt"
+          manifest_paths="$RUNNER_TEMP/locked-sources-manifest-paths.txt"
+          printf './%s\n' "${expected_files[@]}" | LC_ALL=C sort > "$expected_paths"
+          (cd "$root" && find . -type f ! -name MANIFEST.sha256 -print | LC_ALL=C sort) > "$actual_paths"
+          cmp -s "$expected_paths" "$actual_paths"
+          while IFS=' ' read -r digest relative extra; do
+            test -z "${extra:-}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            grep -F -x -- "$relative" "$expected_paths" >/dev/null
+            file="$root/${relative#./}"
+            test -f "$file"
+            file_bytes=$(wc -c < "$file" | tr -d ' ')
+            [[ "$file_bytes" =~ ^[1-9][0-9]*$ ]]
+            (( file_bytes <= 536870912 ))
+            test "$(shasum -a 256 "$file" | awk '{print $1}')" = "$digest"
+            printf '%s\n' "$relative" >> "$manifest_paths"
+          done < "$root/MANIFEST.sha256"
+          LC_ALL=C sort -o "$manifest_paths" "$manifest_paths"
+          cmp -s "$expected_paths" "$manifest_paths"
+          cmp -s "$root/release-compatibility.json" latchway-react-native-sdk/release-compatibility.json
+          cmp -s "$root/contract.lock" latchway-react-native-sdk/contract.lock
+          materialize_bundle() {
+            local bundle=$1 directory=$2 commit=$3
+            test "$(git bundle list-heads "$bundle")" = "$commit refs/heads/authenticated"
+            git clone --no-local --branch authenticated --single-branch "$bundle" "$directory"
+            test "$(git -C "$directory" rev-parse --verify HEAD)" = "$commit"
+            test -z "$(git -C "$directory" status --porcelain)"
+          }
+          JAVASCRIPT_COMMIT=$(jq --exit-status --raw-output '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          ANDROID_COMMIT=$(jq --exit-status --raw-output '.android.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          IOS_COMMIT=$(jq --exit-status --raw-output '.ios.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          CORE_COMMIT=$(jq --exit-status --raw-output '.contract.core_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$root/release-compatibility.json")
+          materialize_bundle "$root/locked-latchway-js.bundle" latchway-js "$JAVASCRIPT_COMMIT"
+          materialize_bundle "$root/locked-latchway-android.bundle" latchway-android "$ANDROID_COMMIT"
+          materialize_bundle "$root/locked-latchway-ios-sdk.bundle" latchway-ios-sdk "$IOS_COMMIT"
+          materialize_bundle "$root/locked-latchway.bundle" latchway "$CORE_COMMIT"
+      - name: Read the authenticated immutable compatibility lock without credentials
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do
+            test -z "${!name:-}"
+          done
+          node scripts/ci-lock-output.mjs >> "$GITHUB_OUTPUT"
+        working-directory: latchway-react-native-sdk
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build the exact JavaScript dependency without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+          pnpm build
+        working-directory: latchway-js
+      - name: Install exact React Native dependencies without credentials
+        run: |
+          set -euo pipefail
+          for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN; do test -z "${!name:-}"; done
+          pnpm install --frozen-lockfile
+        working-directory: latchway-react-native-sdk
+      - name: Parse CocoaPods specification
+        run: pnpm ios:spec
+        working-directory: latchway-react-native-sdk
+      - name: Resolve exact local iOS SDK in official React Native host
+        env:
+          LATCHWAY_IOS_SDK_PATH: ${{ github.workspace }}/latchway-ios-sdk
+          RCT_NEW_ARCH_ENABLED: "1"
+        run: pod install --repo-update
+        working-directory: latchway-react-native-sdk/example/ios
+      - name: Build official React Native iOS host
+        run: >-
+          xcodebuild
+          -workspace LatchwayExample.xcworkspace
+          -scheme LatchwayExample
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-derived"
+          CODE_SIGNING_ALLOWED=NO
+          build
+        working-directory: latchway-react-native-sdk/example/ios

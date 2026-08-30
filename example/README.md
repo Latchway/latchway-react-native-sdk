@@ -5,7 +5,8 @@ Android hosts named `LatchwayExample`. It uses Firebase Authentication for the
 app-owned identity JWT and `react-native-config` for non-secret deployment
 values. The primary action requests an SSE response and consumes `Response.body`
 incrementally, with a bounded display buffer, so the example exercises the
-JavaScript-owned streaming path instead of replacing it with a buffered mock.
+native-owned dispatch and pull-streaming bridge instead of replacing it with a
+buffered mock. JavaScript never receives Authorization or DPoP headers.
 
 The compatibility lock pins React Native Firebase 25.1.0, Firebase Apple SDK
 12.15.0, and Firebase Android BoM 34.15.0. Do not upgrade those independently:
@@ -70,3 +71,11 @@ records resembling secrets. `LATCHWAY_CONFORMANCE_AUTORUN=true` is reserved for
 a pinned Release candidate built for those workflows; ordinary development
 should leave it `false`. See [physical-device evidence](../docs/physical-device-evidence.md)
 for the complete build, collection, and cross-repository finalization contract.
+
+The current raw-device schema still asks the React Native JavaScript harness to
+replay and mutate DPoP credentials and compare credential hashes. That would
+violate the native-only credential boundary, so the example records those
+legacy checks as failed. A release remains blocked until the physical-evidence
+finalizer consumes the equivalent replay, tamper, rotation, protocol, and
+revocation proofs from the already linked native iOS/Android reports instead of
+asking the production TurboModule to export credentials.

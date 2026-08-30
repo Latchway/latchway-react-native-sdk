@@ -7,6 +7,17 @@ const compatibility = await readJSON("release-compatibility.json");
 const lock = await readLock();
 const expected = compatibility.contract;
 const fixtureHashes = new Map(Object.entries(expected.fixtures));
+const requiredFixtureNames = [
+  "attestation-binding-v1.json",
+  "component-attestation-binding-v2.json",
+  "dpop-v1.json",
+  "installation-family-v2.json",
+  "protocol-version.json",
+];
+
+if (JSON.stringify([...fixtureHashes.keys()].sort()) !== JSON.stringify(requiredFixtureNames)) {
+  throw new Error("release-compatibility.json does not pin the exact canonical fixture set.");
+}
 
 for (const [field, value] of [
   ["contract_version", expected.version],
@@ -27,4 +38,15 @@ const protocol = JSON.parse(
 );
 if (protocol.contract_version !== expected.version || protocol.wire_protocol.current !== expected.wire_protocol) {
   throw new Error("The vendored protocol manifest is incompatible with contract.lock.");
+}
+if (!protocol.bundle?.required_entries?.includes("component-attestation-binding.schema.json")) {
+  throw new Error("The vendored protocol manifest omits the component attestation binding schema.");
+}
+if (
+  protocol.component_attestation_binding?.version !== 2 ||
+  protocol.component_attestation_binding?.purpose !== "component_attestation_step_up" ||
+  protocol.component_attestation_binding?.canonicalization !== "RFC 8785 JCS" ||
+  protocol.component_attestation_binding?.hash !== "SHA-256"
+) {
+  throw new Error("The vendored protocol manifest has an invalid component attestation binding contract.");
 }

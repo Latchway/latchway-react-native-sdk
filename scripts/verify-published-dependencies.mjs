@@ -1,8 +1,9 @@
 import { createHash, X509Certificate } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -29,6 +30,7 @@ import { validateReleaseAttestation } from "./release-attestation.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 
 const NPM_REGISTRY_URL = "https://registry.npmjs.org/";
+const authenticatedInputs = authenticatedInputRoot();
 
 execFileSync("python3", [fileURLToPath(new URL("./require-gh-version.py", import.meta.url))], {
   stdio: ["ignore", "ignore", "inherit"],
@@ -648,10 +650,18 @@ function authenticatedGitEnvironment() {
 }
 
 function runGitHubCLI(arguments_, options) {
+  if (authenticatedInputs !== undefined) {
+    throw new Error("GitHub CLI access is forbidden while using authenticated offline dependency inputs.");
+  }
   return execFileSync("gh", arguments_, { ...options, env: githubReadEnvironment() });
 }
 
 function githubRelease(repository, tag) {
+  if (authenticatedInputs !== undefined) {
+    const release = readAuthenticatedJSON(repository, "release.json", 4 * 1024 * 1024);
+    if (!Array.isArray(release.assets)) throw new Error(`${repository} returned invalid release metadata.`);
+    return release;
+  }
   const output = runGitHubCLI(["api", "-H", "X-GitHub-Api-Version: 2026-03-10",
     `repos/${repository}/releases/tags/${encodeURIComponent(tag)}`], {
     encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
@@ -692,9 +702,21 @@ function verifyReleaseAsset(repository, tag, path, sourceCommit, assets) {
 }
 
 function captureGHVerification(arguments_, label, expected) {
-  const bytes = runGitHubCLI(arguments_, {
-    encoding: "buffer", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
-  });
+  let bytes;
+  if (authenticatedInputs === undefined) {
+    bytes = runGitHubCLI(arguments_, {
+      encoding: "buffer", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } else if (arguments_[0] === "release" && arguments_[1] === "verify") {
+    bytes = readAuthenticatedBytes(expected.repository, "release-attestation.json", 16 * 1024 * 1024);
+  } else if (arguments_[0] === "release" && arguments_[1] === "verify-asset") {
+    const assetName = basename(arguments_[3]);
+    bytes = readAuthenticatedBytes(
+      expected.repository, join("asset-attestations", `${assetName}.json`), 16 * 1024 * 1024,
+    );
+  } else {
+    throw new Error(`${label} requested an unsupported offline GitHub verification.`);
+  }
   return validateReleaseAttestation(bytes, {
     repository: expected.repository,
     tag: expected.tag,
@@ -713,11 +735,13 @@ async function downloadAssets(repository, release, names, directory) {
     if (matches.length !== 1 || !Number.isInteger(matches[0].id) || matches[0].state !== "uploaded") {
       throw new Error(`${repository} release asset ${name} is missing or ambiguous.`);
     }
-    const bytes = runGitHubCLI(["api", "--method", "GET", "-H", "Accept: application/octet-stream",
-      "-H", "X-GitHub-Api-Version: 2026-03-10",
-      `repos/${repository}/releases/assets/${matches[0].id}`], {
-      encoding: "buffer", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
-    });
+    const bytes = authenticatedInputs === undefined
+      ? runGitHubCLI(["api", "--method", "GET", "-H", "Accept: application/octet-stream",
+        "-H", "X-GitHub-Api-Version: 2026-03-10",
+        `repos/${repository}/releases/assets/${matches[0].id}`], {
+        encoding: "buffer", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+      })
+      : readAuthenticatedBytes(repository, join("assets", name), 256 * 1024 * 1024);
     if (bytes.byteLength === 0 || bytes.byteLength !== matches[0].size) {
       throw new Error(`${repository} release asset ${name} has invalid downloaded bytes.`);
     }
@@ -753,6 +777,19 @@ function verifyImmutableReleaseAttestations(repository, tag, sourceCommit, asset
 }
 
 function verifyGitHubAttestation(repository, path, sourceCommit) {
+  if (authenticatedInputs !== undefined) {
+    const asset = basename(path);
+    const marker = readAuthenticatedJSON(
+      repository, join("build-attestations", `${asset}.json`), 64 * 1024,
+    );
+    if (!hasExactKeys(marker, ["schema_version", "kind", "repository", "asset", "source_commit", "status"])
+        || marker.schema_version !== 1 || marker.kind !== "latchway_authenticated_build_attestation"
+        || marker.repository !== repository || marker.asset !== asset
+        || marker.source_commit !== sourceCommit || marker.status !== "verified") {
+      throw new Error(`${repository} build attestation marker for ${asset} is not bound to the locked source.`);
+    }
+    return;
+  }
   runGitHubCLI(["attestation", "verify", path,
     "--repo", repository,
     "--signer-workflow", `${repository}/.github/workflows/release.yml`,
@@ -802,11 +839,74 @@ async function jsonAsset(assets, name) {
 
 function verifyReleaseTag(dependency, label, explicitTag) {
   const tag = explicitTag ?? `v${dependency.version}`;
-  const output = execFileSync("git", ["-c", "credential.helper=", "ls-remote", dependency.repository,
-    `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
-    encoding: "utf8", env: authenticatedGitEnvironment(), maxBuffer: 1024 * 1024,
-  }).trim();
+  let output;
+  if (authenticatedInputs === undefined) {
+    output = execFileSync("git", ["-c", "credential.helper=", "ls-remote", dependency.repository,
+      `refs/tags/${tag}`, `refs/tags/${tag}^{}`], {
+      encoding: "utf8", env: authenticatedGitEnvironment(), maxBuffer: 1024 * 1024,
+    }).trim();
+  } else {
+    const repository = repositorySlug(dependency.repository, repositoryFromLabel(label));
+    const reference = readAuthenticatedJSON(repository, "tag-ref.json", 1024 * 1024);
+    const tagObject = readAuthenticatedJSON(repository, "tag-object.json", 1024 * 1024);
+    if (reference?.ref !== `refs/tags/${tag}` || reference?.object?.type !== "tag"
+        || reference.object.sha !== tagObject?.sha || tagObject?.tag !== tag
+        || tagObject?.object?.type !== "commit") {
+      throw new Error(`${label} release tag ${tag} has invalid authenticated API evidence.`);
+    }
+    output = `${reference.object.sha}\trefs/tags/${tag}\n${tagObject.object.sha}\trefs/tags/${tag}^{}`;
+  }
   return requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
+}
+
+function authenticatedInputRoot() {
+  const configured = process.env.LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS;
+  if (configured === undefined) return undefined;
+  if (configured.length === 0 || configured.includes("\0") || configured.includes("\r") || configured.includes("\n")) {
+    throw new Error("Invalid authenticated dependency input path.");
+  }
+  return resolve(configured);
+}
+
+function repositoryFromLabel(label) {
+  if (label === "JavaScript") return "Latchway/latchway-js";
+  if (label === "iOS") return "Latchway/latchway-ios-sdk";
+  if (label === "Android") return "Latchway/latchway-android";
+  if (label === "core") return "Latchway/latchway";
+  throw new Error(`Unsupported authenticated dependency label ${label}.`);
+}
+
+function authenticatedRepositoryDirectory(repository) {
+  const directories = new Map([
+    ["Latchway/latchway-js", "javascript"],
+    ["Latchway/latchway-ios-sdk", "ios"],
+    ["Latchway/latchway-android", "android"],
+    ["Latchway/latchway", "core"],
+  ]);
+  const directory = directories.get(repository);
+  if (directory === undefined || authenticatedInputs === undefined) {
+    throw new Error(`Unsupported authenticated dependency repository ${repository}.`);
+  }
+  return join(authenticatedInputs, directory);
+}
+
+function readAuthenticatedBytes(repository, relativePath, maximumBytes) {
+  if (relativePath.startsWith("/") || relativePath.includes("..") || relativePath.includes("\0")) {
+    throw new Error("Invalid authenticated dependency input name.");
+  }
+  const path = join(authenticatedRepositoryDirectory(repository), relativePath);
+  const bytes = readFileSync(path);
+  if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
+    throw new Error(`Authenticated dependency input ${relativePath} has an invalid size.`);
+  }
+  return bytes;
+}
+
+function readAuthenticatedJSON(repository, relativePath, maximumBytes) {
+  const bytes = readAuthenticatedBytes(repository, relativePath, maximumBytes);
+  try { return JSON.parse(bytes.toString("utf8")); } catch {
+    throw new Error(`Authenticated dependency input ${relativePath} is not JSON.`);
+  }
 }
 
 async function auditNpmSignatures(packageName, version, integrity, directory) {

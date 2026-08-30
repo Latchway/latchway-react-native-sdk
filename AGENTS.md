@@ -8,13 +8,13 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-The version 1 React Native implementation is locked to released contract
-checkpoint 0.5.1 and wire protocol 1, with exact reviewed JavaScript, iOS, and
+The version 1 React Native implementation is locked to the draft contract
+checkpoint 1.0.0 and current wire protocol 2, with exact reviewed JavaScript, iOS, and
 Android source commits in `release-compatibility.json`. The package remains
 unpublished until protected native-device, dependency-registry, provenance,
 compatibility, and immutable-release evidence gates pass. Production npm,
 CocoaPods, Gradle, TurboModule, source, fixture, example, and CI changes are
-authorized when they preserve the active lock. Never invent a wire contract,
+authorized when they preserve the active source lock. Never invent a wire contract,
 publish an unreleased package, fake production behavior, or weaken the native
 security boundary.
 
@@ -40,6 +40,10 @@ security boundary.
 - Keep private keys, refresh tokens, and raw attestation evidence out of the
   JavaScript runtime.
 - Expose only minimum redacted diagnostics across the native boundary.
+- Keep direct component attestation native-only: JavaScript may pass a public
+  component descriptor but never a challenge, evidence object, provider token,
+  component credential, proof, or key. Preserve `delegated_direct_attested` as
+  server/native diagnostics rather than a caller-asserted flag.
 - Preserve cancellation and streaming; never replay a request whose dispatch
   outcome is uncertain.
 - Never log identity tokens, session tokens, DPoP proofs, attestation evidence,

@@ -124,33 +124,27 @@ export default function App(): React.JSX.Element {
       setClient(measuredClient);
       tests.push(booleanTest("react_native_bridge", true));
 
-      const quotaURL = new URL(
-        `/client/v1/features/${encodeURIComponent(deployment.feature)}/quota`,
-        deployment.baseURL,
-      );
-      const probe = new Request(quotaURL, { method: "GET", headers: { Accept: "application/json" } });
-      const authorized = await measuredClient.authorize(probe, deployment.feature);
-      const first = await sendBounded(authorized, 65_536);
+      const firstResponse = await measuredClient.fetch("/v1/chat/completions", {
+        method: "POST",
+        latchwayFeature: deployment.feature,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: deployment.model,
+          messages: [{ role: "user", content: "Return the word conformance." }],
+          stream: false,
+        }),
+      });
+      const first = await inspectBounded(firstResponse, 65_536);
       tests.push(httpTest("dpop_authorized_request", first, first.status >= 200 && first.status < 300));
 
-      const replay = await sendBounded(authorized, 65_536);
-      tests.push(httpTest(
-        "dpop_replay_rejected",
-        replay,
-        replay.status === 401 && replay.problemCode === "dpop_replayed",
-      ));
-
-      const fresh = await measuredClient.authorize(probe, deployment.feature);
-      const headers = new Headers(fresh.headers);
-      const proof = headers.get("DPoP");
-      if (proof === null || proof.length === 0) throw new Error("Native authorization omitted DPoP.");
-      headers.set("DPoP", tamperedDPoPProof(proof));
-      const tamper = await sendBounded(new Request(fresh, { headers }), 65_536);
-      tests.push(httpTest(
-        "tampered_dpop_rejected",
-        tamper,
-        tamper.status === 401 && tamper.problemCode === "dpop_invalid",
-      ));
+      // The public bridge deliberately has no authorization-envelope escape
+      // hatch. Replay, proof mutation, and protocol-header mutation must be
+      // proven by the separately linked native SDK report, never by returning
+      // reusable credentials to this JavaScript harness. Keep the legacy raw
+      // fields failed so an older physical-evidence finalizer cannot silently
+      // approve a run until that linkage migration is complete.
+      tests.push(booleanTest("dpop_replay_rejected", false));
+      tests.push(booleanTest("tampered_dpop_rejected", false));
 
       try {
         await measuredClient.quota(deployment.errorMappingFeature);
@@ -169,48 +163,23 @@ export default function App(): React.JSX.Element {
         });
       }
 
-      const beforeRefresh = await measuredClient.authorize(probe, deployment.feature);
       const beforeDiagnostics = await measuredClient.diagnostics();
-      const beforeAuthorization = beforeRefresh.headers.get("Authorization");
       const beforeInstallation = beforeDiagnostics.installation.id;
-      if (beforeAuthorization === null || beforeInstallation === undefined) {
-        throw new Error("Session rotation preflight omitted credential or installation metadata.");
-      }
-      const beforeCredentialHash = await sink.sha256(beforeAuthorization);
+      if (beforeInstallation === undefined) throw new Error("Session rotation preflight omitted installation metadata.");
       const beforeInstallationHash = await sink.sha256(beforeInstallation);
       await measuredClient.refresh();
-      const afterRefresh = await measuredClient.authorize(probe, deployment.feature);
       const afterDiagnostics = await measuredClient.diagnostics();
-      const afterAuthorization = afterRefresh.headers.get("Authorization");
       const afterInstallation = afterDiagnostics.installation.id;
-      if (afterAuthorization === null || afterInstallation === undefined) {
-        throw new Error("Session rotation result omitted credential or installation metadata.");
-      }
-      const afterCredentialHash = await sink.sha256(afterAuthorization);
+      if (afterInstallation === undefined) throw new Error("Session rotation result omitted installation metadata.");
       const afterInstallationHash = await sink.sha256(afterInstallation);
       tests.push({
         id: "session_refresh_rotation",
-        status: beforeCredentialHash !== afterCredentialHash && beforeInstallationHash === afterInstallationHash
-          ? "passed" : "failed",
+        status: "failed",
         duration_ms: 0,
-        credential_before_sha256: beforeCredentialHash,
-        credential_after_sha256: afterCredentialHash,
         installation_before_sha256: beforeInstallationHash,
         installation_after_sha256: afterInstallationHash,
       });
-
-      const badProtocol = await measuredClient.authorize(probe, deployment.feature);
-      const badProtocolHeaders = new Headers(badProtocol.headers);
-      badProtocolHeaders.set("X-Latchway-Protocol-Version", "0");
-      const protocol = await sendBounded(new Request(badProtocol, { headers: badProtocolHeaders }), 65_536);
-      tests.push({
-        ...httpTest(
-          "protocol_version_rejection",
-          protocol,
-          protocol.status === 426 && protocol.problemCode === "protocol_version_unsupported",
-        ),
-        protocol_version_sent: 0,
-      });
+      tests.push(booleanTest("protocol_version_rejection", false));
 
       const stream = await measuredClient.fetch("/v1/chat/completions", {
         method: "POST",
@@ -253,14 +222,8 @@ export default function App(): React.JSX.Element {
         hardware,
       ));
 
-      const pendingRevocation = await measuredClient.authorize(probe, deployment.feature);
       await measuredClient.revokeCurrentInstallation();
-      const revoked = await sendBounded(pendingRevocation, 65_536);
-      tests.push(httpTest(
-        "installation_revocation",
-        revoked,
-        revoked.status === 403 && revoked.problemCode === "installation_revoked",
-      ));
+      tests.push(booleanTest("installation_revocation", false));
 
       const requiredTests = rawEvidenceTests().map((identifier) =>
         tests.find((test) => test.id === identifier) ?? booleanTest(identifier, false)
@@ -503,24 +466,7 @@ function redactionDeclaration(): Record<string, false> {
   };
 }
 
-function tamperedDPoPProof(proof: string): string {
-  const segments = proof.split(".");
-  const header = segments[0];
-  const payload = segments[1];
-  const signature = segments[2];
-  if (segments.length !== 3 || header === undefined || payload === undefined || signature === undefined ||
-      header.length === 0 || payload.length === 0 || signature.length === 0) {
-    throw new Error("Native authorization returned a malformed DPoP proof.");
-  }
-  const replacement = signature.startsWith("A") ? "B" : "A";
-  // An unpadded ES256 signature has unused low bits in its final Base64URL
-  // character. Changing its first character guarantees different signature
-  // bytes while preserving a syntactically valid compact JWT.
-  return `${header}.${payload}.${replacement}${signature.slice(1)}`;
-}
-
-async function sendBounded(request: Request, maximumBytes: number): Promise<SafeHTTPResult> {
-  const response = await fetch(request);
+async function inspectBounded(response: Response, maximumBytes: number): Promise<SafeHTTPResult> {
   const body = await readBounded(response, maximumBytes);
   const requestID = safeRequestID(response.headers.get("X-Latchway-Request-ID"));
   const contentType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();

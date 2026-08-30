@@ -1,19 +1,34 @@
 import { LatchwayError } from "@latchway/client";
-import type { LatchwayErrorCode } from "@latchway/client";
 import type { RuntimeConfiguration } from "./config.js";
 import { acquire, type NativeLease } from "./coordinator.js";
 import { abortError, fromNativeError } from "./errors.js";
+import { assertNoCredentialFields } from "./native-output.js";
 import type {
   LatchwayClient,
+  LatchwayFetch,
   LatchwayFetchInit,
   QuotaLimit,
   QuotaSnapshot,
   ReactNativeDiagnostics,
 } from "./types.js";
-import { isCanonicalRequestID } from "./request-id.js";
-import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_KIND, SDK_VERSION } from "./version.js";
+import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 
-const forbiddenCredentialHeaders = [
+const MAXIMUM_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
+const MAXIMUM_NATIVE_REQUEST_BYTES = 12 * 1024 * 1024;
+const MAXIMUM_RESPONSE_CHUNK_BYTES = 32 * 1024;
+const MAXIMUM_HEADERS = 128;
+const MAXIMUM_HEADER_BYTES = 128 * 1024;
+
+const allowedDataPlanePaths = new Set([
+  "/v1/responses",
+  "/v1/chat/completions",
+  "/v1/embeddings",
+  "/v1/messages",
+]);
+
+const opaqueDataPlaneMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+const forbiddenCredentialHeaders = new Set([
   "authorization",
   "proxy-authorization",
   "api-key",
@@ -31,78 +46,110 @@ const forbiddenCredentialHeaders = [
   "auth_token",
   "x-auth-token",
   "cookie",
+  "connection",
+  "content-length",
+  "expect",
+  "host",
   "key",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
   "token",
+  "upgrade",
   "x-amz-credential",
   "x-amz-security-token",
   "x-amz-signature",
   "x-goog-credential",
   "x-goog-signature",
   "dpop",
+  "dpop-nonce",
   "x-latchway-feature",
+  "x-latchway-framework",
+  "x-latchway-framework-version",
   "x-latchway-protocol-version",
   "x-latchway-request-id",
   "x-latchway-sdk",
   "x-latchway-sdk-version",
-];
-
-const forbiddenCredentialQueryNames = new Set([
-  "authorization",
-  "proxy-authorization",
-  "access_token",
-  "api-key",
-  "api_key",
-  "apikey",
-  "x-api-key",
-  "openai-api-key",
-  "openai_api_key",
-  "x-openai-api-key",
-  "anthropic-api-key",
-  "anthropic_api_key",
-  "x-goog-api-key",
-  "x-goog_api_key",
-  "auth_token",
-  "x-auth-token",
-  "cookie",
-  "key",
-  "token",
-  "x-amz-credential",
-  "x-amz-security-token",
-  "x-amz-signature",
-  "x-goog-credential",
-  "x-goog-signature",
 ]);
 
-const preDispatchProblems = {
-  dpop_nonce_required: {
-    title: "DPoP nonce required",
-    detail: "A fresh server DPoP nonce is required.",
-  },
-  session_expired: {
-    title: "Session expired",
-    detail: "The Latchway session is expired.",
-  },
-} as const;
+const forbiddenCredentialQueryNames = new Set([
+  ...forbiddenCredentialHeaders,
+  "refresh_token",
+  "identity_token",
+  "private_key",
+  "client_data_hash",
+  "request_hash",
+  "integrity_token",
+]);
 
-const preDispatchProblemFields = [
-  "type",
-  "title",
-  "status",
-  "detail",
-  "code",
-  "request_id",
-  "retryable",
+const forbiddenCredentialNameFragments = [
+  "authorization",
+  "dpop",
+  "apikey",
+  "accesstoken",
+  "authtoken",
+  "refreshtoken",
+  "identitytoken",
+  "integritytoken",
+  "sessiontoken",
+  "privatekey",
+  "clientsecret",
+  "credential",
+  "attestationevidence",
+  "clientdatahash",
+  "requesthash",
+  "xamzsignature",
+  "xgoogsignature",
 ] as const;
 
-type PreDispatchProblemCode = keyof typeof preDispatchProblems;
-type VerifiedPreDispatchRejection =
-  | Readonly<{ code: "dpop_nonce_required"; nonce: string }>
-  | Readonly<{ code: "session_expired" }>;
+const forbiddenExactCredentialNames = new Set([
+  "key", "token", "secret", "bearer", "cookie", "password", "passwd",
+]);
 
-interface NativeAuthorization {
-  authorization: string;
-  dpop: string;
-  requestID: string;
+const safeResponseHeaderNames = new Set([
+  "accept-ranges",
+  "age",
+  "cache-control",
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-range",
+  "content-type",
+  "date",
+  "etag",
+  "expires",
+  "last-modified",
+  "request-id",
+  "retry-after",
+  "server-timing",
+  "vary",
+  "x-request-id",
+  "x-latchway-operation-id",
+  "x-latchway-request-id",
+  "x-latchway-server-version",
+]);
+
+const nativeControlledHeaders = new Set([
+  "x-latchway-feature",
+  "x-latchway-framework",
+  "x-latchway-framework-version",
+  "x-latchway-protocol-version",
+  "x-latchway-request-id",
+  "x-latchway-sdk",
+  "x-latchway-sdk-version",
+]);
+
+interface NativeResponseMetadata {
+  responseID: string;
+  status: number;
+  statusText: string;
+  headers: Array<[string, string]>;
+}
+
+interface NativeResponseChunk {
+  done: boolean;
+  chunk?: Uint8Array;
 }
 
 let nextOperationID = 1;
@@ -123,57 +170,70 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const request = this.createRequest(input, requestInit);
     const feature = latchwayFeature ?? request.headers.get("X-Latchway-Feature") ?? undefined;
     assertFeature(feature);
-    this.assertGatewayTarget(request.url);
+    this.assertGatewayTarget(request.url, request.method, feature);
     if (request.bodyUsed) {
       throw new LatchwayError("request_not_replayable", "The request body has already been consumed.");
     }
-    const safeToRetry = canSafelyRetry(request);
-    const signal = request.signal;
-    // A body-bearing Request must not be cloned: cloning tees its stream and can
-    // buffer an unconsumed branch. Only bodyless requests need a retry template.
-    const template = safeToRetry ? this.sanitize(request) : undefined;
-    let nonce: string | undefined;
-    let preservedRequestID: string | undefined;
-    let sessionRetried = false;
-    let nonceRetried = false;
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const candidate = template === undefined ? request : template.clone();
-      const outbound = await this.authorizeWithNonce(candidate, feature, nonce, preservedRequestID, signal);
-      let response: Response;
-      try {
-        response = await this.config.fetch(outbound);
-      } catch (cause) {
-        if (outbound.signal.aborted) throw abortError();
-        throw new LatchwayError("network_error", "The authorized Latchway request failed.", {
-          retryable: true,
-          cause,
-        });
-      }
-      if (!safeToRetry || response.status !== 401 || !isLatchwayProblem(response)) return response;
-      const rejection = await verifiedPreDispatchRejection(response);
-      if (rejection === undefined) return response;
-      if (!nonceRetried && rejection.code === "dpop_nonce_required") {
-        await response.body?.cancel();
-        preservedRequestID = outbound.headers.get("X-Latchway-Request-ID") ?? undefined;
-        nonce = rejection.nonce;
-        nonceRetried = true;
-        continue;
-      }
-      if (!sessionRetried && rejection.code === "session_expired") {
-        await response.body?.cancel();
-        preservedRequestID = outbound.headers.get("X-Latchway-Request-ID") ?? undefined;
-        await this.nativeVoid("refresh", signal);
-        sessionRetried = true;
-        continue;
-      }
-      return response;
+    const lease = await this.lease;
+    await lease.ready;
+    const signal = request.signal;
+    const headers = sanitizedRequestHeaders(request.headers);
+    const bodyBase64 = await encodedRequestBody(request, signal);
+    const requestJSON = JSON.stringify({
+      url: request.url,
+      method: request.method.toUpperCase(),
+      feature,
+      headers,
+      bodyBase64,
+    });
+    if (new TextEncoder().encode(requestJSON).byteLength > MAXIMUM_NATIVE_REQUEST_BYTES) {
+      throw new LatchwayError("request_invalid", "The Latchway request exceeds the native bridge limit.");
     }
-    throw new LatchwayError("protocol_response_invalid", "Latchway exhausted the safe request retry path.");
+
+    const operationID = makeOperationID();
+    const identityToken = await token(this.config.getIdentityToken, signal);
+    const start = lease.module.startRequest(lease.clientID, operationID, identityToken, requestJSON);
+    const observedStart = start.then(async (value) => {
+      if (signal.aborted) {
+        const responseID = recoverResponseID(value);
+        if (responseID !== undefined) await ignoreFailure(lease.module.closeResponse(lease.clientID, responseID));
+      }
+      return value;
+    });
+    const encoded = await abortable(
+      observedStart,
+      signal,
+      () => { lease.module.cancel(lease.clientID, operationID); },
+    );
+    let metadata: NativeResponseMetadata;
+    try {
+      metadata = parseResponseMetadata(encoded);
+    } catch (cause) {
+      const responseID = recoverResponseID(encoded);
+      if (responseID !== undefined) await ignoreFailure(lease.module.closeResponse(lease.clientID, responseID));
+      throw cause;
+    }
+    if (signal.aborted) {
+      await ignoreFailure(lease.module.closeResponse(lease.clientID, metadata.responseID));
+      throw abortError();
+    }
+
+    const hasBody = request.method.toUpperCase() !== "HEAD" &&
+      metadata.status !== 204 && metadata.status !== 205 && metadata.status !== 304;
+    const body = hasBody ? nativeResponseBody(lease, metadata.responseID, signal) : null;
+    if (!hasBody) await ignoreFailure(lease.module.closeResponse(lease.clientID, metadata.responseID));
+    return new Response(body, {
+      status: metadata.status,
+      statusText: metadata.statusText,
+      headers: metadata.headers,
+    });
   }
 
-  async authorize(request: Request, feature: string): Promise<Request> {
-    return this.authorizeWithNonce(request, feature, undefined, undefined);
+  fetchFor(feature: string): LatchwayFetch {
+    this.assertActive();
+    assertFeature(feature);
+    return async (input, init = {}) => this.fetch(input, { ...init, latchwayFeature: feature });
   }
 
   async quota(feature: string): Promise<QuotaSnapshot> {
@@ -201,6 +261,11 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await this.nativeVoid("revoke");
   }
 
+  async revokeCurrentInstallationFamily(): Promise<void> {
+    this.assertActive();
+    await this.nativeVoid("revokeFamily");
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
@@ -208,46 +273,8 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await lease.release();
   }
 
-  private async authorizeWithNonce(
-    request: Request,
-    feature: string,
-    nonce: string | undefined,
-    preservedRequestID: string | undefined,
-    signal: AbortSignal = request.signal,
-  ): Promise<Request> {
-    this.assertActive();
-    assertFeature(feature);
-    this.assertGatewayTarget(request.url);
-    if (request.bodyUsed) {
-      throw new LatchwayError("request_not_replayable", "The request body has already been consumed.");
-    }
-    const sanitized = this.sanitize(request);
-    const encoded = await this.nativeString("authorize", signal, JSON.stringify({
-      url: request.url,
-      method: request.method.toUpperCase(),
-      feature,
-      nonce: nonce ?? null,
-      requestID: preservedRequestID ?? null,
-    }));
-    const authorization = parseAuthorization(encoded);
-    const headers = new Headers(sanitized.headers);
-    headers.set("Authorization", authorization.authorization);
-    headers.set("DPoP", authorization.dpop);
-    headers.set("X-Latchway-Feature", feature);
-    headers.set("X-Latchway-Protocol-Version", String(PROTOCOL_VERSION));
-    headers.set("X-Latchway-SDK", SDK_KIND);
-    headers.set("X-Latchway-SDK-Version", SDK_VERSION);
-    headers.set("X-Latchway-Request-ID", authorization.requestID);
-    return new Request(sanitized, {
-      headers,
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-  }
-
   private async nativeString(
-    method: "authorize" | "quota" | "diagnostics",
+    method: "quota" | "diagnostics",
     signal?: AbortSignal,
     argument?: string,
   ): Promise<string> {
@@ -255,50 +282,48 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await lease.ready;
     const operationID = makeOperationID();
     const identityToken = await token(this.config.getIdentityToken, signal);
-    let operation: Promise<string>;
-    if (method === "authorize") {
-      operation = lease.module.authorize(lease.clientID, operationID, identityToken, argument ?? "");
-    } else if (method === "quota") {
-      operation = lease.module.quota(lease.clientID, operationID, identityToken, argument ?? "");
-    } else {
-      operation = lease.module.diagnostics(lease.clientID, operationID, identityToken);
-    }
+    const operation = method === "quota"
+      ? lease.module.quota(lease.clientID, operationID, identityToken, argument ?? "")
+      : lease.module.diagnostics(lease.clientID, operationID, identityToken);
     return abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
-  private async nativeVoid(method: "refresh" | "revoke", signal?: AbortSignal): Promise<void> {
+  private async nativeVoid(method: "refresh" | "revoke" | "revokeFamily", signal?: AbortSignal): Promise<void> {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
     const identityToken = await token(this.config.getIdentityToken, signal);
     const operation = method === "refresh"
       ? lease.module.refresh(lease.clientID, operationID, identityToken)
-      : lease.module.revoke(lease.clientID, operationID, identityToken);
+      : method === "revoke"
+        ? lease.module.revoke(lease.clientID, operationID, identityToken)
+        : lease.module.revokeFamily(lease.clientID, operationID, identityToken);
     await abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
   private createRequest(input: RequestInfo | URL, init: RequestInit): Request {
+    if (input instanceof Request && Reflect.ownKeys(init).length === 0) return input;
     if (input instanceof Request) return new Request(input, init);
     const resolved = input instanceof URL ? input : new URL(input, this.config.baseURL);
     return new Request(resolved, init);
   }
 
-  private sanitize(request: Request): Request {
-    const headers = new Headers(request.headers);
-    for (const name of forbiddenCredentialHeaders) headers.delete(name);
-    return new Request(request, { headers });
-  }
-
-  private assertGatewayTarget(input: string): void {
+  private assertGatewayTarget(input: string, method: string, feature: string): void {
     const target = new URL(input);
-    if (target.origin !== this.config.baseURL.origin) {
+    if (target.origin !== this.config.baseURL.origin || target.hash !== "") {
       throw new LatchwayError(
         "client_configuration_invalid",
-        "Latchway only authorizes requests to the configured gateway origin.",
+        "Latchway only dispatches requests to the configured gateway origin.",
+      );
+    }
+    if (!isAllowedDataPlaneTarget(target, method, feature)) {
+      throw new LatchwayError(
+        "transport_destination_not_allowed",
+        "Latchway only authorizes methods and paths declared by the client contract.",
       );
     }
     target.searchParams.forEach((_value, name) => {
-      if (forbiddenCredentialQueryNames.has(name.toLowerCase())) {
+      if (isForbiddenCredentialName(decodedCredentialName(name))) {
         throw new LatchwayError(
           "request_invalid",
           "Upstream provider credentials must not be supplied in the request URL.",
@@ -314,23 +339,238 @@ export class DefaultLatchwayClient implements LatchwayClient {
   }
 }
 
-function parseAuthorization(encoded: string): NativeAuthorization {
-  const value = parseRecord(encoded, "native authorization");
-  if (typeof value.authorization !== "string" || !/^DPoP [\u0021-\u007e]{16,8192}$/u.test(value.authorization) ||
-      typeof value.dpop !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(value.dpop) ||
-      !isCanonicalRequestID(value.requestID)) {
-    throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native authorization metadata.");
+function isAllowedDataPlaneTarget(target: URL, method: string, feature: string): boolean {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod === "POST" && allowedDataPlanePaths.has(target.pathname)) return true;
+
+  const prefix = `/proxy/${encodeURIComponent(feature)}/`;
+  if (!opaqueDataPlaneMethods.has(normalizedMethod) || target.search !== "" ||
+      !target.pathname.startsWith(prefix)) return false;
+  const remaining = target.pathname.slice(prefix.length);
+  const lowerRemaining = remaining.toLowerCase();
+  return remaining.length >= 1 && remaining.length <= 2_048 &&
+    remaining.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..") &&
+    !lowerRemaining.includes("%2e") && !lowerRemaining.includes("%2f") &&
+    !lowerRemaining.includes("%5c") && !remaining.includes("\\") &&
+    !lowerRemaining.startsWith("http:") && !lowerRemaining.startsWith("https:");
+}
+
+function sanitizedRequestHeaders(source: Headers): Array<[string, string]> {
+  const result: Array<[string, string]> = [];
+  let size = 0;
+  source.forEach((value, name) => {
+    const normalized = name.toLowerCase();
+    if (nativeControlledHeaders.has(normalized)) return;
+    if (isForbiddenCredentialName(normalized)) return;
+    if (!isHeaderName(normalized) || !isHeaderValue(value)) {
+      throw new LatchwayError("request_invalid", "The request contains an invalid header.");
+    }
+    size += normalized.length + value.length;
+    if (result.length >= MAXIMUM_HEADERS || size > MAXIMUM_HEADER_BYTES) {
+      throw new LatchwayError("request_invalid", "The request headers exceed the native bridge limit.");
+    }
+    result.push([normalized, value]);
+  });
+  return result;
+}
+
+async function encodedRequestBody(request: Request, signal: AbortSignal): Promise<string | null> {
+  if (request.body === null) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const result = await readWithAbort(reader, signal);
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > MAXIMUM_REQUEST_BODY_BYTES) {
+        await reader.cancel("Latchway request body limit exceeded");
+        throw new LatchwayError("request_invalid", "The request body exceeds the 8 MiB native transport limit.");
+      }
+      chunks.push(result.value);
+    }
+  } catch (cause) {
+    if (cause instanceof LatchwayError || isAbort(cause)) throw cause;
+    throw new LatchwayError("request_not_replayable", "The request body could not be read for native dispatch.", { cause });
+  } finally {
+    reader.releaseLock();
   }
-  return value as unknown as NativeAuthorization;
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytesToBase64(bytes);
+}
+
+async function readWithAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal.aborted) {
+    void reader.cancel();
+    throw abortError();
+  }
+  let listener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    listener = () => {
+      void reader.cancel();
+      reject(abortError());
+    };
+    signal.addEventListener("abort", listener, { once: true });
+  });
+  try { return await Promise.race([reader.read(), aborted]); }
+  finally { if (listener !== undefined) signal.removeEventListener("abort", listener); }
+}
+
+function nativeResponseBody(lease: NativeLease, responseID: string, signal: AbortSignal): ReadableStream<Uint8Array> {
+  let finished = false;
+  let nativeClosed = false;
+  let activeOperationID: string | undefined;
+  let abortListener: (() => void) | undefined;
+
+  const closeNative = async (): Promise<void> => {
+    if (nativeClosed) return;
+    nativeClosed = true;
+    await ignoreFailure(lease.module.closeResponse(lease.clientID, responseID));
+  };
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    if (abortListener !== undefined) signal.removeEventListener("abort", abortListener);
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      abortListener = () => {
+        if (finished) return;
+        finish();
+        void closeNative();
+        controller.error(abortError());
+      };
+      signal.addEventListener("abort", abortListener, { once: true });
+    },
+    async pull(controller) {
+      if (finished) return;
+      if (signal.aborted) {
+        finish();
+        await closeNative();
+        controller.error(abortError());
+        return;
+      }
+      const operationID = makeOperationID();
+      activeOperationID = operationID;
+      try {
+        const encoded = await abortable(
+          lease.module.readResponseChunk(
+            lease.clientID,
+            operationID,
+            responseID,
+            MAXIMUM_RESPONSE_CHUNK_BYTES,
+          ),
+          signal,
+          () => { lease.module.cancel(lease.clientID, operationID); },
+        );
+        const chunk = parseResponseChunk(encoded);
+        if (chunk.done) {
+          finish();
+          controller.close();
+          await closeNative();
+        } else if (chunk.chunk !== undefined) {
+          controller.enqueue(chunk.chunk);
+        }
+      } catch (cause) {
+        if (!finished) {
+          finish();
+          controller.error(isAbort(cause) ? abortError() : cause);
+        }
+        await closeNative();
+      } finally {
+        if (activeOperationID === operationID) activeOperationID = undefined;
+      }
+    },
+    async cancel() {
+      finish();
+      if (activeOperationID !== undefined) lease.module.cancel(lease.clientID, activeOperationID);
+      await closeNative();
+    },
+  }, { highWaterMark: 0 });
+}
+
+function parseResponseMetadata(encoded: string): NativeResponseMetadata {
+  const value = parseRecord(encoded, "native response metadata");
+  assertNoCredentialFields(value);
+  if (!hasOnlyKeys(value, ["responseID", "status", "statusText", "headers"]) ||
+      typeof value.responseID !== "string" || !/^rsp_[A-Za-z0-9_-]{16,96}$/u.test(value.responseID) ||
+      !Number.isInteger(value.status) || (value.status as number) < 200 || (value.status as number) > 599 ||
+      typeof value.statusText !== "string" || value.statusText.length > 128 || /\p{Cc}/u.test(value.statusText) ||
+      !Array.isArray(value.headers) || value.headers.length > MAXIMUM_HEADERS) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native response metadata.");
+  }
+  const headers: Array<[string, string]> = [];
+  let headerBytes = 0;
+  for (const header of value.headers) {
+    if (!Array.isArray(header) || header.length !== 2 || typeof header[0] !== "string" ||
+        typeof header[1] !== "string") {
+      throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native response headers.");
+    }
+    const name = header[0].toLowerCase();
+    const headerValue = header[1];
+    if (!isSafeResponseHeader(name) || !isHeaderValue(headerValue)) {
+      throw new LatchwayError("protocol_response_invalid", "Latchway returned unsafe native response headers.");
+    }
+    headerBytes += name.length + headerValue.length;
+    if (headerBytes > MAXIMUM_HEADER_BYTES) {
+      throw new LatchwayError("protocol_response_invalid", "Latchway returned oversized native response headers.");
+    }
+    headers.push([name, headerValue]);
+  }
+  return {
+    responseID: value.responseID,
+    status: value.status as number,
+    statusText: value.statusText,
+    headers,
+  };
+}
+
+function parseResponseChunk(encoded: string): NativeResponseChunk {
+  if (encoded.length > MAXIMUM_RESPONSE_CHUNK_BYTES * 2) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned an oversized native response chunk.");
+  }
+  const value = parseRecord(encoded, "native response chunk");
+  assertNoCredentialFields(value);
+  if (!hasOnlyKeys(value, ["done", "chunk"]) || typeof value.done !== "boolean") {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned an invalid native response chunk.");
+  }
+  if (value.done) {
+    if (value.chunk !== undefined && value.chunk !== null) {
+      throw new LatchwayError("protocol_response_invalid", "Latchway returned an invalid final native response chunk.");
+    }
+    return { done: true };
+  }
+  if (typeof value.chunk !== "string") {
+    throw new LatchwayError("protocol_response_invalid", "Latchway omitted native response bytes.");
+  }
+  const chunk = base64ToBytes(value.chunk);
+  if (chunk.byteLength === 0 || chunk.byteLength > MAXIMUM_RESPONSE_CHUNK_BYTES) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native response bytes.");
+  }
+  return { done: false, chunk };
 }
 
 function parseQuota(encoded: string, expectedFeature: string): QuotaSnapshot {
   const value = parseRecord(encoded, "quota snapshot");
-  if (value.feature !== expectedFeature || typeof value.observed_at !== "string" || !Array.isArray(value.limits)) {
+  assertNoCredentialFields(value);
+  if (!hasOnlyKeys(value, ["feature", "observed_at", "limits"]) ||
+      value.feature !== expectedFeature || typeof value.observed_at !== "string" || !Array.isArray(value.limits)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned an invalid quota snapshot.");
   }
   const limits: QuotaLimit[] = value.limits.map((item) => {
-    if (!isRecord(item) || typeof item.metric !== "string" || typeof item.hard !== "boolean") {
+    if (!isRecord(item) ||
+        !hasOnlyKeys(item, ["metric", "maximum", "used", "reserved", "remaining", "resets_at", "hard"]) ||
+        typeof item.metric !== "string" || typeof item.hard !== "boolean") {
       throw new LatchwayError("protocol_response_invalid", "Latchway returned an invalid quota limit.");
     }
     for (const field of ["maximum", "used", "reserved", "remaining"] as const) {
@@ -353,10 +593,20 @@ function parseDiagnostics(
   nativeSDKVersion: string,
 ): ReactNativeDiagnostics {
   const value = parseRecord(encoded, "diagnostics");
-  if (value.contractVersion !== CONTRACT_VERSION || value.protocolVersion !== PROTOCOL_VERSION ||
+  assertNoCredentialFields(value);
+  if (!hasOnlyKeys(value, [
+    "contractVersion", "protocolVersion", "keyStorage", "attestation", "session", "installation", "server",
+    "lastErrorCode",
+  ]) || value.contractVersion !== CONTRACT_VERSION || value.protocolVersion !== PROTOCOL_VERSION ||
       typeof value.keyStorage !== "string" || !isRecord(value.attestation) || !isRecord(value.session) ||
       !isRecord(value.installation) || !isRecord(value.server)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native diagnostics.");
+  }
+  if (!hasOnlyKeys(value.attestation, ["support", "provider", "trustLevel", "lastOperation"]) ||
+      !hasOnlyKeys(value.session, ["state", "expiresAt", "refreshAvailable"]) ||
+      !hasOnlyKeys(value.installation, ["id", "status"]) ||
+      !hasOnlyKeys(value.server, ["version", "lastRequestID"])) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned unexpected native diagnostics.");
   }
   const support = value.attestation.support;
   const state = value.session.state;
@@ -446,75 +696,13 @@ function makeOperationID(): string {
 }
 
 function assertFeature(value: string | undefined): asserts value is string {
-  if (value === undefined || !/^[a-z][a-z0-9_-]{0,62}$/u.test(value)) {
+  if (value === undefined || !validIdentifier(value)) {
     throw new LatchwayError("client_configuration_invalid", "A valid latchwayFeature is required.");
   }
 }
 
-function canSafelyRetry(request: Request): boolean {
-  return request.body === null && new Set(["GET", "HEAD", "OPTIONS"]).has(request.method.toUpperCase());
-}
-
-function isLatchwayProblem(response: Response): boolean {
-  return response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase() === "application/problem+json";
-}
-
-async function verifiedPreDispatchRejection(
-  response: Response,
-): Promise<VerifiedPreDispatchRejection | undefined> {
-  const responseRequestID = response.headers.get("X-Latchway-Request-ID");
-  if (response.status !== 401 || responseRequestID === null ||
-      !isCanonicalRequestID(responseRequestID)) return undefined;
-  const problem = await boundedProblem(response);
-  if (problem === undefined || !hasOnlyKeys(problem, preDispatchProblemFields) ||
-      (problem.code !== "dpop_nonce_required" && problem.code !== "session_expired")) return undefined;
-  const code: PreDispatchProblemCode = problem.code;
-  const definition = preDispatchProblems[code];
-  if (problem.type !== `https://latchway.dev/problems/${code}` || problem.title !== definition.title ||
-      problem.status !== 401 || problem.status !== response.status || problem.detail !== definition.detail ||
-      problem.request_id !== responseRequestID || problem.retryable !== true) return undefined;
-  const suppliedNonce = response.headers.get("DPoP-Nonce");
-  if (code === "dpop_nonce_required") {
-    return isUsableDPoPNonce(suppliedNonce) ? { code, nonce: suppliedNonce } : undefined;
-  }
-  return suppliedNonce === null ? { code } : undefined;
-}
-
-async function boundedProblem(response: Response): Promise<Record<string, unknown> | undefined> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    reader = response.clone().body?.getReader();
-    if (reader === undefined) return undefined;
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      size += chunk.value.byteLength;
-      if (size > 65_536) {
-        // Awaiting cancellation of one branch of a cloned/teed response can
-        // wait forever for the untouched application branch to cancel too.
-        // Initiate branch cancellation and return the original response.
-        void reader.cancel().catch(() => undefined);
-        return undefined;
-      }
-      chunks.push(chunk.value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    if (!hasUniqueTopLevelMemberNames(encoded)) return undefined;
-    const value: unknown = JSON.parse(encoded);
-    return isRecord(value) ? value : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    reader?.releaseLock();
-  }
+function validIdentifier(value: string): boolean {
+  return /^[a-z][a-z0-9_-]{0,62}$/u.test(value);
 }
 
 function parseRecord(encoded: string, label: string): Record<string, unknown> {
@@ -522,92 +710,102 @@ function parseRecord(encoded: string, label: string): Record<string, unknown> {
     const value: unknown = JSON.parse(encoded);
     if (isRecord(value)) return value;
   } catch {
-    // Never include native payload text in an error.
+    // Native output is intentionally not reflected into the safe error.
   }
   throw new LatchwayError("protocol_response_invalid", `Latchway returned invalid ${label}.`);
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 && value.length <= 512 ? value : undefined;
+function hasOnlyKeys(value: Record<string, unknown>, names: readonly string[]): boolean {
+  const expected = new Set(names);
+  return Object.keys(value).every((name) => expected.has(name));
 }
 
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+function isSafeResponseHeader(name: string): boolean {
+  return safeResponseHeaderNames.has(name) || name.startsWith("x-ratelimit-") || name.startsWith("ratelimit-");
 }
 
-function hasUniqueTopLevelMemberNames(encoded: string): boolean {
-  const names = new Set<string>();
-  let index = skipJSONWhitespace(encoded, 0);
-  if (encoded[index] !== "{") return false;
-  index += 1;
-  let depth = 1;
-  let expectsName = true;
-  while (index < encoded.length) {
-    index = skipJSONWhitespace(encoded, index);
-    const character = encoded[index];
-    if (character === undefined) return false;
-    if (depth === 1 && expectsName) {
-      if (character === "}") return true;
-      if (character !== '"') return false;
-      const end = jsonStringEnd(encoded, index);
-      if (end === undefined) return false;
-      let name: unknown;
-      try {
-        name = JSON.parse(encoded.slice(index, end + 1));
-      } catch {
-        return false;
-      }
-      if (typeof name !== "string" || names.has(name)) return false;
-      names.add(name);
-      index = skipJSONWhitespace(encoded, end + 1);
-      if (encoded[index] !== ":") return false;
-      index += 1;
-      expectsName = false;
-      continue;
+function recoverResponseID(encoded: string): string | undefined {
+  if (encoded.length > 256 * 1024) return undefined;
+  try {
+    const value: unknown = JSON.parse(encoded);
+    if (isRecord(value) && typeof value.responseID === "string" && /^rsp_[A-Za-z0-9_-]{16,96}$/u.test(value.responseID)) {
+      return value.responseID;
     }
-    if (character === '"') {
-      const end = jsonStringEnd(encoded, index);
-      if (end === undefined) return false;
-      index = end + 1;
-      continue;
-    }
-    if (character === "{" || character === "[") {
-      depth += 1;
-    } else if (character === "}" || character === "]") {
-      depth -= 1;
-      if (depth === 0) return true;
-    } else if (character === "," && depth === 1) {
-      expectsName = true;
-    }
-    index += 1;
-  }
-  return false;
-}
-
-function jsonStringEnd(encoded: string, start: number): number | undefined {
-  for (let index = start + 1; index < encoded.length; index += 1) {
-    const character = encoded[index];
-    if (character === '"') return index;
-    if (character === "\\") index += 1;
+  } catch {
+    // Invalid output has no safely recoverable response handle.
   }
   return undefined;
 }
 
-function skipJSONWhitespace(encoded: string, start: number): number {
-  let index = start;
-  while (encoded[index] === " " || encoded[index] === "\t" ||
-         encoded[index] === "\n" || encoded[index] === "\r") index += 1;
-  return index;
+function isHeaderName(value: string): boolean {
+  return /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u.test(value);
 }
 
-function isUsableDPoPNonce(value: string | null): value is string {
-  // Exclude spaces, control characters, commas (including joined duplicate
-  // header values), and non-ASCII bytes from the one-use nonce input.
-  return value !== null && /^[\u0021-\u002b\u002d-\u007e]{16,512}$/u.test(value);
+function isHeaderValue(value: string): boolean {
+  if (value.length > 8_192) return false;
+  for (const character of value) {
+    const scalar = character.codePointAt(0) ?? 0;
+    if (scalar <= 0x08 || (scalar >= 0x0a && scalar <= 0x1f) || scalar === 0x7f) return false;
+  }
+  return true;
+}
+
+function decodedCredentialName(value: string): string {
+  let decoded = value;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  // Fail closed on deeper nested escapes instead of letting an attacker move a
+  // credential name past the bounded decoder with another layer of `%25`.
+  if (/%[0-9A-Fa-f]{2}/u.test(decoded)) return "credential-encoded-name";
+  return decoded.toLowerCase();
+}
+
+function isForbiddenCredentialName(value: string): boolean {
+  const normalized = value.toLowerCase();
+  if (forbiddenCredentialHeaders.has(normalized) || forbiddenCredentialQueryNames.has(normalized)) return true;
+  const compact = normalized.replace(/[^a-z0-9]/gu, "");
+  return forbiddenExactCredentialNames.has(compact) ||
+    forbiddenCredentialNameFragments.some((fragment) => compact.includes(fragment));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 16_384) {
+    const end = Math.min(offset + 16_384, bytes.length);
+    for (let index = offset; index < end; index += 1) binary += String.fromCharCode(bytes[index] ?? 0);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(encoded: string): Uint8Array {
+  if (encoded.length === 0 || encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned malformed native response bytes.");
+  }
+  let binary: string;
+  try { binary = atob(encoded); } catch {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned malformed native response bytes.");
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  if (bytesToBase64(bytes) !== encoded) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned non-canonical native response bytes.");
+  }
+  return bytes;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.length === 0 || value.length > 512 || /\p{Cc}/u.test(value)) {
+    throw new LatchwayError("protocol_response_invalid", "Latchway returned an invalid native diagnostic value.");
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -618,4 +816,6 @@ function isAbort(value: unknown): boolean {
   return value instanceof Error && value.name === "AbortError";
 }
 
-export type { LatchwayErrorCode };
+async function ignoreFailure(operation: Promise<void>): Promise<void> {
+  try { await operation; } catch { /* cleanup is idempotent and best-effort */ }
+}
