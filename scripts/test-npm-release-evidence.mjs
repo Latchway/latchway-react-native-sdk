@@ -199,8 +199,16 @@ test("private sibling checkouts use the optional read token and release docs for
 
 test("published dependency gate requires immutable attested assets and live registry bytes", async () => {
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
+  const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const androidContract = await readFile(new URL("android-release-evidence.mjs", import.meta.url), "utf8");
   const verifierSource = `${source}\n${androidContract}`;
+  const dependencyGate = releaseWorkflow.slice(
+    releaseWorkflow.indexOf("Wait for verified locked public SDK releases"),
+  );
+  assert.match(
+    dependencyGate,
+    /GH_TOKEN: \$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \|\| github\.token \}\}/u,
+  );
   for (const control of [
     "release.immutable !== true",
     '"release", "verify"',
@@ -242,11 +250,10 @@ test("published dependency gate requires immutable attested assets and live regi
     /single_upload_only|publishing_type\s*!==\s*"automatic"|proof\.schema_version\s*!==\s*1|maven-central-(?:upload-intent|deployment(?:-status)?)\.v1/u,
   );
 
-  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  assert.match(workflow, /attestations: read/u);
-  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
-  assert.match(workflow, /published-dependency-evidence\.json/u);
-  assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/u);
+  assert.match(releaseWorkflow, /attestations: read/u);
+  assert.match(releaseWorkflow, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
+  assert.match(releaseWorkflow, /published-dependency-evidence\.json/u);
+  assert.doesNotMatch(releaseWorkflow, /secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/u);
 });
 
 test("release attestation parser binds exact source and asset closure", () => {

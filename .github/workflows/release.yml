@@ -234,7 +234,7 @@ jobs:
         working-directory: latchway-react-native-sdk
       - name: Wait for verified locked public SDK releases
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
           ANDROID_VERSION: ${{ steps.lock.outputs.android_version }}
           IOS_VERSION: ${{ steps.lock.outputs.ios_version }}
           LATCHWAY_CENTRAL_VERIFY_ATTEMPTS: 180

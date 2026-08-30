@@ -56,7 +56,9 @@ be a fine-grained token selected only for `Latchway/latchway`,
 write permission. Cross-repository checkout steps use it only for the pinned
 sibling fetch and set `persist-credentials: false`; the promotion job also uses
 it for the exact core release-asset download and attestation verification. If
-every sibling is public, the secret may be omitted and the job token is used.
+the sibling repositories remain private, the published-dependency gate uses the
+same read-only token to verify their immutable releases and assets. If every
+sibling is public, the secret may be omitted and the job token is used.
 
 After the protected preflight, the workflow resolves the remote annotated tag
 object to the promoted commit immediately before it creates or resumes the
