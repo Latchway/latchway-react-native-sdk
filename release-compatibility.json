@@ -52,6 +52,9 @@
     "source_commit": "a41c0a5fd648365258695b2fe0abda44b618b9d6",
     "minimum_sdk": 24,
     "compile_sdk": 37,
+    "sdk_platform_version": "37.0",
+    "build_tools_version": "36.0.0",
+    "ndk_version": "27.1.12297006",
     "publisher_android_gradle_plugin": "9.3.2",
     "consumer_android_gradle_plugin": "8.12.0",
     "kotlin": "2.3.21"

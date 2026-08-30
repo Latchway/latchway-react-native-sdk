@@ -65,7 +65,7 @@
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:publish": "node scripts/publish-or-verify.mjs",
     "consumer:check": "node scripts/verify-consumer.mjs",
-    "test": "vitest run && node --test scripts/test-npm-release-evidence.mjs scripts/test-android-release-evidence.mjs",
+    "test": "vitest run && node --test scripts/test-npm-release-evidence.mjs scripts/test-android-release-evidence.mjs scripts/test-ci-lock-output.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:bundle": "node scripts/verify-contract-bundle.mjs",

@@ -115,6 +115,19 @@ assertEqual(requireMatch(androidSettings, /id\("com\.android\.library"\) version
   "Android consumer Gradle plugin");
 assertEqual(Number(requireMatch(exampleAndroidBuild, /compileSdkVersion\s*=\s*(\d+)/u,
   "example Android compile SDK")), compatibility.android.compile_sdk, "example Android compile SDK");
+if (!/^\d+\.\d+$/u.test(compatibility.android.sdk_platform_version)) {
+  throw new Error("Android SDK platform package version must include its published minor component.");
+}
+assertEqual(Number(compatibility.android.sdk_platform_version.split(".")[0]),
+  compatibility.android.compile_sdk, "Android SDK platform package major version");
+for (const [field, value] of [
+  ["build tools", compatibility.android.build_tools_version],
+  ["NDK", compatibility.android.ndk_version],
+]) {
+  if (!/^\d+(?:\.\d+)+$/u.test(value)) {
+    throw new Error(`Android ${field} version must be an exact numeric package version.`);
+  }
+}
 assertEqual(requireMatch(exampleAndroidBuild, /kotlinVersion\s*=\s*"([^"]+)"/u,
   "example Android Kotlin compiler"), compatibility.android.kotlin, "example Android Kotlin compiler");
 for (const artifact of compatibility.android.artifacts) {
