@@ -7,7 +7,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
-    files: ["example/src/**/*.{ts,tsx}", "src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+    files: ["Conformance/framework/**/*.ts", "example/src/**/*.{ts,tsx}", "src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname }
@@ -22,7 +22,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ["test/**/*.ts"],
+    files: ["Conformance/framework/**/*.ts", "test/**/*.ts"],
     rules: { "@typescript-eslint/require-await": "off" }
   },
   {

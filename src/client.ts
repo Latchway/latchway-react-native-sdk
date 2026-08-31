@@ -1,4 +1,5 @@
 import { LatchwayError } from "@latchway/client";
+import { ReadableStream as PonyfillReadableStream } from "web-streams-polyfill";
 import type { RuntimeConfiguration } from "./config.js";
 import { acquire, type NativeLease } from "./coordinator.js";
 import { abortError, fromNativeError } from "./errors.js";
@@ -155,11 +156,13 @@ interface NativeResponseChunk {
 let nextOperationID = 1;
 
 export class DefaultLatchwayClient implements LatchwayClient {
+  readonly gatewayURL: string;
   readonly ready: Promise<void>;
   private readonly lease: Promise<NativeLease>;
   private disposed = false;
 
   constructor(private readonly config: RuntimeConfiguration) {
+    this.gatewayURL = config.baseURL.origin;
     this.lease = acquire(config);
     this.ready = this.lease.then(async (lease) => { await lease.ready; });
   }
@@ -167,6 +170,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
   async fetch(input: RequestInfo | URL, init: LatchwayFetchInit = {}): Promise<Response> {
     this.assertActive();
     const { latchwayFeature, ...requestInit } = init;
+    const bodyExpected = requestBodyExpected(input, requestInit);
     const request = this.createRequest(input, requestInit);
     const feature = latchwayFeature ?? request.headers.get("X-Latchway-Feature") ?? undefined;
     assertFeature(feature);
@@ -179,7 +183,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await lease.ready;
     const signal = request.signal;
     const headers = sanitizedRequestHeaders(request.headers);
-    const bodyBase64 = await encodedRequestBody(request, signal);
+    const bodyBase64 = await encodedRequestBody(request, signal, bodyExpected);
     const requestJSON = JSON.stringify({
       url: request.url,
       method: request.method.toUpperCase(),
@@ -223,7 +227,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
       metadata.status !== 204 && metadata.status !== 205 && metadata.status !== 304;
     const body = hasBody ? nativeResponseBody(lease, metadata.responseID, signal) : null;
     if (!hasBody) await ignoreFailure(lease.module.closeResponse(lease.clientID, metadata.responseID));
-    return new Response(body, {
+    return responseWithNativeBody(body, {
       status: metadata.status,
       statusText: metadata.statusText,
       headers: metadata.headers,
@@ -233,7 +237,9 @@ export class DefaultLatchwayClient implements LatchwayClient {
   fetchFor(feature: string): LatchwayFetch {
     this.assertActive();
     assertFeature(feature);
-    return async (input, init = {}) => this.fetch(input, { ...init, latchwayFeature: feature });
+    return async (input, init = {}) => aliasFrameworkRequestID(
+      await this.fetch(input, { ...init, latchwayFeature: feature }),
+    );
   }
 
   async quota(feature: string): Promise<QuotaSnapshot> {
@@ -310,13 +316,14 @@ export class DefaultLatchwayClient implements LatchwayClient {
 
   private assertGatewayTarget(input: string, method: string, feature: string): void {
     const target = new URL(input);
+    const pathname = policyPathname(input, target);
     if (target.origin !== this.config.baseURL.origin || target.hash !== "") {
       throw new LatchwayError(
         "client_configuration_invalid",
         "Latchway only dispatches requests to the configured gateway origin.",
       );
     }
-    if (!isAllowedDataPlaneTarget(target, method, feature)) {
+    if (!isAllowedDataPlaneTarget(target, pathname, method, feature)) {
       throw new LatchwayError(
         "transport_destination_not_allowed",
         "Latchway only authorizes methods and paths declared by the client contract.",
@@ -339,14 +346,68 @@ export class DefaultLatchwayClient implements LatchwayClient {
   }
 }
 
-function isAllowedDataPlaneTarget(target: URL, method: string, feature: string): boolean {
+/**
+ * Provider SDKs conventionally read `X-Request-ID`. Preserve Latchway's
+ * canonical header and add the alias without consuming or buffering the body.
+ */
+function aliasFrameworkRequestID(response: Response): Response {
+  const requestID = response.headers.get("X-Latchway-Request-ID");
+  if (requestID === null || response.headers.get("X-Request-ID") === requestID) return response;
+  response.headers.set("X-Request-ID", requestID);
+  return response;
+}
+
+function responseWithNativeBody(body: ReadableStream<Uint8Array> | null, init: ResponseInit): Response {
+  let response: Response;
+  try {
+    response = new Response(body, init);
+  } catch {
+    // Some React Native Response implementations reject ponyfill streams even
+    // though the instance body is attached below and consumed directly.
+    response = new Response(null, init);
+  }
+  if (body === null) return response;
+  const exposed = (response as Response & { body?: ReadableStream<Uint8Array> | null }).body;
+  if (exposed !== undefined && exposed !== null && typeof exposed.getReader === "function") {
+    return response;
+  }
+  // React Native 0.82's built-in Response accepts the stream but does not
+  // expose it through `body`. Restore the exact native-owned pull stream on
+  // the instance; no bytes are buffered and the native cancel/close lifecycle
+  // remains authoritative.
+  Object.defineProperty(response, "body", {
+    configurable: true,
+    enumerable: true,
+    value: body,
+  });
+  return response;
+}
+
+function policyPathname(input: string, target: URL): string {
+  // React Native's built-in URL polyfill appends `/` when an absolute URL has
+  // no query or fragment. Request.url is already serialized at this point, so
+  // recognize only that exact mutation instead of broadening the route set to
+  // accept genuinely trailing-slash destinations.
+  if (target.pathname.length > 1 && !input.includes("?") && !input.includes("#") &&
+      !input.endsWith("/") && target.href === `${input}/`) {
+    return target.pathname.slice(0, -1);
+  }
+  return target.pathname;
+}
+
+function isAllowedDataPlaneTarget(
+  target: URL,
+  pathname: string,
+  method: string,
+  feature: string,
+): boolean {
   const normalizedMethod = method.toUpperCase();
-  if (normalizedMethod === "POST" && allowedDataPlanePaths.has(target.pathname)) return true;
+  if (normalizedMethod === "POST" && allowedDataPlanePaths.has(pathname)) return true;
 
   const prefix = `/proxy/${encodeURIComponent(feature)}/`;
   if (!opaqueDataPlaneMethods.has(normalizedMethod) || target.search !== "" ||
-      !target.pathname.startsWith(prefix)) return false;
-  const remaining = target.pathname.slice(prefix.length);
+      !pathname.startsWith(prefix)) return false;
+  const remaining = pathname.slice(prefix.length);
   const lowerRemaining = remaining.toLowerCase();
   return remaining.length >= 1 && remaining.length <= 2_048 &&
     remaining.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..") &&
@@ -374,9 +435,36 @@ function sanitizedRequestHeaders(source: Headers): Array<[string, string]> {
   return result;
 }
 
-async function encodedRequestBody(request: Request, signal: AbortSignal): Promise<string | null> {
-  if (request.body === null) return null;
-  const reader = request.body.getReader();
+function requestBodyExpected(input: RequestInfo | URL, init: RequestInit): boolean {
+  if (Object.prototype.hasOwnProperty.call(init, "body")) return init.body !== null && init.body !== undefined;
+  if (!(input instanceof Request)) return false;
+  const body = (input as Request & { body?: ReadableStream<Uint8Array> | null }).body;
+  if (body !== null && body !== undefined) return true;
+  return (input as Request & { _bodyInit?: unknown })._bodyInit !== null &&
+    (input as Request & { _bodyInit?: unknown })._bodyInit !== undefined;
+}
+
+async function encodedRequestBody(
+  request: Request,
+  signal: AbortSignal,
+  bodyExpected: boolean,
+): Promise<string | null> {
+  const body = (request as Request & { body?: ReadableStream<Uint8Array> | null }).body;
+  if (body === null || (body === undefined && !bodyExpected)) return null;
+  if (body === undefined || typeof body.getReader !== "function") {
+    try {
+      const encoded = await abortable(request.arrayBuffer(), signal, () => {});
+      const bytes = new Uint8Array(encoded);
+      if (bytes.byteLength > MAXIMUM_REQUEST_BODY_BYTES) {
+        throw new LatchwayError("request_invalid", "The request body exceeds the 8 MiB native transport limit.");
+      }
+      return bytesToBase64(bytes);
+    } catch (cause) {
+      if (cause instanceof LatchwayError || isAbort(cause)) throw cause;
+      throw new LatchwayError("request_not_replayable", "The request body could not be read for native dispatch.", { cause });
+    }
+  }
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -442,7 +530,10 @@ function nativeResponseBody(lease: NativeLease, responseID: string, signal: Abor
     if (abortListener !== undefined) signal.removeEventListener("abort", abortListener);
   };
 
-  return new ReadableStream<Uint8Array>({
+  const ReadableStreamConstructor = typeof globalThis.ReadableStream === "function"
+    ? globalThis.ReadableStream
+    : PonyfillReadableStream as unknown as typeof globalThis.ReadableStream;
+  return new ReadableStreamConstructor<Uint8Array>({
     start(controller) {
       abortListener = () => {
         if (finished) return;

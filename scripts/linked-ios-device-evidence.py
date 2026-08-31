@@ -181,6 +181,7 @@ PLATFORM_POLICY = {
             "native_evidence_linked",
             "react_native_bridge",
             "app_attest_session",
+            "app_attest_assertion",
             "secure_enclave_key",
             "dpop_authorized_request",
             "dpop_replay_rejected",
@@ -247,6 +248,19 @@ SECRET_PATTERNS = (
     re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"\b(?:lwa|lws|sk)-[A-Za-z0-9_-]{16,}\b", re.IGNORECASE),
 )
+
+
+def canonical_error_mapping_response(platform: str) -> tuple[int, str]:
+    """Return the authorization-safe mapping required by each report contract.
+
+    React Native root requests are authorized against their component feature
+    grant before feature lookup, so even an absent feature must not disclose
+    existence. Linked native SDK reports retain their independently versioned
+    canonical feature-lookup expectation.
+    """
+    if platform.startswith("react_native_"):
+        return 403, "component_feature_not_granted"
+    return 404, "feature_not_found"
 
 
 def reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -773,10 +787,11 @@ def semantic_errors(evidence: dict[str, Any], profile: dict[str, Any]) -> list[s
         if isinstance(test, dict) and test.get("status") != "passed":
             errors.append(f"test {test.get('id')!r} did not pass")
     tests_by_name = {test.get("id"): test for test in tests if isinstance(test, dict)}
+    canonical_mapping = canonical_error_mapping_response(platform)
     negative_expectations = {
         "dpop_replay_rejected": (401, "dpop_replayed"),
         "tampered_dpop_rejected": (401, "dpop_invalid"),
-        "canonical_error_mapping": (404, "feature_not_found"),
+        "canonical_error_mapping": canonical_mapping,
         "installation_revocation": (403, "installation_revoked"),
         "protocol_version_rejection": (426, "protocol_version_unsupported"),
         "component_sibling_denied": (401, "component_key_invalid"),

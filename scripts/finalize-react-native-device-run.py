@@ -63,7 +63,7 @@ LINKED_COORDINATE_PINS = {
 }
 RAW_TESTS = {
     "react_native_ios_app_attest": {
-        "react_native_bridge", "app_attest_session", "secure_enclave_key",
+        "react_native_bridge", "app_attest_session", "app_attest_assertion", "secure_enclave_key",
         "dpop_authorized_request", "streamed_request", "quota",
         "canonical_error_mapping",
     },
@@ -163,11 +163,14 @@ def validated_tests(value: Any, platform: str) -> list[dict[str, Any]]:
     by_id = {item["id"]: item for item in output}
     mapping = by_id["canonical_error_mapping"]
     if (
-        mapping.get("http_status") != 404
-        or mapping.get("error_code") != "feature_not_found"
+        mapping.get("http_status") != 403
+        or mapping.get("error_code") != "component_feature_not_granted"
         or "request_id" not in mapping
     ):
-        raise ValueError("tests: canonical_error_mapping lacks a concrete canonical response")
+        raise ValueError(
+            "tests: canonical_error_mapping must record HTTP 403 "
+            "component_feature_not_granted with a request ID"
+        )
     if by_id["canonical_error_mapping"].get("mapped_error_type") != "react_native_latchway_error":
         raise ValueError("tests: canonical mapping was not the React Native error type")
     return output
@@ -438,7 +441,8 @@ def build(
         native.get("provider") == expected_provider and native.get("trust_level") in trusted_levels and
         native.get("session_state") == "active" and key_ok and linked_trusted and current_policy_trust and
         by_name["react_native_bridge"]["status"] == "passed" and
-        by_name[session_test]["status"] == "passed" and by_name[key_test]["status"] == "passed"
+        by_name[session_test]["status"] == "passed" and by_name[key_test]["status"] == "passed" and
+        (android or by_name["app_attest_assertion"]["status"] == "passed")
     )
 
     observed = {

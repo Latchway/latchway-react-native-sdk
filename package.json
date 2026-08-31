@@ -54,9 +54,10 @@
   },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
-    "check": "pnpm verify:contracts && pnpm verify:compatibility && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm native:boundary",
+    "check": "pnpm verify:contracts && pnpm verify:compatibility && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm example:bundle:check && pnpm native:boundary",
     "codegen:check": "node scripts/verify-codegen.mjs",
     "example:check": "tsc -p tsconfig.example.json --noEmit",
+    "example:bundle:check": "node scripts/verify-example-bundles.mjs",
     "lint": "eslint . --max-warnings=0",
     "ios:spec": "pod ipc spec LatchwayReactNative.podspec >/dev/null",
     "native:boundary": "node scripts/verify-native-boundary.mjs",
@@ -74,25 +75,33 @@
     "verify:reproducible": "node scripts/verify-reproducible.mjs"
   },
   "dependencies": {
-    "@latchway/client": "1.0.0"
+    "@latchway/client": "1.0.0",
+    "web-streams-polyfill": "4.3.0"
   },
   "peerDependencies": {
     "react": "19.1.x",
     "react-native": "0.82.x"
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "4.0.46",
+    "@ai-sdk/openai": "4.0.52",
     "@eslint/js": "10.0.1",
+    "@langchain/core": "1.2.9",
+    "@langchain/openai": "1.5.10",
     "@react-native/codegen": "0.82.0",
     "@react-native/gradle-plugin": "0.82.0",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
+    "ai": "7.0.85",
     "eslint": "10.9.1",
     "globals": "17.11.0",
+    "openai": "7.8.0",
     "react": "19.1.1",
     "react-native": "0.82.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "zod": "4.5.4"
   },
   "codegenConfig": {
     "name": "LatchwayReactNativeSpec",

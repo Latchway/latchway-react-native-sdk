@@ -13,6 +13,7 @@ interface RenewableClient {
 export async function freshClientAfterRevocation<T extends RenewableClient>(
   current: T,
   create: () => T,
+  inspectReplacementFailure?: (replacement: T) => Promise<void>,
 ): Promise<T> {
   await current.ready;
   await current.revokeCurrentInstallation();
@@ -23,6 +24,11 @@ export async function freshClientAfterRevocation<T extends RenewableClient>(
     await replacement.ready;
     return replacement;
   } catch (error) {
+    try {
+      await inspectReplacementFailure?.(replacement);
+    } catch {
+      // Diagnostics are optional and must not replace the readiness failure.
+    }
     try {
       await replacement.dispose();
     } catch {

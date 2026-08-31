@@ -138,6 +138,96 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.requests[0]?.identityToken).toBe("app-owned-identity-token");
   });
 
+  it("restores the native pull stream when React Native Response omits body", async () => {
+    const StandardResponse = Response;
+    class ReactNativeResponse extends StandardResponse {
+      constructor(_body?: BodyInit | null, init?: ResponseInit) {
+        super(null, init);
+        Object.defineProperty(this, "body", {
+          configurable: true,
+          enumerable: true,
+          value: undefined,
+        });
+      }
+    }
+    vi.stubGlobal("Response", ReactNativeResponse);
+    const native = new FakeNativeModule();
+    native.responses.push({ chunks: ["native ", "stream"] });
+    install(native);
+    const client = create();
+
+    const response = await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "habit_assistant",
+    });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing restored response stream");
+    const decoder = new TextDecoder();
+    let output = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      output += decoder.decode(chunk.value, { stream: true });
+    }
+    output += decoder.decode();
+
+    expect(output).toBe("native stream");
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
+  it("encodes the request body when React Native Request omits its stream", async () => {
+    const StandardRequest = Request;
+    class ReactNativeRequest extends StandardRequest {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        super(input, init);
+        Object.defineProperty(this, "body", {
+          configurable: true,
+          enumerable: true,
+          value: undefined,
+        });
+      }
+    }
+    vi.stubGlobal("Request", ReactNativeRequest);
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    const response = await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "habit_assistant",
+      body: "react-native-body",
+    });
+    await response.body?.cancel();
+
+    expect(decodeBase64(native.requests[0]?.request.bodyBase64)).toBe("react-native-body");
+  });
+
+  it("uses the bundled ponyfill when React Native has no global ReadableStream", async () => {
+    vi.stubGlobal("ReadableStream", undefined);
+    const native = new FakeNativeModule();
+    native.responses.push({ chunks: ["ponyfill ", "stream"] });
+    install(native);
+    const client = create();
+
+    const response = await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "habit_assistant",
+    });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing ponyfill response stream");
+    const decoder = new TextDecoder();
+    let output = "";
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      output += decoder.decode(chunk.value, { stream: true });
+    }
+    output += decoder.decode();
+
+    expect(output).toBe("ponyfill stream");
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
   it("returns a fetch-compatible function permanently bound to one feature", async () => {
     const native = new FakeNativeModule();
     install(native);
@@ -147,6 +237,51 @@ describe("React Native Latchway native-owned fetch", () => {
     await expect((await chatFetch("/v1/chat/completions", { method: "POST", body: "{}" })).text())
       .resolves.toBe("ok");
     expect(native.requests[0]?.request.feature).toBe("chat");
+  });
+
+  it("preserves exact routes when React Native reparses absolute URLs with a trailing slash", async () => {
+    const StandardURL = URL;
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    const structured = new Request("https://gateway.example.test/v1/chat/completions", {
+      method: "POST",
+      body: "{}",
+    });
+    const opaque = new Request("https://gateway.example.test/proxy/chat/vendor/models", {
+      method: "GET",
+    });
+    const genuinelyTrailing = new Request("https://gateway.example.test/v1/chat/completions/", {
+      method: "POST",
+      body: "{}",
+    });
+    class ReactNativeURL extends StandardURL {
+      constructor(input: string | { toString(): string }, base?: string | { toString(): string }) {
+        const serializedInput = String(input);
+        super(serializedInput, base === undefined ? undefined : String(base));
+        if (base === undefined && /^https?:\/\//u.test(serializedInput) &&
+            !serializedInput.includes("?") && !serializedInput.includes("#") &&
+            !serializedInput.endsWith("/") && this.pathname !== "/") {
+          this.pathname = `${this.pathname}/`;
+        }
+      }
+    }
+    vi.stubGlobal("URL", ReactNativeURL);
+
+    await client.fetch(structured, {
+      latchwayFeature: "chat",
+    });
+    await client.fetch(opaque, {
+      latchwayFeature: "chat",
+    });
+
+    expect(native.requests.map(({ request }) => request.url)).toEqual([
+      "https://gateway.example.test/v1/chat/completions",
+      "https://gateway.example.test/proxy/chat/vendor/models",
+    ]);
+    await expect(client.fetch(genuinelyTrailing, {
+      latchwayFeature: "chat",
+    })).rejects.toMatchObject({ code: "transport_destination_not_allowed" });
   });
 
   it("dispatches a canonical feature-bound opaque route", async () => {

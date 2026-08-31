@@ -14,13 +14,29 @@ the React Native Firebase 26.3 line has an upstream iOS codegen return-type
 regression with the locked React Native 0.82 generator. Move the set together
 only after the replacement passes both native host gates.
 
+The **Run framework consumers** action executes real OpenAI Responses, Vercel
+AI Responses, LangChain Chat, LangChain embeddings, and Anthropic Messages
+calls through one feature-bound native fetch. `src/framework-consumers.ts`
+pins the tested OpenAI 7.8.0, AI SDK 7.0.85/`@ai-sdk/openai` 4.0.52,
+`@langchain/openai` 1.5.10, and `@ai-sdk/anthropic` 4.0.46 packages. Their
+constructor-only placeholder key is removed before the TurboModule boundary.
+This action makes five gateway requests and is intended for a configured
+development/conformance feature; the protected platform-specific physical
+record remains deliberately framework-independent.
+
+The official `@anthropic-ai/sdk` 0.120.0 client is intentionally not imported:
+its credential-chain Node filesystem imports fail Metro resolution. The Vercel
+Anthropic provider exercises the same `/v1/messages` protocol through the
+supported custom-fetch seam without a Node shim.
+
 Configure these values in the host's uncommitted environment:
 
 - `LATCHWAY_BASE_URL`
 - `LATCHWAY_APPLICATION_ID`
 - `LATCHWAY_ENVIRONMENT`
 - `LATCHWAY_FEATURE`
-- `LATCHWAY_ERROR_MAPPING_FEATURE` (a protected, guaranteed-absent feature)
+- `LATCHWAY_ERROR_MAPPING_FEATURE` (a protected feature intentionally absent
+  from the root component's grant; it may also be absent from configuration)
 - `LATCHWAY_MODEL`
 - `LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER`
 
@@ -41,6 +57,9 @@ Install and type-check from the repository root:
 ```sh
 pnpm install --frozen-lockfile
 pnpm example:check
+pnpm --filter latchway-react-native-example exec react-native bundle \
+  --platform ios --dev false --entry-file index.js \
+  --bundle-output /tmp/latchway-example.jsbundle
 ```
 
 Build the iOS source consumer with the exact sibling SDK:
@@ -79,8 +98,14 @@ for the complete build, collection, and cross-repository finalization contract.
 
 The v2 raw-device record includes only behavior the opaque JavaScript bridge can
 prove: bridge reachability, native-owned authorization, typed errors, streaming,
-quota, and redacted trust diagnostics. It never asks JavaScript to replay or
-mutate DPoP credentials or hash refresh tokens. The protected finalizer verifies
+quota, and redacted trust diagnostics. On iOS the example additionally disposes
+the first native client, calls a one-use example-native method that clears only
+the persisted session, and re-establishes through the production SDK. The run
+passes `app_attest_assertion` only when native diagnostics report an assertion
+and the installation ID is unchanged; the identifier is compared in memory and
+is never added to evidence. The installation key and accepted App Attest state
+remain native and untouched. The run never asks JavaScript to replay or mutate
+DPoP credentials or hash refresh tokens. The protected finalizer verifies
 the exact hash-pinned, release-eligible native iOS/Android report and imports its
 replay, tamper, refresh-rotation, protocol-rejection, and revocation tests. Raw
 JavaScript attempts to claim those native-only proofs are rejected.

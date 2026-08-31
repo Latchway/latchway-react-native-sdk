@@ -69,6 +69,13 @@ URL metadata are outside this transport. Framework compatibility therefore
 depends on a real custom-fetch seam and the framework's React Native support;
 the presence of `fetchFor` alone is not a version-support claim.
 
+`fetchFor(feature)` also maps the canonical safe
+`X-Latchway-Request-ID` response header to the conventional `X-Request-ID`
+alias without reading the body, so provider SDK failures retain server
+correlation. The native runtime remains the framework identity reported to the
+gateway (`react-native-fetch`); an underlying JavaScript library cannot spoof a
+different SDK/framework pair through caller headers.
+
 ## Coordination
 
 A module-global root lease map is keyed by native-module identity plus gateway/application/environment scope. A separate component lease map adds the component definition and never aliases the root map. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.

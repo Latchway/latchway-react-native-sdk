@@ -196,6 +196,7 @@ def raw_case(platform: str):
             entry,
             name,
             "kotlin_latchway_exception" if android else "swift_latchway_problem",
+            native_profile["platform"],
         )
         native_observation["tests"].append(entry)
     if android:
@@ -284,6 +285,50 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
                     self.assertEqual(output_by_id[identifier], native_by_id[identifier])
                     self.assertNotIn(identifier, {item["id"] for item in raw["tests"]})
 
+    def test_raw_mapping_requires_root_component_authorization_response(self) -> None:
+        for platform in (
+            "react_native_ios_app_attest",
+            "react_native_android_play_integrity",
+        ):
+            with self.subTest(platform=platform):
+                profile, raw, collection, native_profile, native_evidence, client_policy = raw_case(
+                    platform,
+                )
+                mapping = next(
+                    item for item in raw["tests"]
+                    if item["id"] == "canonical_error_mapping"
+                )
+                self.assertEqual(mapping["http_status"], 403)
+                self.assertEqual(mapping["error_code"], "component_feature_not_granted")
+                mapping.update(http_status=404, error_code="feature_not_found")
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "canonical_error_mapping must record HTTP 403 component_feature_not_granted",
+                ):
+                    finalize_case(
+                        profile,
+                        raw,
+                        collection,
+                        native_profile,
+                        native_evidence,
+                        client_policy,
+                        self.schema,
+                    )
+
+    def test_shared_and_linked_validators_keep_platform_specific_mapping_contracts(self) -> None:
+        for current_validator in (validator, finalizer.ios_native_evidence):
+            with self.subTest(validator=current_validator.__name__):
+                self.assertEqual(
+                    current_validator.canonical_error_mapping_response(
+                        "react_native_ios_app_attest",
+                    ),
+                    (403, "component_feature_not_granted"),
+                )
+                self.assertEqual(
+                    current_validator.canonical_error_mapping_response("ios_app_attest"),
+                    (404, "feature_not_found"),
+                )
+
     def test_embedded_pin_substitution_is_rejected(self) -> None:
         profile, raw, collection, native_profile, native_evidence, client_policy = raw_case("react_native_ios_app_attest")
         raw["pins"]["core_commit"] = "0" * 40
@@ -298,6 +343,28 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
         rotation["credential_after_sha256"] = rotation["credential_before_sha256"]
         with self.assertRaises(ValueError):
             finalize_case(profile, raw, collection, native_profile, native_evidence, client_policy, self.schema)
+
+    def test_ios_raw_assertion_reuse_is_required_for_release_eligibility(self) -> None:
+        profile, raw, collection, native_profile, native_evidence, client_policy = raw_case(
+            "react_native_ios_app_attest",
+        )
+        assertion = next(item for item in raw["tests"] if item["id"] == "app_attest_assertion")
+        assertion["status"] = "failed"
+        observation = finalize_case(
+            profile,
+            raw,
+            collection,
+            native_profile,
+            native_evidence,
+            client_policy,
+            self.schema,
+        )
+        evidence = validator.build_evidence(observation, profile, self.schema)
+        self.assertFalse(evidence["release_eligible"])
+        self.assertIn(
+            "test 'app_attest_assertion' did not pass",
+            validator.verify(evidence, profile, self.schema),
+        )
 
     def test_raw_run_cannot_claim_a_linked_native_security_proof(self) -> None:
         profile, raw, collection, native_profile, native_evidence, client_policy = raw_case(

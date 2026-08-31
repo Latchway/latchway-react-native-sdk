@@ -472,15 +472,25 @@ def load_ios_firebase_configuration(path: pathlib.Path, bundle_id: str) -> dict[
         raise CandidateError("Firebase iOS configuration is not a plist") from failure
     if not isinstance(value, dict) or value.get("BUNDLE_ID") != bundle_id:
         raise CandidateError("Firebase iOS bundle identifier does not match the candidate")
+    project_id = value.get("PROJECT_ID")
+    database_url = value.get("DATABASE_URL")
+    if isinstance(project_id, str) and database_url is None:
+        database_url = f"https://{project_id}-default-rtdb.firebaseio.com"
     result = {
         "api_key": value.get("API_KEY"),
         "app_id": value.get("GOOGLE_APP_ID"),
-        "project_id": value.get("PROJECT_ID"),
+        "database_url": database_url,
+        "messaging_sender_id": value.get("GCM_SENDER_ID"),
+        "project_id": project_id,
+        "storage_bucket": value.get("STORAGE_BUCKET"),
     }
     patterns = {
         "api_key": re.compile(r"^[A-Za-z0-9_-]{16,256}$"),
         "app_id": re.compile(r"^[A-Za-z0-9:._-]{8,256}$"),
+        "database_url": re.compile(r"^https://[a-z0-9.-]{4,253}/?$"),
+        "messaging_sender_id": re.compile(r"^[1-9][0-9]{0,18}$"),
         "project_id": re.compile(r"^[a-z][a-z0-9-]{3,62}$"),
+        "storage_bucket": re.compile(r"^[a-z0-9][a-z0-9._-]{2,222}$"),
     }
     if any(not isinstance(result[key], str) or patterns[key].fullmatch(result[key]) is None for key in result):
         raise CandidateError("Firebase iOS configuration is missing a required application coordinate")
@@ -522,15 +532,25 @@ def load_android_firebase_configuration(
     }
     if len(api_keys) != 1:
         raise CandidateError("Firebase Android configuration must contain one unambiguous API key")
+    project_id = project.get("project_id")
+    database_url = project.get("firebase_url")
+    if isinstance(project_id, str) and database_url is None:
+        database_url = f"https://{project_id}-default-rtdb.firebaseio.com"
     result = {
         "api_key": api_keys.pop(),
         "app_id": info.get("mobilesdk_app_id"),
-        "project_id": project.get("project_id"),
+        "database_url": database_url,
+        "messaging_sender_id": project.get("project_number"),
+        "project_id": project_id,
+        "storage_bucket": project.get("storage_bucket"),
     }
     patterns = {
         "api_key": re.compile(r"^[A-Za-z0-9_-]{16,256}$"),
         "app_id": re.compile(r"^[A-Za-z0-9:._-]{8,256}$"),
+        "database_url": re.compile(r"^https://[a-z0-9.-]{4,253}/?$"),
+        "messaging_sender_id": re.compile(r"^[1-9][0-9]{0,18}$"),
         "project_id": re.compile(r"^[a-z][a-z0-9-]{3,62}$"),
+        "storage_bucket": re.compile(r"^[a-z0-9][a-z0-9._-]{2,222}$"),
     }
     if any(not isinstance(result[key], str) or patterns[key].fullmatch(result[key]) is None for key in result):
         raise CandidateError("Firebase Android configuration is missing a required application coordinate")
@@ -680,7 +700,9 @@ def common_inputs() -> tuple[
         "model": required("LATCHWAY_MODEL", SAFE_MODEL),
     }
     if values["feature"] == values["error_mapping_feature"]:
-        raise CandidateError("error-mapping feature must be distinct and guaranteed absent")
+        raise CandidateError(
+            "error-mapping feature must be distinct; protected configuration must leave it ungranted"
+        )
     base_url = required("LATCHWAY_BASE_URL", HTTPS_ORIGIN)
     if base_url != values["gateway_origin"]:
         raise CandidateError("LATCHWAY_BASE_URL must exactly match the signed gateway origin")
@@ -781,7 +803,10 @@ def build_configuration(values: dict[str, str], firebase: dict[str, str], platfo
         "LATCHWAY_NATIVE_SDK_VERSION": values["native_sdk_version"],
         "LATCHWAY_FIREBASE_API_KEY": firebase["api_key"],
         "LATCHWAY_FIREBASE_APP_ID": firebase["app_id"],
+        "LATCHWAY_FIREBASE_DATABASE_URL": firebase["database_url"],
+        "LATCHWAY_FIREBASE_MESSAGING_SENDER_ID": firebase["messaging_sender_id"],
         "LATCHWAY_FIREBASE_PROJECT_ID": firebase["project_id"],
+        "LATCHWAY_FIREBASE_STORAGE_BUCKET": firebase["storage_bucket"],
     }
     if platform == "ios":
         configuration.update(

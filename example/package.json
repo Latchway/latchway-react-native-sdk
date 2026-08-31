@@ -9,13 +9,20 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.52",
+    "@ai-sdk/anthropic": "4.0.46",
     "@babel/runtime": "7.29.7",
+    "@langchain/core": "1.2.9",
+    "@langchain/openai": "1.5.10",
     "@latchway/react-native": "workspace:*",
     "@react-native-firebase/app": "25.1.0",
     "@react-native-firebase/auth": "25.1.0",
+    "ai": "7.0.85",
+    "openai": "7.8.0",
     "react": "19.1.1",
     "react-native": "0.82.0",
-    "react-native-config": "1.7.1"
+    "react-native-config": "1.7.1",
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@babel/core": "7.29.7",

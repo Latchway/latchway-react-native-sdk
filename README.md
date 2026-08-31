@@ -52,10 +52,50 @@ const response = await latchway.fetch("/v1/chat/completions", {
   }),
 });
 
-// OpenAI-compatible clients, Vercel AI providers, and LangChain adapters can
-// receive a normal fetch function that is permanently scoped to one feature.
+// OpenAI-compatible clients, Vercel OpenAI/Anthropic providers, and LangChain
+// adapters receive a normal fetch function permanently scoped to one feature.
 const habitAssistantFetch = latchway.fetchFor("habit_assistant");
 ```
+
+`gatewayURL` exposes only the canonical non-secret gateway origin for framework
+constructors that require a base URL. `fetchFor` keeps the feature fixed,
+preserves the pull-driven response stream, and aliases the canonical
+`X-Latchway-Request-ID` as `X-Request-ID` for provider SDK error correlation.
+It never uses or replaces global `fetch`.
+
+The example contains runnable consumers for the exact locally tested versions
+of the official OpenAI JavaScript SDK (7.8.0), Vercel AI SDK (7.0.85 with
+`@ai-sdk/openai` 4.0.52 and `@ai-sdk/anthropic` 4.0.46), and LangChain
+JavaScript (`@langchain/openai` 1.5.10):
+
+```ts
+import {
+  createFrameworkConsumers,
+  runFrameworkConsumerSmoke,
+} from "./framework-consumers";
+
+const frameworks = createFrameworkConsumers(latchway, "habit_assistant");
+const result = await runFrameworkConsumerSmoke(frameworks, "Plan tomorrow");
+```
+
+These are compatibility consumers, not another LLM abstraction and not a
+blanket support claim for every package feature. They execute Responses, Chat
+Completions, embeddings, Anthropic Messages, and SSE through native networking.
+Local conformance also covers tools, JSON-schema request preservation, errors,
+framework retry dispatches, explicit refresh, restricted opaque routes, and
+cancellation. Automatic pre-dispatch session recovery remains a native/device
+evidence claim. Audio, images, uploads, Realtime, browser-only middleware,
+streaming request bodies, and any framework path that does not honor the
+injected fetch remain unsupported here. The core
+`compatibility/frameworks.yaml` registry is the canonical release-status and
+version source; `react-native-fetch` remains experimental until hosted and
+physical-device gates pass.
+
+The official `@anthropic-ai/sdk` 0.120.0 package is not claimed as a React
+Native consumer. Its credential-chain module contains Node filesystem imports
+that Metro resolves even when a static constructor placeholder is supplied.
+The runnable Anthropic Messages path therefore uses the custom-fetch seam in
+`@ai-sdk/anthropic`; no Node-module shim or provider credential is bundled.
 
 `applicationID` is the generated application resource ID returned by the
 Admin API, not an app name, package/bundle identifier, or user-chosen slug.
@@ -160,15 +200,20 @@ consumer before compiling it.
 
 `pnpm codegen:check` parses the handwritten TurboModule spec and regenerates both platform surfaces in a disposable directory. Node tests use the explicit `@latchway/react-native/testing` bridge; production applications must never install a test bridge.
 
-The example in [`example`](example/README.md) demonstrates Firebase Authentication, environment-supplied deployment configuration, fetch, quota, diagnostics, and lifecycle cleanup without storing or logging credentials.
+`pnpm example:bundle:check` creates production Metro bundles for both iOS and
+Android in a disposable directory. It is part of `pnpm check` so framework
+packages that typecheck but import Node-only modules fail the normal source
+gate.
+
+The example in [`example`](example/README.md) demonstrates Firebase Authentication, environment-supplied deployment configuration, raw fetch, real framework consumers, quota, diagnostics, and lifecycle cleanup without storing or logging credentials.
 
 ## Contract lock
 
 The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
 current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `a62b0f6aa2328604101c1073c56f5ecb3bed3618`, and
+window), core commit `72a52d7b42e6ea159e8222c5dd0346be286fb39a`, and
 bundle SHA-256
-`36aa3c4786e60f2cdbbc3d0cd2f65bffe894a099479517b2e1faa01361c74b00`.
+`ad7afe992181553996eba39e44d4aeb498e8159e2b52671756b5c93ab68eb765`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and

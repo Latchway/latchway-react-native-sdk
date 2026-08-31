@@ -16,11 +16,14 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "paths": {
+      "@latchway/react-native": ["./src/index.ts"]
+    },
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",
     "types": ["node", "react", "react-native", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["Conformance/**/*.ts", "src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

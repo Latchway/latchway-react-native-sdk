@@ -27,8 +27,11 @@ Each platform run uses the real example application and verifies:
 - the React Native New Architecture bridge reached the locked native SDK;
 - a production App Attest session with a Secure Enclave key on iOS, or a Play
   Integrity session with hardware-backed Android Keystore key material;
+- on iOS, an initial App Attest registration followed by session-only local
+  retirement and an App Attest assertion that reuses the same installation;
 - a DPoP-authorized request through the opaque native dispatch boundary and the
-  concrete React Native `LatchwayError` mapping for a canonical 404;
+  concrete React Native `LatchwayError` mapping for authorization-first HTTP
+  403 `component_feature_not_granted`;
 - exact HTTP 401 replay/tamper rejection, redacted refresh-credential rotation
   for one stable installation, HTTP 426 protocol-version-zero rejection, and
   HTTP 403 post-revocation enforcement imported unchanged, field-for-field,
@@ -348,8 +351,15 @@ to `app_verified`; the Android policy pins `device_verified` or
 `strong_device_verified` according to its protected device requirement. A
 provider's normalized trust level is never accepted as evidence for the other
 provider. Both environments also pin `LATCHWAY_ERROR_MAPPING_FEATURE` to a
-guaranteed-absent feature; the same non-secret value is embedded in the signed
-candidate.
+syntactically valid feature that is intentionally absent from the root
+component's grant; the same non-secret value is embedded in the signed
+candidate. It may also be absent from gateway configuration. The canonical
+result remains HTTP 403 `component_feature_not_granted`, proving authorization
+precedes feature lookup and does not disclose whether the feature exists.
+This is the React Native wrapper's canonical mapping proof. The independently
+versioned native iOS and Android reports retain their HTTP 404
+`feature_not_found` mapping contract; the finalizer validates those reports
+before importing only their five native-only security proofs.
 
 ## Collect and validate
 
@@ -369,8 +379,9 @@ build cannot be reused as current App Attest or Play Integrity proof.
 
 The scripts refuse dirty source trees, symbolic-link inputs, mismatched hashes,
 unsafe devices, untrusted builds, stale run IDs, and malformed records. The
-example-native sinks rebuild v2 JSON from an exact seven-test runtime allowlist,
-reject native-only proof fields and IDs, and expose only a fixed protected file;
+example-native sinks rebuild v2 JSON from exact platform runtime allowlists
+(eight tests on iOS and seven on Android), reject native-only proof fields and
+IDs, and expose only a fixed protected file;
 they do not accept an arbitrary output path. Successful
 artifacts contain the profile, sanitized observation, schema-validated evidence,
 JUnit, validation summary, device inventory, linked native report/profile,

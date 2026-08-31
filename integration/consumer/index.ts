@@ -17,6 +17,7 @@ export const client: LatchwayClient = createLatchwayClient({
 
 export const compatibility = {
   contract: CONTRACT_VERSION,
+  gateway: client.gatewayURL,
   protocol: PROTOCOL_VERSION,
   sdk: SDK_VERSION,
 } as const;

@@ -86,13 +86,21 @@ class PhysicalCandidateProducerTests(unittest.TestCase):
                     {
                         "BUNDLE_ID": "dev.latchway",
                         "API_KEY": "A" * 32,
+                        "GCM_SENDER_ID": "123456789",
                         "GOOGLE_APP_ID": "1:123456789:ios:abcdef",
                         "PROJECT_ID": "latchway-test",
+                        "STORAGE_BUCKET": "latchway-test.firebasestorage.app",
                     }
                 )
             )
             value = PRODUCER.load_ios_firebase_configuration(path, "dev.latchway")
             self.assertEqual(value["project_id"], "latchway-test")
+            self.assertEqual(
+                value["database_url"],
+                "https://latchway-test-default-rtdb.firebaseio.com",
+            )
+            self.assertEqual(value["messaging_sender_id"], "123456789")
+            self.assertEqual(value["storage_bucket"], "latchway-test.firebasestorage.app")
             with self.assertRaises(PRODUCER.CandidateError):
                 PRODUCER.load_ios_firebase_configuration(path, "dev.other")
 
@@ -198,6 +206,7 @@ class PhysicalCandidateProducerTests(unittest.TestCase):
                         "project_info": {
                             "project_number": "123456789012",
                             "project_id": "latchway-test",
+                            "storage_bucket": "latchway-test.firebasestorage.app",
                         },
                         "client": [
                             {
@@ -216,6 +225,12 @@ class PhysicalCandidateProducerTests(unittest.TestCase):
                 path, "dev.latchway", "123456789012"
             )
             self.assertEqual(value["app_id"], "1:123456789012:android:abcdef")
+            self.assertEqual(
+                value["database_url"],
+                "https://latchway-test-default-rtdb.firebaseio.com",
+            )
+            self.assertEqual(value["messaging_sender_id"], "123456789012")
+            self.assertEqual(value["storage_bucket"], "latchway-test.firebasestorage.app")
             with self.assertRaises(PRODUCER.CandidateError):
                 PRODUCER.load_android_firebase_configuration(
                     path, "dev.latchway", "999999999999"

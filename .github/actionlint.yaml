@@ -3,3 +3,4 @@ self-hosted-runner:
     - latchway-physical-ios
     - latchway-physical-android
     - latchway-ephemeral-jit
+    - latchway-release-builder

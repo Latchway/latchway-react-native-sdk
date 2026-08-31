@@ -4,6 +4,7 @@ import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import Darwin
 import CryptoKit
+import Latchway
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -11,12 +12,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
   var reactNativeDelegate: ReactNativeDelegate?
   var reactNativeFactory: RCTReactNativeFactory?
+  private var pendingLaunchOptions: [UIApplication.LaunchOptionsKey: Any]?
 
   func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     PhysicalIdentityGrantHandoff.captureAndClearEnvironment()
+    pendingLaunchOptions = launchOptions
 
     let delegate = ReactNativeDelegate()
     let factory = RCTReactNativeFactory(delegate: delegate)
@@ -25,15 +28,36 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
 
-    window = UIWindow(frame: UIScreen.main.bounds)
+    return true
+  }
 
+  func startReactNative(in window: UIWindow) {
+    guard let factory = reactNativeFactory else { return }
+    self.window = window
     factory.startReactNative(
       withModuleName: "LatchwayExample",
       in: window,
-      launchOptions: launchOptions
+      launchOptions: pendingLaunchOptions
     )
+    pendingLaunchOptions = nil
+  }
+}
 
-    return true
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+  var window: UIWindow?
+
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    guard let windowScene = scene as? UIWindowScene,
+          let appDelegate = UIApplication.shared.delegate as? AppDelegate
+    else { return }
+
+    let window = UIWindow(windowScene: windowScene)
+    self.window = window
+    appDelegate.startReactNative(in: window)
   }
 }
 
@@ -93,6 +117,58 @@ final class LatchwayEvidence: NSObject {
       resolve(value)
     } else {
       reject("device_evidence_invalid", "Protected JavaScript bundle digest is unavailable.", nil)
+    }
+  }
+
+  /// Removes only the persisted React Native iOS session so a replacement
+  /// client must establish again with the existing installation key and App
+  /// Attest state. This is an example-only, one-use physical-device diagnostic;
+  /// it never resets the installation key or App Attest accepted-key marker.
+  @objc(retireSessionForAssertionReuse:environment:rootKeychainAccessGroup:legacySharedKeychainAccessGroups:resolve:reject:)
+  func retireSessionForAssertionReuse(
+    _ applicationID: String,
+    environment: String,
+    rootKeychainAccessGroup: String,
+    legacySharedKeychainAccessGroups: [String],
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    let promise = EvidencePromise(resolve: resolve, reject: reject)
+    Task {
+      do {
+        guard DeviceEvidenceFacts.physical,
+              !DeviceEvidenceFacts.simulator,
+              !DeviceEvidenceFacts.debugBuild,
+              !DeviceEvidenceFacts.testing,
+              !DeviceEvidenceFacts.debuggerAttached,
+              Self.safe(applicationID, pattern: "^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$"),
+              Self.safe(environment, pattern: "^[a-z][a-z0-9_-]{0,62}$"),
+              Self.safe(rootKeychainAccessGroup, pattern: "^[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$"),
+              legacySharedKeychainAccessGroups.count <= 16,
+              Set(legacySharedKeychainAccessGroups).count == legacySharedKeychainAccessGroups.count,
+              !legacySharedKeychainAccessGroups.contains(rootKeychainAccessGroup),
+              legacySharedKeychainAccessGroups.allSatisfy({
+                Self.safe($0, pattern: "^[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$")
+              }),
+              PhysicalAssertionReuseGate.consume()
+        else { throw EvidenceFailure.invalid }
+
+        let storage = LatchwayKeychainSessionStorage(
+          applicationID: applicationID,
+          environment: environment,
+          rootKeychainAccessGroup: rootKeychainAccessGroup,
+          legacySharedKeychainAccessGroups: legacySharedKeychainAccessGroups,
+          clientRuntime: .reactNativeIOS
+        )
+        try await storage.clear()
+        promise.resolve(nil)
+      } catch {
+        promise.reject(
+          "device_assertion_verification_invalid",
+          "The physical App Attest assertion verification transition failed.",
+          nil
+        )
+      }
     }
   }
 
@@ -235,7 +311,8 @@ final class LatchwayEvidence: NSObject {
     guard (1 ... 32).contains(tests.count) else { throw EvidenceFailure.invalid }
     let expected: Set<String> = [
       "react_native_bridge", "app_attest_session", "secure_enclave_key",
-      "dpop_authorized_request", "streamed_request", "quota", "canonical_error_mapping",
+      "app_attest_assertion", "dpop_authorized_request", "streamed_request", "quota",
+      "canonical_error_mapping",
     ]
     var seen = Set<String>()
     let output = try tests.map { item in
@@ -397,6 +474,29 @@ private enum DeviceEvidenceFacts {
 }
 
 private enum EvidenceFailure: Error { case invalid }
+
+private final class EvidencePromise: @unchecked Sendable {
+  let resolve: RCTPromiseResolveBlock
+  let reject: RCTPromiseRejectBlock
+
+  init(resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
+    self.resolve = resolve
+    self.reject = reject
+  }
+}
+
+private enum PhysicalAssertionReuseGate {
+  private static let lock = NSLock()
+  private static var consumed = false
+
+  static func consume() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !consumed else { return false }
+    consumed = true
+    return true
+  }
+}
 
 /// A one-slot, process-memory-only handoff for the physical example. The
 /// collector supplies a Firebase custom token through devicectl's child

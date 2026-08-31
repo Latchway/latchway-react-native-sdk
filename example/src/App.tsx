@@ -20,6 +20,10 @@ import {
   type LatchwayClient,
 } from "@latchway/react-native";
 import { freshClientAfterRevocation } from "./evidence-client";
+import {
+  createFrameworkConsumers,
+  runFrameworkConsumerSmoke,
+} from "./framework-consumers";
 
 const deployment = {
   baseURL: required("LATCHWAY_BASE_URL"),
@@ -124,12 +128,28 @@ export default function App(): React.JSX.Element {
     }
   };
 
+  const runFrameworks = async (): Promise<void> => {
+    setBusy(true);
+    setOutput("");
+    try {
+      const consumers = createFrameworkConsumers(client, deployment.feature);
+      const result = await runFrameworkConsumerSmoke(consumers, input);
+      setOutput(JSON.stringify(result, null, 2));
+      setStatus("OpenAI, Vercel AI, LangChain, and Anthropic completed through native fetch");
+    } catch (error) {
+      setStatus(safeError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runPhysicalEvidence = async (): Promise<void> => {
     setBusy(true);
     setOutput("");
     const startedAt = new Date().toISOString();
     const tests: EvidenceTest[] = [];
     let diagnostics: Awaited<ReturnType<typeof client.diagnostics>> | undefined;
+    let replacementFailureDiagnostics: Awaited<ReturnType<typeof client.diagnostics>> | undefined;
     let measuredClient: LatchwayClient | undefined;
     let physicalCleanupComplete = false;
     try {
@@ -148,7 +168,9 @@ export default function App(): React.JSX.Element {
           throw new Error("Protected physical evidence requires a fresh Firebase identity state.");
         }
       }
-      measuredClient = await freshClientAfterRevocation(client, makeClient);
+      measuredClient = await freshClientAfterRevocation(client, makeClient, async (replacement) => {
+        replacementFailureDiagnostics = await replacement.diagnostics();
+      });
       setClient(measuredClient);
 
       const firstResponse = await measuredClient.fetch("/v1/chat/completions", {
@@ -164,12 +186,57 @@ export default function App(): React.JSX.Element {
       const first = await inspectBounded(firstResponse, 65_536);
       tests.push(httpTest("dpop_authorized_request", first, first.status >= 200 && first.status < 300));
 
+      if (Platform.OS === "ios") {
+        const registrationDiagnostics = await measuredClient.diagnostics();
+        const registeredInstallationID = registrationDiagnostics.installation.id;
+        const registrationReady = registeredInstallationID !== undefined &&
+          registrationDiagnostics.attestation.provider === "app_attest" &&
+          registrationDiagnostics.attestation.lastOperation === "attestation" &&
+          registrationDiagnostics.session.state === "active";
+        if (!registrationReady || deployment.rootKeychainAccessGroup === undefined) {
+          tests.push(booleanTest("app_attest_assertion", false));
+          throw new Error("The physical App Attest registration was not ready for assertion reuse.");
+        }
+
+        // Release the native context, retire only its persisted session, then
+        // re-establish with the same Secure Enclave installation key and the
+        // accepted App Attest key marker. The example-native method is a
+        // physical Release-only, one-use diagnostic and cannot reset either
+        // key. No identifier or attestation material is written to evidence.
+        await measuredClient.dispose();
+        await sink.retireSessionForAssertionReuse(
+          deployment.applicationID,
+          deployment.environment,
+          deployment.rootKeychainAccessGroup,
+          deployment.legacySharedKeychainAccessGroups,
+        );
+        measuredClient = makeClient();
+        await measuredClient.ready;
+        await measuredClient.refresh();
+        setClient(measuredClient);
+
+        const assertionDiagnostics = await measuredClient.diagnostics();
+        const assertionPassed = assertionDiagnostics.attestation.provider === "app_attest" &&
+          assertionDiagnostics.attestation.lastOperation === "assertion" &&
+          assertionDiagnostics.attestation.trustLevel === "app_verified" &&
+          assertionDiagnostics.session.state === "active" &&
+          assertionDiagnostics.installation.id === registeredInstallationID &&
+          assertionDiagnostics.keyStorage === registrationDiagnostics.keyStorage;
+        tests.push(booleanTest("app_attest_assertion", assertionPassed));
+        if (!assertionPassed) {
+          throw new Error("The physical App Attest assertion did not reuse the registered installation.");
+        }
+      }
+
       // The public bridge deliberately has no authorization-envelope escape
       // hatch. Replay, proof mutation, credential rotation, protocol mutation,
       // and post-revocation enforcement are imported by the protected
       // finalizer from the exact hash-pinned native evidence report. JavaScript
       // proves only behavior that crosses the opaque production bridge.
 
+      // This protected feature is intentionally outside the root component's
+      // grant. Authorization must reject it before feature lookup, including
+      // when the name is absent from gateway configuration.
       try {
         await measuredClient.quota(deployment.errorMappingFeature);
         tests.push({ id: "canonical_error_mapping", status: "failed", duration_ms: 0 });
@@ -178,7 +245,7 @@ export default function App(): React.JSX.Element {
         const mappedRequestID = mapped ? safeRequestID(error.requestID ?? null) : undefined;
         tests.push({
           id: "canonical_error_mapping",
-          status: mapped && error.code === "feature_not_found" && error.status === 404 &&
+          status: mapped && error.code === "component_feature_not_granted" && error.status === 403 &&
             mappedRequestID !== undefined ? "passed" : "failed",
           duration_ms: 0,
           ...(mapped && typeof error.status === "number" ? { http_status: error.status } : {}),
@@ -279,6 +346,17 @@ export default function App(): React.JSX.Element {
         ? "Device suite completed; protected offline validation is still required."
         : "FAIL: the redacted physical-device record contains failed checks.");
     } catch (error) {
+      try {
+        // After the fresh-install transition, the measured replacement owns
+        // the attestation attempt and its safe failure phase. The original
+        // client is already revoked and disposed at that point.
+        diagnostics = replacementFailureDiagnostics ?? await (measuredClient ?? client).diagnostics();
+        setOutput(JSON.stringify(physicalDiagnosticsSummary(diagnostics), null, 2));
+      } catch {
+        // A diagnostic read is best-effort and never replaces the original
+        // failure. The allowlisted summary below omits installation, request,
+        // provider-evidence, and identity material.
+      }
       // If the native bridge was reached, persist a bounded failure document so
       // the protected runner emits a machine-readable failed verdict. Debug,
       // simulator, or malformed-pin builds are rejected by the native sink.
@@ -354,6 +432,9 @@ export default function App(): React.JSX.Element {
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void inspect(); }} style={styles.secondary}>
             <Text style={styles.secondaryText}>Quota & diagnostics</Text>
           </Pressable>
+          <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void runFrameworks(); }} style={styles.secondary}>
+            <Text style={styles.secondaryText}>Run framework consumers</Text>
+          </Pressable>
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void runPhysicalEvidence(); }} style={styles.secondary}>
             <Text style={styles.secondaryText}>Run physical release evidence</Text>
           </Pressable>
@@ -379,6 +460,12 @@ interface EvidenceSink {
     identityProvider: "firebase",
   ): Promise<string>;
   javascriptBundleSHA256(): Promise<string>;
+  retireSessionForAssertionReuse(
+    applicationID: string,
+    environment: string,
+    rootKeychainAccessGroup: string,
+    legacySharedKeychainAccessGroups: string[],
+  ): Promise<void>;
   runID(): Promise<string>;
   write(encoded: string): Promise<void>;
 }
@@ -404,6 +491,7 @@ function evidenceSink(): EvidenceSink {
   const value = NativeModules.LatchwayEvidence as EvidenceSink | undefined;
   if (value === undefined || typeof value.consumeIdentityGrant !== "function" ||
       typeof value.javascriptBundleSHA256 !== "function" ||
+      (Platform.OS === "ios" && typeof value.retireSessionForAssertionReuse !== "function") ||
       typeof value.runID !== "function" || typeof value.write !== "function") {
     throw new Error("The physical-evidence native sink is unavailable.");
   }
@@ -467,7 +555,10 @@ async function initializePhysicalFirebase(): Promise<void> {
   await firebaseApp.initializeApp({
     apiKey: configured("LATCHWAY_FIREBASE_API_KEY"),
     appId: configured("LATCHWAY_FIREBASE_APP_ID"),
+    databaseURL: configured("LATCHWAY_FIREBASE_DATABASE_URL"),
+    messagingSenderId: configured("LATCHWAY_FIREBASE_MESSAGING_SENDER_ID"),
     projectId: configured("LATCHWAY_FIREBASE_PROJECT_ID"),
+    storageBucket: configured("LATCHWAY_FIREBASE_STORAGE_BUCKET"),
   });
 }
 
@@ -531,6 +622,7 @@ function rawEvidenceTests(): string[] {
   return [
     "react_native_bridge",
     Platform.OS === "ios" ? "app_attest_session" : "play_integrity_session",
+    ...(Platform.OS === "ios" ? ["app_attest_assertion"] : []),
     Platform.OS === "ios" ? "secure_enclave_key" : "hardware_backed_key",
     "dpop_authorized_request",
     "canonical_error_mapping",
@@ -563,6 +655,23 @@ function redactionDeclaration(): Record<string, false> {
     attestation_evidence_recorded: false,
     private_key_recorded: false,
     provider_credential_recorded: false,
+  };
+}
+
+function physicalDiagnosticsSummary(
+  diagnostics: Awaited<ReturnType<LatchwayClient["diagnostics"]>>,
+): Record<string, unknown> {
+  return {
+    platform: diagnostics.platform,
+    key_storage: diagnostics.keyStorage,
+    attestation: {
+      support: diagnostics.attestation.support,
+      provider: diagnostics.attestation.provider ?? "unverified",
+      trust_level: diagnostics.attestation.trustLevel ?? "none",
+      last_operation: diagnostics.attestation.lastOperation ?? "none",
+    },
+    session: { state: diagnostics.session.state },
+    last_error_code: diagnostics.lastErrorCode ?? "none",
   };
 }
 

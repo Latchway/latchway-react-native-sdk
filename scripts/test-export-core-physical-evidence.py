@@ -149,7 +149,7 @@ def tests_for(platform: str) -> list[dict]:
     result = []
     for name in sorted(validator.PLATFORM_POLICY[platform]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
-        fixtures.concrete_test_fields(entry, name, "kotlin_latchway_exception")
+        fixtures.concrete_test_fields(entry, name, "kotlin_latchway_exception", platform)
         result.append(entry)
     return result
 

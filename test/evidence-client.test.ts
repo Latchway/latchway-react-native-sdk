@@ -47,6 +47,30 @@ describe("physical evidence client rotation", () => {
     expect(disposed).toBe(true);
   });
 
+  it("allows bounded diagnostics before disposing a failed replacement", async () => {
+    const events: string[] = [];
+    const current = {
+      ready: Promise.resolve(),
+      async revokeCurrentInstallation(): Promise<void> {},
+      async dispose(): Promise<void> {},
+    };
+    const replacement = {
+      ready: Promise.reject(new Error("attestation failed")),
+      async revokeCurrentInstallation(): Promise<void> {},
+      async dispose(): Promise<void> { events.push("dispose"); },
+    };
+
+    await expect(freshClientAfterRevocation(
+      current,
+      () => replacement,
+      async (failed) => {
+        expect(failed).toBe(replacement);
+        events.push("diagnostics");
+      },
+    )).rejects.toThrow("attestation failed");
+    expect(events).toEqual(["diagnostics", "dispose"]);
+  });
+
   it("does not create a replacement when revocation fails", async () => {
     let created = false;
     const current = {

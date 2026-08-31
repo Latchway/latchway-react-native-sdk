@@ -26,15 +26,16 @@ def now(offset_seconds: int = 0) -> str:
     return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def concrete_test_fields(entry: dict, name: str, mapper: str) -> None:
+def concrete_test_fields(entry: dict, name: str, mapper: str, platform: str) -> None:
     if name == "dpop_replay_rejected":
         entry.update(http_status=401, error_code="dpop_replayed", request_id="request-replay-1234")
     elif name == "tampered_dpop_rejected":
         entry.update(http_status=401, error_code="dpop_invalid", request_id="request-tamper-1234")
     elif name == "canonical_error_mapping":
+        react_native = platform.startswith("react_native_")
         entry.update(
-            http_status=404,
-            error_code="feature_not_found",
+            http_status=403 if react_native else 404,
+            error_code="component_feature_not_granted" if react_native else "feature_not_found",
             request_id="request-mapping-1234",
             mapped_error_type=mapper,
         )
@@ -112,7 +113,7 @@ def observation() -> dict:
     tests = []
     for name in sorted(device_evidence.PLATFORM_POLICY["ios_app_attest"]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
-        concrete_test_fields(entry, name, "swift_latchway_problem")
+        concrete_test_fields(entry, name, "swift_latchway_problem", "ios_app_attest")
         tests.append(entry)
     return {
         "schema_version": device_evidence.OBSERVATION_VERSION,
@@ -238,7 +239,7 @@ def react_native_case(platform: str) -> tuple[dict, dict]:
     tests = []
     for name in sorted(device_evidence.PLATFORM_POLICY[platform]["tests"]):
         entry = {"id": name, "status": "passed", "duration_ms": 1}
-        concrete_test_fields(entry, name, "react_native_latchway_error")
+        concrete_test_fields(entry, name, "react_native_latchway_error", platform)
         tests.append(entry)
     application = {
         "identifier": expected["application_identifier"],
@@ -389,6 +390,23 @@ class DeviceEvidenceTest(unittest.TestCase):
         result = device_evidence.build_evidence(current, profile(), self.schema)
         self.assertFalse(result["release_eligible"])
 
+    def test_native_mapping_retains_its_versioned_feature_lookup_contract(self) -> None:
+        current = observation()
+        mapping = next(
+            item for item in current["tests"]
+            if item["id"] == "canonical_error_mapping"
+        )
+        self.assertEqual(mapping["http_status"], 404)
+        self.assertEqual(mapping["error_code"], "feature_not_found")
+
+        mapping.update(http_status=403, error_code="component_feature_not_granted")
+        result = device_evidence.build_evidence(current, profile(), self.schema)
+        self.assertFalse(result["release_eligible"])
+        self.assertIn(
+            "canonical_error_mapping did not record canonical HTTP 404 feature_not_found",
+            device_evidence.verify(result, profile(), self.schema),
+        )
+
     def test_refresh_error_mapping_revocation_and_protocol_require_concrete_results(self) -> None:
         cases = (
             ("canonical_error_mapping", "mapped_error_type", "kotlin_latchway_exception"),
@@ -465,6 +483,33 @@ class DeviceEvidenceTest(unittest.TestCase):
             "application files-manifest hash does not match protected profile",
             device_evidence.verify(result, current_profile, self.schema),
         )
+
+    def test_react_native_mapping_requires_authorization_before_feature_lookup(self) -> None:
+        for platform in (
+            "react_native_ios_app_attest",
+            "react_native_android_play_integrity",
+        ):
+            with self.subTest(platform=platform):
+                current_profile, current_observation = react_native_case(platform)
+                mapping = next(
+                    item for item in current_observation["tests"]
+                    if item["id"] == "canonical_error_mapping"
+                )
+                self.assertEqual(mapping["http_status"], 403)
+                self.assertEqual(mapping["error_code"], "component_feature_not_granted")
+
+                mapping.update(http_status=404, error_code="feature_not_found")
+                result = device_evidence.build_evidence(
+                    current_observation,
+                    current_profile,
+                    self.schema,
+                )
+                self.assertFalse(result["release_eligible"])
+                self.assertIn(
+                    "canonical_error_mapping did not record canonical HTTP 403 "
+                    "component_feature_not_granted",
+                    device_evidence.verify(result, current_profile, self.schema),
+                )
 
     def test_react_native_android_release_evidence_passes(self) -> None:
         current_profile, current_observation = react_native_case("react_native_android_play_integrity")

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "registry": {
+    "id": "react-native-fetch",
+    "integration": "native_backed_fetch",
+    "support": "experimental",
+    "react_native": {
+      "minimum": "0.82.0",
+      "latest": "0.82.0"
+    }
+  },
+  "consumer_versions": {
+    "openai-js": "7.8.0",
+    "vercel-ai-sdk": "7.0.85",
+    "langchain-js": "1.5.10"
+  },
+  "rn_only": {
+    "consumer_versions": {
+      "vercel-ai-anthropic": "4.0.46"
+    },
+    "case_ids": [
+      "RN-FW-REFRESH-001",
+      "RN-FW-ANTHROPIC-001",
+      "RN-FW-OPAQUE-001",
+      "RN-FW-CONSUMER-001"
+    ]
+  },
+  "capabilities": {
+    "anthropic_messages": true,
+    "responses": true,
+    "chat_completions": true,
+    "streaming": true,
+    "tools": "conditional",
+    "structured_output": "conditional",
+    "embeddings": true,
+    "opaque_routes": true,
+    "cancellation": true
+  },
+  "limitations": [
+    "@anthropic-ai/sdk 0.120.0 is not a React Native consumer: Metro resolves its credential-chain node:fs imports even with a static placeholder key. Anthropic Messages uses @ai-sdk/anthropic instead."
+  ],
+  "case_ids": [
+    "FW-AUTH-001",
+    "FW-REQ-001",
+    "FW-REQ-002",
+    "FW-REQ-003",
+    "FW-REQ-004",
+    "FW-REQ-005",
+    "FW-REQ-006",
+    "FW-BEH-001",
+    "FW-BEH-002",
+    "FW-BEH-003",
+    "FW-BEH-004",
+    "FW-BEH-005",
+    "FW-SEC-001",
+    "FW-SEC-002",
+    "FW-SEC-003",
+    "FW-SEC-004"
+  ]
+}

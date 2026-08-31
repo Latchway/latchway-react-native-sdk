@@ -11,6 +11,13 @@ RCT_EXTERN_METHOD(consumeIdentityGrant:(NSString *)applicationID
 RCT_EXTERN_METHOD(javascriptBundleSHA256:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(retireSessionForAssertionReuse:(NSString *)applicationID
+                  environment:(NSString *)environment
+                  rootKeychainAccessGroup:(NSString *)rootKeychainAccessGroup
+                  legacySharedKeychainAccessGroups:(NSArray<NSString *> *)legacySharedKeychainAccessGroups
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(write:(NSString *)encoded
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)

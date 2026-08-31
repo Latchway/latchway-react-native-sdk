@@ -19,6 +19,9 @@ class PhysicalExampleHostTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = (ROOT / "example/src/App.tsx").read_text(encoding="utf-8")
         cls.ios = (ROOT / "example/ios/LatchwayExample/AppDelegate.swift").read_text(encoding="utf-8")
+        cls.ios_evidence_export = (
+            ROOT / "example/ios/LatchwayExample/LatchwayEvidence.m"
+        ).read_text(encoding="utf-8")
         cls.android = (
             ROOT
             / "example/android/app/src/main/java/com/latchwayexample/LatchwayEvidenceModule.kt"
@@ -42,6 +45,9 @@ class PhysicalExampleHostTests(unittest.TestCase):
         cls.root_entitlements = plistlib.loads(
             (ROOT / "example/ios/LatchwayExample/LatchwayExample.entitlements").read_bytes()
         )
+        cls.root_info = plistlib.loads(
+            (ROOT / "example/ios/LatchwayExample/Info.plist").read_bytes()
+        )
         cls.app_intents_entitlements = plistlib.loads(
             (ROOT / "example/ios/AppIntents/AppIntents.entitlements").read_bytes()
         )
@@ -62,14 +68,14 @@ class PhysicalExampleHostTests(unittest.TestCase):
         run = self.app.split("const runPhysicalEvidence", 1)[1].split("useEffect(() => {", 1)[0]
         firebase_ready = run.index("await ensureFirebaseApp();")
         fresh_identity = run.index("firebaseAuth().currentUser !== null")
-        rotate = run.index("measuredClient = await freshClientAfterRevocation(client, makeClient);")
+        rotate = run.index("measuredClient = await freshClientAfterRevocation(client, makeClient,")
         install = run.index("setClient(measuredClient);")
         first_fetch = run.index('measuredClient.fetch("/v1/chat/completions"')
         self.assertLess(firebase_ready, fresh_identity)
         self.assertLess(fresh_identity, rotate)
         self.assertLess(rotate, install)
         self.assertLess(install, first_fetch)
-        self.assertEqual(1, run.count("measuredClient = await freshClientAfterRevocation(client, makeClient);"))
+        self.assertEqual(1, run.count("measuredClient = await freshClientAfterRevocation(client, makeClient,"))
         self.assertNotIn("await client.ready;", run)
 
         cleanup = run.index("await measuredClient.revokeCurrentInstallation();")
@@ -81,6 +87,69 @@ class PhysicalExampleHostTests(unittest.TestCase):
         self.assertLess(bridge_pass, success_write)
         self.assertIn("physicalConformanceEnabled() && !physicalCleanupComplete", run)
         self.assertIn("failure record is already terminal", run)
+
+    def test_physical_failure_diagnostics_are_allowlisted_and_identity_free(self) -> None:
+        self.assertIn("replacementFailureDiagnostics ?? await (measuredClient ?? client).diagnostics()", self.app)
+        self.assertIn("replacementFailureDiagnostics = await replacement.diagnostics()", self.app)
+        summary = self.app.split("function physicalDiagnosticsSummary", 1)[1].split(
+            "async function inspectBounded", 1
+        )[0]
+        for marker in (
+            "platform: diagnostics.platform",
+            "key_storage: diagnostics.keyStorage",
+            "support: diagnostics.attestation.support",
+            "last_operation: diagnostics.attestation.lastOperation",
+            "session: { state: diagnostics.session.state }",
+            "last_error_code: diagnostics.lastErrorCode",
+        ):
+            self.assertIn(marker, summary)
+        for forbidden in (
+            "installation",
+            "requestID",
+            "expiresAt",
+            "identity",
+            "evidence",
+            "keyID",
+        ):
+            self.assertNotIn(forbidden, summary)
+
+    def test_physical_mapping_proves_authorization_before_feature_lookup(self) -> None:
+        run = self.app.split("const runPhysicalEvidence", 1)[1].split("useEffect(() => {", 1)[0]
+        self.assertIn('error.code === "component_feature_not_granted"', run)
+        self.assertIn("error.status === 403", run)
+        self.assertNotIn('error.code === "feature_not_found"', run)
+        self.assertNotIn("error.status === 404", run)
+
+    def test_ios_physical_run_proves_assertion_reuse_without_exporting_identifiers(self) -> None:
+        run = self.app.split("const runPhysicalEvidence", 1)[1].split("useEffect(() => {", 1)[0]
+        registration = run.index("const registrationDiagnostics = await measuredClient.diagnostics();")
+        registered_installation = run.index(
+            "const registeredInstallationID = registrationDiagnostics.installation.id;"
+        )
+        dispose = run.index("await measuredClient.dispose();", registered_installation)
+        retire = run.index("await sink.retireSessionForAssertionReuse(", dispose)
+        recreate = run.index("measuredClient = makeClient();", retire)
+        refresh = run.index("await measuredClient.refresh();", recreate)
+        assertion = run.index("const assertionDiagnostics = await measuredClient.diagnostics();", refresh)
+        same_installation = run.index(
+            "assertionDiagnostics.installation.id === registeredInstallationID", assertion
+        )
+        assertion_operation = run.index(
+            'assertionDiagnostics.attestation.lastOperation === "assertion"', assertion
+        )
+        recorded = run.index('tests.push(booleanTest("app_attest_assertion", assertionPassed));')
+        self.assertLess(registration, registered_installation)
+        self.assertLess(registered_installation, dispose)
+        self.assertLess(dispose, retire)
+        self.assertLess(retire, recreate)
+        self.assertLess(recreate, refresh)
+        self.assertLess(refresh, assertion)
+        self.assertLess(assertion, same_installation)
+        self.assertLess(assertion, assertion_operation)
+        self.assertLess(assertion_operation, recorded)
+        self.assertLess(same_installation, recorded)
+        self.assertIn('...(Platform.OS === "ios" ? ["app_attest_assertion"] : [])', self.app)
+        self.assertNotIn("registeredInstallationID,", run.split("const record =", 1)[1])
 
     def test_provider_trust_levels_match_core_normalization(self) -> None:
         self.assertIn(
@@ -120,6 +189,38 @@ class PhysicalExampleHostTests(unittest.TestCase):
         ):
             self.assertIn(marker, self.ios_runner)
         self.assertNotIn("--environment", self.ios_runner)
+
+    def test_ios_assertion_reuse_diagnostic_retires_only_the_session(self) -> None:
+        diagnostic = self.ios.split("func retireSessionForAssertionReuse", 1)[1].split(
+            "@objc(write:resolve:reject:)", 1
+        )[0]
+        for marker in (
+            "DeviceEvidenceFacts.physical",
+            "!DeviceEvidenceFacts.simulator",
+            "!DeviceEvidenceFacts.debugBuild",
+            "!DeviceEvidenceFacts.testing",
+            "!DeviceEvidenceFacts.debuggerAttached",
+            "PhysicalAssertionReuseGate.consume()",
+            "LatchwayKeychainSessionStorage(",
+            "clientRuntime: .reactNativeIOS",
+            "try await storage.clear()",
+        ):
+            self.assertIn(marker, diagnostic)
+        for forbidden in (
+            "LatchwayAppAttestProvider",
+            "attestationProvider.reset",
+            "installationKey.reset",
+            "revokeCurrentInstallation",
+            "SecItemDelete",
+        ):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn("private static var consumed = false", self.ios)
+        self.assertIn("guard !consumed else { return false }", self.ios)
+        self.assertIn("consumed = true", self.ios)
+        self.assertIn(
+            "RCT_EXTERN_METHOD(retireSessionForAssertionReuse:",
+            self.ios_evidence_export,
+        )
 
     def test_android_handoff_uses_shell_protected_stdin_not_argv_or_disk(self) -> None:
         for marker in (
@@ -240,6 +341,22 @@ class PhysicalExampleHostTests(unittest.TestCase):
     def test_ios_scheme_has_no_nonexistent_test_bundle(self) -> None:
         self.assertNotIn("LatchwayExampleTests", self.scheme)
         self.assertNotIn(".xctest", self.scheme)
+
+    def test_ios_host_adopts_a_single_window_scene_lifecycle(self) -> None:
+        scene_manifest = self.root_info["UIApplicationSceneManifest"]
+        self.assertFalse(scene_manifest["UIApplicationSupportsMultipleScenes"])
+        configuration = scene_manifest["UISceneConfigurations"][
+            "UIWindowSceneSessionRoleApplication"
+        ]
+        self.assertEqual(1, len(configuration))
+        self.assertEqual(
+            "$(PRODUCT_MODULE_NAME).SceneDelegate",
+            configuration[0]["UISceneDelegateClassName"],
+        )
+        self.assertIn("final class SceneDelegate: UIResponder, UIWindowSceneDelegate", self.ios)
+        self.assertIn("let window = UIWindow(windowScene: windowScene)", self.ios)
+        self.assertIn("appDelegate.startReactNative(in: window)", self.ios)
+        self.assertNotIn("UIWindow(frame: UIScreen.main.bounds)", self.ios)
 
     def test_ios_extensions_never_construct_an_app_attest_provider(self) -> None:
         component_context = self.ios_bridge.split("private final class NativeComponentContext", 1)[1]

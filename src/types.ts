@@ -184,6 +184,8 @@ export interface LatchwayComponentClient {
 }
 
 export interface LatchwayClient {
+  /** Canonical gateway origin for framework clients that require an explicit base URL. */
+  readonly gatewayURL: string;
   /** Resolves after the native runtime proves contract compatibility. */
   readonly ready: Promise<void>;
   fetch(input: RequestInfo | URL, init?: LatchwayFetchInit): Promise<Response>;

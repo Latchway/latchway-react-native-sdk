@@ -9,6 +9,23 @@ Versioning once package publication begins.
 
 ### Changed
 
+- Physical React Native evidence now requires the authorization-first HTTP 403
+  `component_feature_not_granted` mapping for an ungranted feature instead of
+  the feature-enumerating HTTP 404 expectation.
+- Added Metro-runnable OpenAI, Vercel AI OpenAI/Anthropic, and LangChain
+  example consumers plus
+  a 16-case shared-ID React Native framework conformance matrix covering
+  Responses, Chat, embeddings, streaming, tools, structured output, errors,
+  retry dispatches, cancellation, and credential isolation, plus a separate
+  RN-only explicit-refresh, Anthropic Messages, and opaque-route cases.
+- Exposed the canonical non-secret `gatewayURL` and made `fetchFor` preserve
+  Latchway request correlation through the conventional `X-Request-ID` alias
+  without buffering response streams.
+- Removed the obsolete React Native CLI `podspecPath` override; React Native
+  0.82 now discovers the root podspec without an invalid-config warning.
+- Added iOS and Android production Metro bundles to the normal `pnpm check`
+  gate so Node-only framework imports fail before release.
+
 - Replaced JavaScript-owned authorization envelopes and network dispatch with
   native URLSession/OkHttp dispatch, opaque response handles, pull-streamed
   response chunks, cancellation, exact origin/path enforcement, and strict
