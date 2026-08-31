@@ -70,7 +70,7 @@ class PhysicalExampleHostTests(unittest.TestCase):
         fresh_identity = run.index("firebaseAuth().currentUser !== null")
         rotate = run.index("measuredClient = await freshClientAfterRevocation(client, makeClient,")
         install = run.index("setClient(measuredClient);")
-        first_fetch = run.index('measuredClient.fetch("/v1/chat/completions"')
+        first_fetch = run.index('measuredClient.fetch("/v1/responses"')
         self.assertLess(firebase_ready, fresh_identity)
         self.assertLess(fresh_identity, rotate)
         self.assertLess(rotate, install)

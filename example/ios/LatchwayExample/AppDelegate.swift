@@ -4,6 +4,7 @@ import React_RCTAppDelegate
 import ReactAppDependencyProvider
 import Darwin
 import CryptoKit
+import FirebaseCore
 import Latchway
 
 @main
@@ -19,6 +20,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     PhysicalIdentityGrantHandoff.captureAndClearEnvironment()
+#if DEBUG
+    // The opt-in physical Debug verifier embeds an externally validated
+    // GoogleService-Info.plist. Configure the default native app before React
+    // mounts so @react-native-firebase/auth never races lazy initialization.
+    // Ordinary Debug builds without that resource continue to use their host's
+    // own Firebase bootstrap; Release evidence initializes from protected,
+    // hash-pinned values in JavaScript.
+    if FirebaseApp.app() == nil,
+       Bundle.main.url(forResource: "GoogleService-Info", withExtension: "plist") != nil {
+      FirebaseApp.configure()
+    }
+#endif
     pendingLaunchOptions = launchOptions
 
     let delegate = ReactNativeDelegate()
@@ -68,7 +81,13 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 
   override func bundleURL() -> URL? {
 #if DEBUG
-    RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
+    // The physical-device development verifier force-bundles JavaScript into
+    // its Debug application so it can run without a Metro connection. React
+    // Native's Debug tooling can still cause iOS to display a Local Network
+    // sheet, but the verification never depends on granting it. Ordinary Debug
+    // builds do not contain main.jsbundle and continue to use Metro.
+    Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+      ?? RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
 #else
     Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif

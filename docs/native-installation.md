@@ -19,6 +19,34 @@ versions stop shipping through CocoaPods after October 2026; migrate the
 example to the compatible React Native Firebase SPM path only after its pinned
 RN 0.82 native host build is green.
 
+For a source-development run on a physical iPhone, the example offers a
+separate opt-in Debug bootstrap. `scripts/copy-development-firebase-ios-config.sh`
+validates an external, bundle-matched Firebase plist and copies it only into a
+Debug `iphoneos` build; `scripts/run-development-react-native-ios.sh` keeps the
+custom token and digest out of an allowlisted Xcode build environment, validates
+the complete non-secret deployment coordinates, rechecks grant freshness, and
+force-bundles the exact JavaScript checkout before handing the grant to one
+no-debugger launch. The physical-device run therefore does not require Metro or
+Local Network access, although iOS can still show React Native's one-time Debug
+permission sheet on the first install. Later runs update the existing app so
+that OS consent persists; they do not retain Firebase or Latchway trust state.
+The app eagerly signs in with a new grant, signs out any old Firebase user, revokes prior
+installation state, exercises Responses, quota, and exact
+`react_native_ios`/`app_attest`/`app_verified` diagnostics, then revokes and
+signs out. The runner passes only after retrieving the exact random-run marker
+written after that terminal cleanup. The Debug native module and marker writer
+are absent from Release. This path verifies local integration only and cannot
+satisfy the protected physical-evidence gate. See the example README for the
+exact runner workflow.
+
+Firebase Authentication and Firebase App Check are distinct. The checked-in
+example pins Firebase App/Auth but does not install the native App Check module,
+and a Firebase web App Check registration does not apply to an iOS application.
+When App Check enforcement is enabled for the Firebase resource, pin a
+compatible React Native Firebase App Check dependency and activate the Apple
+App Attest provider before the Auth exchange. A debug App Check provider/token
+is never acceptable in a protected Release candidate.
+
 A production App Attest run requires all of the following, none of which can be
 substituted by a simulator build:
 

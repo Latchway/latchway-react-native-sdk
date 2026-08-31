@@ -61,7 +61,7 @@ Versioning once package publication begins.
   Android, and core source commits recorded by the synchronized compatibility
   lock.
 - The Firebase example now selects the Firebase identity provider explicitly
-  and uses the currently supported OpenAI Chat route and request shape.
+  and uses the currently supported OpenAI Responses route and request shape.
 - Automatic bodyless retries now require exact canonical, correlated
   pre-dispatch Problem documents and unambiguous nonce semantics; ambiguous or
   duplicate response metadata fails closed.
@@ -83,3 +83,5 @@ Versioning once package publication begins.
   keys, attestation, DPoP, secure sessions, and installation revocation.
 - Canonical contract-vector tests, native-boundary checks, deterministic
   package verification, CI, security documentation, and an example app.
+- Protocol-specific framework feature bindings; the primary example and
+  physical-device path use the setup wizard's OpenAI Responses feature.

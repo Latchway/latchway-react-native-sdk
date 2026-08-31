@@ -23,6 +23,7 @@ import { freshClientAfterRevocation } from "./evidence-client";
 import {
   createFrameworkConsumers,
   runFrameworkConsumerSmoke,
+  type FrameworkFeatureBindings,
 } from "./framework-consumers";
 
 const deployment = {
@@ -45,6 +46,7 @@ const deployment = {
 };
 
 let physicalIdentityBootstrap: Promise<void> | undefined;
+let developmentIdentityBootstrap: Promise<void> | undefined;
 let firebaseInitialization: Promise<void> | undefined;
 
 function makeClient(): LatchwayClient {
@@ -55,12 +57,9 @@ function makeClient(): LatchwayClient {
     identityProvider: "firebase",
     getIdentityToken: physicalConformanceEnabled()
       ? physicalIdentityToken
-      : async () => {
-        await ensureFirebaseApp();
-        const user = firebaseAuth().currentUser;
-        if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
-        return user.getIdToken();
-      },
+      : developmentDeviceBootstrapEnabled()
+        ? developmentIdentityToken
+        : ordinaryIdentityToken,
     ...(deployment.googleCloudProjectNumber === undefined ? {} : {
       android: { playIntegrityCloudProjectNumber: deployment.googleCloudProjectNumber },
     }),
@@ -83,12 +82,13 @@ export default function App(): React.JSX.Element {
   useEffect(() => () => { void client.dispose(); }, [client]);
 
   const evidenceStarted = useRef(false);
+  const developmentVerificationStarted = useRef(false);
 
   const send = async (): Promise<void> => {
     setBusy(true);
     setOutput("");
     try {
-      const response = await client.fetch("/v1/chat/completions", {
+      const response = await client.fetch("/v1/responses", {
         method: "POST",
         latchwayFeature: deployment.feature,
         headers: {
@@ -97,7 +97,7 @@ export default function App(): React.JSX.Element {
         },
         body: JSON.stringify({
           model: deployment.model,
-          messages: [{ role: "user", content: input }],
+          input,
           stream: true,
         }),
       });
@@ -132,7 +132,7 @@ export default function App(): React.JSX.Element {
     setBusy(true);
     setOutput("");
     try {
-      const consumers = createFrameworkConsumers(client, deployment.feature);
+      const consumers = createFrameworkConsumers(client, frameworkFeatureBindings());
       const result = await runFrameworkConsumerSmoke(consumers, input);
       setOutput(JSON.stringify(result, null, 2));
       setStatus("OpenAI, Vercel AI, LangChain, and Anthropic completed through native fetch");
@@ -173,13 +173,13 @@ export default function App(): React.JSX.Element {
       });
       setClient(measuredClient);
 
-      const firstResponse = await measuredClient.fetch("/v1/chat/completions", {
+      const firstResponse = await measuredClient.fetch("/v1/responses", {
         method: "POST",
         latchwayFeature: deployment.feature,
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({
           model: deployment.model,
-          messages: [{ role: "user", content: "Return the word conformance." }],
+          input: "Return the word conformance.",
           stream: false,
         }),
       });
@@ -254,13 +254,13 @@ export default function App(): React.JSX.Element {
         });
       }
 
-      const stream = await measuredClient.fetch("/v1/chat/completions", {
+      const stream = await measuredClient.fetch("/v1/responses", {
         method: "POST",
         latchwayFeature: deployment.feature,
         headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
         body: JSON.stringify({
           model: deployment.model,
-          messages: [{ role: "user", content: "Return the word conformance." }],
+          input: "Return the word conformance.",
           stream: true,
         }),
       });
@@ -406,6 +406,13 @@ export default function App(): React.JSX.Element {
   };
 
   useEffect(() => {
+    if (developmentDeviceBootstrapEnabled() && !developmentVerificationStarted.current) {
+      developmentVerificationStarted.current = true;
+      void runDevelopmentVerification(client, setStatus, setOutput, setBusy);
+    }
+  }, [client]);
+
+  useEffect(() => {
     if (configuredOptional("LATCHWAY_CONFORMANCE_AUTORUN") === "true" && !evidenceStarted.current) {
       evidenceStarted.current = true;
       void runPhysicalEvidence();
@@ -470,6 +477,27 @@ interface EvidenceSink {
   write(encoded: string): Promise<void>;
 }
 
+interface DevelopmentIdentitySink {
+  consumeDevelopmentIdentityGrant(
+    applicationID: string,
+    packageOrBundleIdentifier: string,
+    identityProvider: "firebase",
+  ): Promise<string>;
+  completeDevelopmentVerification(): Promise<void>;
+  failDevelopmentVerification(stage: DevelopmentVerificationStage, code: string): Promise<void>;
+}
+
+type DevelopmentVerificationStage =
+  | "firebase_configuration"
+  | "firebase_custom_token"
+  | "native_session_establishment"
+  | "gateway_responses"
+  | "diagnostics"
+  | "quota"
+  | "installation_revoke"
+  | "firebase_sign_out"
+  | "success_marker";
+
 interface EvidenceTest {
   id: string;
   status: "passed" | "failed";
@@ -483,6 +511,7 @@ interface EvidenceTest {
 interface SafeHTTPResult {
   status: number;
   byteCount: number;
+  diagnosticProblemCode?: string;
   problemCode?: string;
   requestID?: string;
 }
@@ -498,8 +527,30 @@ function evidenceSink(): EvidenceSink {
   return value;
 }
 
+function developmentIdentitySink(): DevelopmentIdentitySink {
+  const value = NativeModules.LatchwayDevelopmentBootstrap as DevelopmentIdentitySink | undefined;
+  if (value === undefined || typeof value.consumeDevelopmentIdentityGrant !== "function" ||
+      typeof value.completeDevelopmentVerification !== "function" ||
+      typeof value.failDevelopmentVerification !== "function") {
+    throw new Error("The Debug-only Firebase identity bridge is unavailable.");
+  }
+  return value;
+}
+
 function physicalConformanceEnabled(): boolean {
   return configuredOptional("LATCHWAY_CONFORMANCE_AUTORUN") === "true";
+}
+
+function developmentDeviceBootstrapEnabled(): boolean {
+  return __DEV__ && Platform.OS === "ios" &&
+    configuredOptional("LATCHWAY_DEVELOPMENT_DEVICE_BOOTSTRAP") === "true";
+}
+
+async function ordinaryIdentityToken(): Promise<string> {
+  await ensureFirebaseApp();
+  const user = firebaseAuth().currentUser;
+  if (user === null) throw new Error("Sign in with Firebase before calling Latchway.");
+  return user.getIdToken();
 }
 
 async function physicalIdentityToken(): Promise<string> {
@@ -537,8 +588,181 @@ async function bootstrapPhysicalIdentity(): Promise<void> {
   }
 }
 
+async function developmentIdentityToken(): Promise<string> {
+  await ensureFirebaseApp();
+  const bootstrap = developmentIdentityBootstrap ?? bootstrapDevelopmentIdentity();
+  developmentIdentityBootstrap = bootstrap;
+  try {
+    await bootstrap;
+  } catch (error) {
+    if (developmentIdentityBootstrap === bootstrap) developmentIdentityBootstrap = undefined;
+    throw error;
+  }
+  const user = firebaseAuth().currentUser;
+  if (user === null) throw new Error("The Debug-only Firebase identity bootstrap did not establish a user.");
+  return user.getIdToken();
+}
+
+async function bootstrapDevelopmentIdentity(): Promise<void> {
+  try {
+    // Take and validate the terminal native slot before changing an existing
+    // Firebase session. A reload after a completed one-use exchange therefore
+    // cannot sign out a valid user merely because the native slot is exhausted.
+    const grant = await developmentIdentitySink().consumeDevelopmentIdentityGrant(
+      deployment.applicationID,
+      deployment.packageOrBundleIdentifier,
+      "firebase",
+    );
+    if (firebaseAuth().currentUser !== null) await firebaseAuth().signOut();
+    await firebaseAuth().signInWithCustomToken(grant);
+  } catch (error) {
+    // Firebase messages can contain provider-controlled diagnostic text. Keep
+    // only the documented, normalized error code for the local exact-run
+    // receipt and UI; the credential and provider message never cross this
+    // boundary.
+    const failure = new Error("Debug-only one-use Firebase identity bootstrap failed.") as Error & { code: string };
+    failure.code = safeDevelopmentFailureCode(error);
+    throw failure;
+  }
+}
+
+async function runDevelopmentVerification(
+  current: LatchwayClient,
+  setStatus: (value: string) => void,
+  setOutput: (value: string) => void,
+  setBusy: (value: boolean) => void,
+): Promise<void> {
+  let measured: LatchwayClient | undefined;
+  let developmentIdentityEstablished = false;
+  let terminalCleanupComplete = false;
+  let failureStage: DevelopmentVerificationStage = "firebase_configuration";
+  setBusy(true);
+  setOutput("");
+  setStatus("Running Debug physical-device verification");
+  try {
+    // Establish the exact fresh Firebase user first. The following explicit
+    // revocation makes any persisted native installation unusable before the
+    // replacement performs the measured App Attest session establishment.
+    await ensureFirebaseApp();
+    failureStage = "firebase_custom_token";
+    await developmentIdentityToken();
+    if (firebaseAuth().currentUser === null) {
+      throw new Error("Debug Firebase identity was not established.");
+    }
+    developmentIdentityEstablished = true;
+    failureStage = "native_session_establishment";
+    measured = await freshClientAfterRevocation(current, makeClient);
+
+    failureStage = "gateway_responses";
+    const response = await measured.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: deployment.feature,
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: deployment.model,
+        input: "Return the word verified.",
+        stream: false,
+      }),
+    });
+    const result = await inspectBounded(response, 65_536);
+    if (!response.ok || result.byteCount === 0) {
+      const failure = new Error("Debug gateway Responses verification failed.") as Error & { code: string };
+      failure.code = developmentHTTPFailureCode(result);
+      throw failure;
+    }
+
+    failureStage = "diagnostics";
+    const diagnostics = await measured.diagnostics();
+    if (diagnostics.platform !== "react_native_ios" ||
+        diagnostics.attestation.provider !== "app_attest" ||
+        diagnostics.attestation.trustLevel !== "app_verified" ||
+        diagnostics.session.state !== "active") {
+      throw new Error("Debug App Attest diagnostics did not reach app_verified.");
+    }
+    failureStage = "quota";
+    const quota = await measured.quota(deployment.feature);
+    if (quota.feature !== deployment.feature) {
+      throw new Error("Debug quota verification returned the wrong feature.");
+    }
+
+    // The success marker is deliberately after both terminal operations. A
+    // launch, request, or diagnostic result can never be mistaken for a clean
+    // verification if installation revocation or Firebase sign-out fails.
+    failureStage = "installation_revoke";
+    await measured.revokeCurrentInstallation();
+    await measured.dispose();
+    measured = undefined;
+    failureStage = "firebase_sign_out";
+    await firebaseAuth().signOut();
+    if (firebaseAuth().currentUser !== null) {
+      throw new Error("Debug Firebase identity cleanup did not complete.");
+    }
+    developmentIdentityBootstrap = undefined;
+    terminalCleanupComplete = true;
+    failureStage = "success_marker";
+    await developmentIdentitySink().completeDevelopmentVerification();
+    setOutput(JSON.stringify({
+      platform: diagnostics.platform,
+      provider: diagnostics.attestation.provider,
+      trust_level: diagnostics.attestation.trustLevel,
+      responses_status: result.status,
+      quota_feature: quota.feature,
+      terminal_cleanup: true,
+    }, null, 2));
+    setStatus("Debug physical-device verification completed");
+  } catch (error) {
+    const failureCode = safeDevelopmentFailureCode(error);
+    setOutput(JSON.stringify({ failure_stage: failureStage, failure_code: failureCode }, null, 2));
+    try {
+      await developmentIdentitySink().failDevelopmentVerification(failureStage, failureCode);
+    } catch {
+      // A missing/invalid/consumed native grant cannot produce an exact-run
+      // receipt. The host then retains its bounded timeout and fails closed.
+    }
+    setStatus("Debug physical-device verification failed.");
+  } finally {
+    if (!terminalCleanupComplete) {
+      if (measured !== undefined) {
+        try { await measured.revokeCurrentInstallation(); } catch { /* no marker is emitted */ }
+        try { await measured.dispose(); } catch { /* no marker is emitted */ }
+      }
+      if (developmentIdentityEstablished) {
+        try { await firebaseAuth().signOut(); } catch { /* no marker is emitted */ }
+        developmentIdentityBootstrap = undefined;
+      }
+      // When the native slot was unavailable, leave any pre-existing Firebase
+      // session untouched; a Metro reload cannot destroy valid authentication.
+    }
+    setBusy(false);
+  }
+}
+
+function safeDevelopmentFailureCode(error: unknown): string {
+  const candidate = error instanceof LatchwayError
+    ? error.code
+    : typeof error === "object" && error !== null && "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : "verification_failed";
+  const normalized = candidate.toLowerCase().replace(/[^a-z0-9_]+/gu, "_").replace(/^_+|_+$/gu, "");
+  return /^[a-z][a-z0-9_]{1,99}$/u.test(normalized) ? normalized : "verification_failed";
+}
+
+function developmentHTTPFailureCode(result: SafeHTTPResult): string {
+  const code = result.problemCode ?? result.diagnosticProblemCode;
+  if (code !== undefined && /^[a-z][a-z0-9_]{1,99}$/u.test(code)) {
+    return code;
+  }
+  return Number.isInteger(result.status) && result.status >= 100 && result.status <= 599
+    ? `http_${result.status}`
+    : "verification_failed";
+}
+
 async function ensureFirebaseApp(): Promise<void> {
   if (firebaseApp.apps.length > 0) return;
+  if (developmentDeviceBootstrapEnabled()) {
+    throw new Error("The Debug-only Firebase plist did not initialize the default application.");
+  }
   const initialization = firebaseInitialization ?? initializePhysicalFirebase();
   firebaseInitialization = initialization;
   try {
@@ -570,6 +794,23 @@ function configured(name: string): string {
 
 function configuredOptional(name: string): string | undefined {
   return (Config as Record<string, string | undefined>)[name];
+}
+
+function frameworkFeatureBindings(): FrameworkFeatureBindings {
+  return {
+    responses: deployment.feature,
+    chat: configuredFrameworkFeature("LATCHWAY_OPENAI_CHAT_FEATURE"),
+    embeddings: configuredFrameworkFeature("LATCHWAY_OPENAI_EMBEDDINGS_FEATURE"),
+    anthropic: configuredFrameworkFeature("LATCHWAY_ANTHROPIC_MESSAGES_FEATURE"),
+  };
+}
+
+function configuredFrameworkFeature(name: string): string {
+  const value = configuredOptional(name);
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} must be configured to run the framework consumers.`);
+  }
+  return value;
 }
 
 function configuredKeychainAccessGroups(name: string): string[] {
@@ -679,19 +920,27 @@ async function inspectBounded(response: Response, maximumBytes: number): Promise
   const body = await readBounded(response, maximumBytes);
   const requestID = safeRequestID(response.headers.get("X-Latchway-Request-ID"));
   const contentType = response.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
+  let diagnosticProblemCode: string | undefined;
   let problemCode: string | undefined;
   if (contentType === "application/problem+json") {
     try {
-      const value = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>;
+      const value = JSON.parse(decodeBoundedUTF8(body)) as Record<string, unknown>;
       const code = typeof value.code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value.code)
         ? value.code
         : undefined;
-      if (code !== undefined && value.status === response.status && value.request_id === requestID &&
+      if (code !== undefined && value.status === response.status &&
           value.type === `https://latchway.dev/problems/${code}` &&
           typeof value.title === "string" && value.title.length > 0 &&
           typeof value.detail === "string" && value.detail.length > 0 &&
           typeof value.retryable === "boolean") {
-        problemCode = code;
+        // The Debug-only exact-run receipt may retain this bounded canonical
+        // code to diagnose a local disposable stack. Physical conformance still
+        // requires response/header request-ID correlation before accepting the
+        // code as trusted negative-test evidence.
+        diagnosticProblemCode = code;
+        if (requestID !== undefined && value.request_id === requestID) {
+          problemCode = code;
+        }
       }
     } catch {
       // A malformed problem remains untrusted and cannot satisfy a negative test.
@@ -701,8 +950,57 @@ async function inspectBounded(response: Response, maximumBytes: number): Promise
     status: response.status,
     byteCount: body.byteLength,
     ...(requestID === undefined ? {} : { requestID }),
+    ...(diagnosticProblemCode === undefined ? {} : { diagnosticProblemCode }),
     ...(problemCode === undefined ? {} : { problemCode }),
   };
+}
+
+function decodeBoundedUTF8(bytes: Uint8Array): string {
+  let output = "";
+  for (let index = 0; index < bytes.length;) {
+    const first = bytes[index];
+    if (first === undefined) {
+      throw new Error("Gateway problem response is not valid UTF-8.");
+    }
+    let codePoint: number;
+    let width: number;
+    if (first <= 0x7f) {
+      codePoint = first;
+      width = 1;
+    } else if (first >= 0xc2 && first <= 0xdf) {
+      codePoint = first & 0x1f;
+      width = 2;
+    } else if (first >= 0xe0 && first <= 0xef) {
+      codePoint = first & 0x0f;
+      width = 3;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+      codePoint = first & 0x07;
+      width = 4;
+    } else {
+      throw new Error("Gateway problem response is not valid UTF-8.");
+    }
+    if (index + width > bytes.length) {
+      throw new Error("Gateway problem response is not valid UTF-8.");
+    }
+    for (let offset = 1; offset < width; offset += 1) {
+      const next = bytes[index + offset];
+      if (next === undefined) {
+        throw new Error("Gateway problem response is not valid UTF-8.");
+      }
+      if ((next & 0xc0) !== 0x80) {
+        throw new Error("Gateway problem response is not valid UTF-8.");
+      }
+      codePoint = (codePoint << 6) | (next & 0x3f);
+    }
+    const overlong = (width === 2 && codePoint < 0x80) ||
+      (width === 3 && codePoint < 0x800) || (width === 4 && codePoint < 0x10000);
+    if (overlong || (codePoint >= 0xd800 && codePoint <= 0xdfff) || codePoint > 0x10ffff) {
+      throw new Error("Gateway problem response is not valid UTF-8.");
+    }
+    output += String.fromCodePoint(codePoint);
+    index += width;
+  }
+  return output;
 }
 
 async function readBounded(response: Response, maximumBytes: number): Promise<Uint8Array> {

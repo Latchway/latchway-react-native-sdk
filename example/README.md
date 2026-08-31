@@ -16,7 +16,9 @@ only after the replacement passes both native host gates.
 
 The **Run framework consumers** action executes real OpenAI Responses, Vercel
 AI Responses, LangChain Chat, LangChain embeddings, and Anthropic Messages
-calls through one feature-bound native fetch. `src/framework-consumers.ts`
+calls through protocol-specific feature-bound native fetch functions. The
+active gateway configuration binds each feature to one protocol, so the action
+requires four distinct feature identifiers. `src/framework-consumers.ts`
 pins the tested OpenAI 7.8.0, AI SDK 7.0.85/`@ai-sdk/openai` 4.0.52,
 `@langchain/openai` 1.5.10, and `@ai-sdk/anthropic` 4.0.46 packages. Their
 constructor-only placeholder key is removed before the TurboModule boundary.
@@ -35,10 +37,17 @@ Configure these values in the host's uncommitted environment:
 - `LATCHWAY_APPLICATION_ID`
 - `LATCHWAY_ENVIRONMENT`
 - `LATCHWAY_FEATURE`
+- `LATCHWAY_OPENAI_CHAT_FEATURE` (required only by the framework action)
+- `LATCHWAY_OPENAI_EMBEDDINGS_FEATURE` (required only by the framework action)
+- `LATCHWAY_ANTHROPIC_MESSAGES_FEATURE` (required only by the framework action)
 - `LATCHWAY_ERROR_MAPPING_FEATURE` (a protected feature intentionally absent
   from the root component's grant; it may also be absent from configuration)
 - `LATCHWAY_MODEL`
 - `LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER`
+- `LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP` (iOS only; the exact private root
+  group signed into the application)
+- `LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS` (iOS only; the exact
+  shared App Intents group)
 
 `LATCHWAY_APPLICATION_ID` is the generated `app_` resource ID returned by the
 Latchway Admin API, not the package/bundle identifier or a name/slug.
@@ -51,6 +60,85 @@ service-account credentials, identity tokens, App Attest evidence, Play
 Integrity tokens, session credentials, or provider keys.
 Copy `.env.example` to the ignored `.env` file and replace only its non-secret
 deployment identifiers; provider credentials never belong there.
+
+### Debug-only physical iPhone bootstrap
+
+The iOS host has an opt-in development lane for exercising the current source
+on a physical iPhone before producing protected Release evidence. It is
+deliberately separate from `LatchwayEvidence`: its native module and one-read
+grant slot are compiler-elided outside `DEBUG`, its Firebase copier refuses
+Release and physical-candidate builds, and its environment names are not used
+by the protected runner. This lane is useful development verification, never
+release or conformance evidence.
+
+Put `LATCHWAY_DEVELOPMENT_DEVICE_BOOTSTRAP=true` in the ignored `example/.env`.
+Keep a bundle-matched `GoogleService-Info.plist` outside the repository, and
+provide its path and SHA-256 only to the development runner. Do not put the
+Firebase custom token, plist path, plist bytes, or either digest in `.env`, an
+Xcode scheme, an argument, or a log. The copied plist is non-secret Firebase
+client configuration; the custom token remains credential material.
+
+The development runner force-bundles the exact JavaScript checkout into its
+signed Debug application. It does not use Metro or depend on the Mac's LAN
+address. React Native's Debug tooling can still make iOS show the one-time Local
+Network sheet; dismiss it promptly, and choosing **Don't Allow** is acceptable
+because the verification uses the configured HTTPS gateway. The ignored env
+file is an exact allowlist: it must contain every normal iOS deployment value,
+`environment=development`, the private and shared Keychain groups shown above,
+protected autorun disabled, and Debug bootstrap enabled. It must not contain
+provider API keys or any other extra name.
+
+```sh
+LATCHWAY_IOS_DEVICE_ID=<coredevice-identifier-from-devicectl> \
+LATCHWAY_IOS_XCODE_DESTINATION_ID=<device-udid-from-xcodebuild> \
+LATCHWAY_BUNDLE_ID=dev.latchway \
+LATCHWAY_IOS_TEAM_ID=<team-id> \
+LATCHWAY_IOS_APP_ID_PREFIX=<app-id-prefix> \
+LATCHWAY_IOS_APPINTENTS_BUNDLE_ID=dev.latchway.AppIntents \
+LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP=<app-id-prefix>.dev.latchway.keychain \
+LATCHWAY_DEVELOPMENT_FIREBASE_IOS_CONFIG_PATH=<external-plist> \
+LATCHWAY_DEVELOPMENT_FIREBASE_CONFIGURATION_SHA256=<plist-sha256> \
+LATCHWAY_DEVELOPMENT_ENVFILE=<absolute-path-to-ignored-example-env> \
+scripts/run-development-react-native-ios.sh
+```
+
+`xcrun devicectl list devices` supplies the CoreDevice identifier used for
+install, launch, and marker retrieval. `xcodebuild -showdestinations -workspace
+example/ios/LatchwayExample.xcworkspace -scheme LatchwayExample` supplies the
+separate device UDID used for the signed build; the runner rejects substituting
+one identifier format for the other.
+
+Export a newly issued one-use grant as
+`LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT` and its SHA-256 as
+`LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256` immediately before invoking the
+second command. The runner removes both from the build environment, runs
+`xcodebuild` under an exact credential-free environment allowlist, revalidates
+the grant immediately before launch, verifies the embedded bundle, and supplies
+the grant only to one non-debugger `devicectl` launch.
+
+The runner installs over an existing Debug copy instead of uninstalling it, so
+iOS retains the Local Network decision already made for this bundle identifier.
+This does not retain a trusted Latchway or Firebase session: the app consumes a
+new grant, signs out any old Firebase user, and explicitly revokes the prior
+Latchway installation before it creates the measured replacement.
+
+Apart from answering iOS's one-time Debug permission sheet on the first install,
+no in-app action is required. The app first consumes the validated grant, signs out any old Firebase
+user, and completes the custom-token sign-in. It then explicitly
+revokes any persisted Latchway installation, creates a replacement, makes a
+non-streaming `/v1/responses` request, checks quota, and requires diagnostics to
+report `react_native_ios`, `app_attest`, and `app_verified`. Only after terminal
+installation revocation and Firebase sign-out does the native Debug bridge
+write a non-secret, random-run-bound success marker. The runner retrieves and
+validates that exact marker from the app container; process launch alone never
+passes. The local slot prevents a second bridge read, and provider-wide one-use
+must still be enforced by the issuer/lease service.
+
+This example pins Firebase App and Auth only. A Firebase web App Check
+registration does not protect native iOS Auth traffic. If the target Firebase
+resource enforces App Check, add and pin the native React Native Firebase App
+Check package and activate Apple's App Attest provider before exchanging the
+custom token; never substitute a debug App Check token in Release evidence.
 
 Install and type-check from the repository root:
 

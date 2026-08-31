@@ -28,6 +28,12 @@ import { createLatchwayClient, type LatchwayClient } from "../src/index.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 const FEATURE = "habit_assistant";
+const FRAMEWORK_FEATURES = {
+  responses: "habit_responses",
+  chat: "habit_chat",
+  embeddings: "habit_embeddings",
+  anthropic: "habit_anthropic",
+} as const;
 const GATEWAY = "https://gateway.example.test";
 const IDENTITY_TOKEN = "fixture-identity-token-never-returned";
 const MANAGED_PLACEHOLDER = "latchway-managed-not-a-provider-secret";
@@ -78,6 +84,17 @@ describe("React Native framework conformance", () => {
     );
   });
 
+  it("requires one configured feature for each framework protocol", () => {
+    const gateway = new NativeFrameworkGateway();
+    expect(() => createFrameworkConsumers(install(gateway), {
+      responses: FEATURE,
+      chat: FEATURE,
+      embeddings: FEATURE,
+      anthropic: FEATURE,
+    })).toThrow("Framework protocol features must be distinct.");
+    expect(gateway.requests).toHaveLength(0);
+  });
+
   it(frameworkCaseTitle("FW-AUTH-001"), async () => {
     const fixture = await readJSON<FrameworkRegistryFixture>(
       new URL("../Conformance/framework/react-native-fetch.json", import.meta.url),
@@ -118,9 +135,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-REQ-001"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    const response = await consumers.openai.responses.create({ model: "latchway", input: "hello" });
+    const response = await consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" });
 
     expect(response.output_text).toBe("hello from Latchway");
     expect(gateway.requests[0]?.url.pathname).toBe("/v1/responses");
@@ -129,9 +146,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-REQ-002"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    const response = await consumers.openai.chat.completions.create({
+    const response = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "hello" }],
     });
@@ -143,7 +160,7 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-REQ-003"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
     await expect(consumers.langChainEmbeddings.embedQuery("hello")).resolves.toEqual([0.25, 0.75]);
 
@@ -159,8 +176,8 @@ describe("React Native framework conformance", () => {
         headers: [...(reply.headers ?? []), ["x-request-id", "upstream_request_id"]],
       };
     });
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
-    const request = consumers.openai.responses.create({ model: "latchway", input: "hello" }, {
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
+    const request = consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" }, {
       headers: { "X-Application-Correlation": "safe-correlation" },
     });
 
@@ -169,13 +186,13 @@ describe("React Native framework conformance", () => {
     expect(requestID).toBe(REQUEST_ID);
     expect(gateway.requests).toHaveLength(1);
     expect(gateway.requests[0]?.headers.get("x-application-correlation")).toBe("safe-correlation");
-    expect(gateway.requests[0]?.feature).toBe(FEATURE);
+    expect(gateway.requests[0]?.feature).toBe(FRAMEWORK_FEATURES.responses);
   });
 
   it(frameworkCaseTitle("FW-REQ-005"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
-    const stream = await consumers.openai.chat.completions.create({
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
+    const stream = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "hello" }],
       stream: true,
@@ -200,9 +217,9 @@ describe("React Native framework conformance", () => {
       chunks: [],
       pendingRead: true,
     }));
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
     const controller = new AbortController();
-    const stream = await consumers.openai.chat.completions.create({
+    const stream = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "hello" }],
       stream: true,
@@ -221,8 +238,8 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-BEH-001"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
-    const response = await consumers.openai.chat.completions.create({
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
+    const response = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "weather" }],
       tools: [{
@@ -253,8 +270,8 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-BEH-002"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
-    const response = await consumers.openai.chat.completions.create({
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
+    const response = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "summarize" }],
       response_format: {
@@ -280,9 +297,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-BEH-003"), async () => {
     const gateway = new NativeFrameworkGateway(() => latchwayProblem("quota_exceeded"));
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    const error = await captureError(consumers.openai.responses.create({ model: "latchway", input: "hello" }));
+    const error = await captureError(consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" }));
 
     expect(error).toMatchObject({ status: 429, requestID: REQUEST_ID });
     expect(String(error)).toContain("quota_exceeded");
@@ -290,9 +307,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-BEH-004"), async () => {
     const gateway = new NativeFrameworkGateway(() => providerError());
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    const error = await captureError(consumers.openai.chat.completions.create({
+    const error = await captureError(consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "hello" }],
     }));
@@ -326,10 +343,10 @@ describe("React Native framework conformance", () => {
   it(reactNativeFrameworkCaseTitle("RN-FW-REFRESH-001"), async () => {
     const gateway = new NativeFrameworkGateway();
     const client = install(gateway);
-    const consumers = createFrameworkConsumers(client, FEATURE);
+    const consumers = createFrameworkConsumers(client, FRAMEWORK_FEATURES);
 
     await client.refresh();
-    const response = await consumers.openai.chat.completions.create({
+    const response = await consumers.openaiChat.chat.completions.create({
       model: "latchway",
       messages: [{ role: "user", content: "after refresh" }],
     });
@@ -341,9 +358,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-SEC-001"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    await consumers.openai.responses.create({ model: "latchway", input: "hello" });
+    await consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" });
 
     expect(gateway.requests[0]?.headers.has("authorization")).toBe(false);
     expect(gateway.requests[0]?.headers.has("api-key")).toBe(false);
@@ -370,9 +387,9 @@ describe("React Native framework conformance", () => {
 
   it(frameworkCaseTitle("FW-SEC-003"), async () => {
     const gateway = new NativeFrameworkGateway(() => providerError());
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
-    const error = await captureError(consumers.openai.responses.create({ model: "latchway", input: "hello" }));
+    const error = await captureError(consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" }));
     const serialized = safeSerialize(error);
 
     expect(serialized).not.toContain(MANAGED_PLACEHOLDER);
@@ -385,9 +402,9 @@ describe("React Native framework conformance", () => {
     const globalFetch = vi.fn(async () => new Response("global fetch must not run"));
     vi.stubGlobal("fetch", globalFetch);
     const client = install(gateway);
-    const consumers = createFrameworkConsumers(client, FEATURE);
+    const consumers = createFrameworkConsumers(client, FRAMEWORK_FEATURES);
 
-    await consumers.openai.responses.create({ model: "latchway", input: "hello" });
+    await consumers.openaiResponses.responses.create({ model: "latchway", input: "hello" });
 
     expect(globalFetch).not.toHaveBeenCalled();
     expect(globalThis.fetch).toBe(globalFetch);
@@ -395,7 +412,7 @@ describe("React Native framework conformance", () => {
 
   it(reactNativeFrameworkCaseTitle("RN-FW-ANTHROPIC-001"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
     const response = await generateText({
       maxOutputTokens: 64,
@@ -436,7 +453,7 @@ describe("React Native framework conformance", () => {
 
   it(reactNativeFrameworkCaseTitle("RN-FW-CONSUMER-001"), async () => {
     const gateway = new NativeFrameworkGateway();
-    const consumers = createFrameworkConsumers(install(gateway), FEATURE);
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
 
     const result = await runFrameworkConsumerSmoke(consumers, "hello");
 
@@ -454,7 +471,13 @@ describe("React Native framework conformance", () => {
       "/v1/embeddings",
       "/v1/messages",
     ]);
-    expect(gateway.requests.every(({ feature }) => feature === FEATURE)).toBe(true);
+    expect(gateway.requests.map(({ feature }) => feature)).toEqual([
+      FRAMEWORK_FEATURES.responses,
+      FRAMEWORK_FEATURES.responses,
+      FRAMEWORK_FEATURES.chat,
+      FRAMEWORK_FEATURES.embeddings,
+      FRAMEWORK_FEATURES.anthropic,
+    ]);
   });
 });
 

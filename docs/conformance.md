@@ -16,7 +16,9 @@ embeddings, SSE usage, tool calls, structured output, quota failures, provider
 failures, and retry responses. Tests prove feature binding, safe headers,
 request-ID correlation, cancellation, fresh native operation IDs for framework
 retries, placeholder stripping, exact-origin refusal, and isolation from global
-fetch.
+fetch. The runnable consumer factory requires distinct Responses, Chat,
+Embeddings, and Anthropic feature identifiers because one active Latchway
+feature is bound to exactly one gateway protocol.
 
 `RN-FW-REFRESH-001` separately proves the public explicit-refresh operation
 followed by a framework request. It is intentionally not reported as shared

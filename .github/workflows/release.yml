@@ -642,6 +642,12 @@ jobs:
           test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = tag
           test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "${{ needs.promote.outputs.commit }}"
         working-directory: latchway-react-native-sdk
+      - name: Scan the exact promoted dependency inventory offline
+        env:
+          LATCHWAY_OSV_EVIDENCE_PATH: ${{ runner.temp }}/react-native-dependency-vulnerability-scan.json
+          SOURCE_COMMIT: ${{ needs.promote.outputs.commit }}
+        run: scripts/scan-dependencies.sh "$SOURCE_COMMIT"
+        working-directory: latchway-react-native-sdk
       - name: Read immutable compatibility lock
         id: lock
         shell: bash

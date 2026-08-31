@@ -48,6 +48,20 @@ The SDK must never accept an upstream AI-provider secret. Latchway server or
 native-SDK vulnerabilities should be reported to their owning repository, with
 a cross-reference here when bridge behavior is involved.
 
+## Dependency vulnerability gate
+
+CI and release jobs bind `package.json`, `pnpm-lock.yaml`, and the scanner policy
+scripts to the exact candidate commit before scanning. They install the
+checksum-and-size-pinned OSV-Scanner 2.4.0 binary, download the public npm
+advisory database, and then match dependencies locally with network resolution
+disabled. No package inventory or repository path is sent to OSV.dev. Native
+SDK dependency graphs are scanned in their owning iOS and Android repositories.
+
+`pnpm security:dependencies` reproduces the gate. Critical, high, or
+unknown-severity findings fail the candidate; lower-severity findings remain
+visible for routine remediation. Scanner errors, malformed output, an empty
+inventory, or a missing offline database also fail closed.
+
 ## Disclosure
 
 Allow maintainers a reasonable opportunity to investigate and coordinate a fix

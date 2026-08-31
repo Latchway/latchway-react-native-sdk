@@ -9,10 +9,23 @@ const managedPlaceholder = "latchway-managed-not-a-provider-secret";
 
 export interface ReactNativeFrameworkConsumers {
   readonly anthropic: AnthropicProvider;
-  readonly openai: OpenAI;
+  readonly openaiResponses: OpenAI;
+  readonly openaiChat: OpenAI;
   readonly vercelAI: OpenAIProvider;
   readonly langChainChat: ChatOpenAI;
   readonly langChainEmbeddings: OpenAIEmbeddings;
+}
+
+/**
+ * Each Latchway feature is bound to one protocol by the active gateway
+ * configuration. Framework consumers that use different provider protocols
+ * therefore require distinct feature identifiers.
+ */
+export interface FrameworkFeatureBindings {
+  readonly responses: string;
+  readonly chat: string;
+  readonly embeddings: string;
+  readonly anthropic: string;
 }
 
 export interface FrameworkSmokeResult {
@@ -24,45 +37,59 @@ export interface FrameworkSmokeResult {
 }
 
 /**
- * Real framework consumers over one native-backed, feature-bound fetch.
+ * Real framework consumers over native-backed, protocol-specific feature
+ * fetch functions.
  * The value supplied as an API key only satisfies provider constructors; the
  * Latchway bridge removes it before native session acquisition or dispatch.
  */
 export function createFrameworkConsumers(
   client: LatchwayClient,
-  feature: string,
+  features: FrameworkFeatureBindings,
 ): ReactNativeFrameworkConsumers {
-  const featureFetch = client.fetchFor(feature);
+  if (new Set(Object.values(features)).size !== 4) {
+    throw new Error("Framework protocol features must be distinct.");
+  }
+  const responsesFetch = client.fetchFor(features.responses);
+  const chatFetch = client.fetchFor(features.chat);
+  const embeddingsFetch = client.fetchFor(features.embeddings);
+  const anthropicFetch = client.fetchFor(features.anthropic);
   const baseURL = `${client.gatewayURL}/v1`;
   return {
     anthropic: createAnthropic({
       apiKey: managedPlaceholder,
       baseURL,
-      fetch: featureFetch,
+      fetch: anthropicFetch,
       name: "latchway-anthropic",
     }),
-    openai: new OpenAI({
+    openaiResponses: new OpenAI({
       apiKey: managedPlaceholder,
       baseURL,
       dangerouslyAllowBrowser: true,
-      fetch: featureFetch,
+      fetch: responsesFetch,
+      maxRetries: 0,
+    }),
+    openaiChat: new OpenAI({
+      apiKey: managedPlaceholder,
+      baseURL,
+      dangerouslyAllowBrowser: true,
+      fetch: chatFetch,
       maxRetries: 0,
     }),
     vercelAI: createOpenAI({
       apiKey: managedPlaceholder,
       baseURL,
-      fetch: featureFetch,
+      fetch: responsesFetch,
       name: "latchway",
     }),
     langChainChat: new ChatOpenAI({
       apiKey: managedPlaceholder,
-      configuration: { baseURL, fetch: featureFetch },
+      configuration: { baseURL, fetch: chatFetch },
       maxRetries: 0,
       model: "latchway",
     }),
     langChainEmbeddings: new OpenAIEmbeddings({
       apiKey: managedPlaceholder,
-      configuration: { baseURL, fetch: featureFetch },
+      configuration: { baseURL, fetch: embeddingsFetch },
       encodingFormat: "float",
       maxRetries: 0,
       model: "latchway",
@@ -77,7 +104,7 @@ export async function runFrameworkConsumerSmoke(
   signal?: AbortSignal,
 ): Promise<FrameworkSmokeResult> {
   const requestOptions = signal === undefined ? {} : { signal };
-  const openai = await consumers.openai.responses.create({
+  const openai = await consumers.openaiResponses.responses.create({
     model: "latchway",
     input: prompt,
   }, requestOptions);
@@ -112,7 +139,7 @@ export async function streamOpenAIChat(
   update: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const stream = await consumers.openai.chat.completions.create({
+  const stream = await consumers.openaiChat.chat.completions.create({
     model: "latchway",
     messages: [{ role: "user", content: prompt }],
     stream: true,

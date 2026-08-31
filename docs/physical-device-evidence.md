@@ -6,6 +6,15 @@ devices. A simulator, emulator, debug build, testing process, debugger-attached
 process, software-key fallback, sideloaded Android build, or testing attestation
 environment can never produce passing release evidence.
 
+The optional iOS development Firebase bootstrap is likewise excluded. Its
+bridge exists only in `DEBUG`, its plist phase refuses Release/candidate builds,
+and its one-read grant is launched outside the protected collector. Its local
+runner does require a fresh sign-in, replacement App Attest session, Responses,
+quota, exact trusted diagnostics, terminal revocation/sign-out, and a run-bound
+app-container marker. Even so, a successful development-signed `dev.latchway`
+run is source verification, not production App Attest, immutable-candidate, or
+publication evidence.
+
 This is an external release gate. Repository CI validates the collectors and
 their failure cases, but it does not claim a physical-device success. Only the
 protected, manually dispatched `Physical React Native evidence` workflow can

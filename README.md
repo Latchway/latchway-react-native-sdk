@@ -42,13 +42,13 @@ const latchway = createLatchwayClient({
   },
 });
 
-const response = await latchway.fetch("/v1/chat/completions", {
+const response = await latchway.fetch("/v1/responses", {
   method: "POST",
   latchwayFeature: "habit_assistant",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     model: "assistant-default",
-    messages: [{ role: "user", content: "Plan tomorrow" }],
+    input: "Plan tomorrow",
   }),
 });
 
@@ -74,13 +74,21 @@ import {
   runFrameworkConsumerSmoke,
 } from "./framework-consumers";
 
-const frameworks = createFrameworkConsumers(latchway, "habit_assistant");
+const frameworks = createFrameworkConsumers(latchway, {
+  responses: "habit_responses",
+  chat: "habit_chat",
+  embeddings: "habit_embeddings",
+  anthropic: "habit_anthropic",
+});
 const result = await runFrameworkConsumerSmoke(frameworks, "Plan tomorrow");
 ```
 
 These are compatibility consumers, not another LLM abstraction and not a
 blanket support claim for every package feature. They execute Responses, Chat
 Completions, embeddings, Anthropic Messages, and SSE through native networking.
+Each identifier above must name a separately configured Latchway feature whose
+protocol matches that request family; one feature cannot represent multiple
+protocols.
 Local conformance also covers tools, JSON-schema request preservation, errors,
 framework retry dispatches, explicit refresh, restricted opaque routes, and
 cancellation. Automatic pre-dispatch session recovery remains a native/device
@@ -211,9 +219,9 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
 current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `6e44d1aacd85535d005db7d1df2f0e470f3dcffb`, and
+window), core commit `1fa6b2bf67906390e7af9be81fc946dedae71741`, and
 bundle SHA-256
-`695811e0601b7d393137fb7021d43b5c70638ef43fb4b41ad83ac5dd12085d5c`.
+`33c57d9dfeb227ca2472a4a4a964e6df37f4932699cacb423dee11ce15e8824e`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and

@@ -76,6 +76,11 @@ correlation. The native runtime remains the framework identity reported to the
 gateway (`react-native-fetch`); an underlying JavaScript library cannot spoof a
 different SDK/framework pair through caller headers.
 
+Feature binding is also protocol binding: a Responses feature cannot dispatch
+Chat Completions, Embeddings, or Anthropic Messages. A consumer set spanning
+those protocols constructs a separate `fetchFor` transport for each configured
+feature instead of multiplexing incompatible endpoints through one identifier.
+
 ## Coordination
 
 A module-global root lease map is keyed by native-module identity plus gateway/application/environment scope. A separate component lease map adds the component definition and never aliases the root map. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.

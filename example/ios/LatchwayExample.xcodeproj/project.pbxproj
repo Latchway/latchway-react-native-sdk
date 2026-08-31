@@ -11,6 +11,7 @@
 		64A6E7B4DA266128136C422F /* Pods_LatchwayExample.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2909D50F4B099028BF209F7E /* Pods_LatchwayExample.framework */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		7A11C0042F00000100A11C04 /* LatchwayEvidence.m in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0032F00000100A11C03 /* LatchwayEvidence.m */; };
+		7A11C0062F00000100A11C06 /* LatchwayDevelopmentBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0072F00000100A11C07 /* LatchwayDevelopmentBootstrap.m */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		84C89F4AED2405273504E122 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		FF789BA430449C140077F795 /* AppIntents.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = FF789B9B30449C130077F795 /* AppIntents.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -51,6 +52,7 @@
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = LatchwayExample/AppDelegate.swift; sourceTree = "<group>"; };
 		7A11C0012F00000100A11C01 /* LatchwayExample.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; name = LatchwayExample.entitlements; path = LatchwayExample/LatchwayExample.entitlements; sourceTree = "<group>"; };
 		7A11C0032F00000100A11C03 /* LatchwayEvidence.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = LatchwayEvidence.m; path = LatchwayExample/LatchwayEvidence.m; sourceTree = "<group>"; };
+		7A11C0072F00000100A11C07 /* LatchwayDevelopmentBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = LatchwayDevelopmentBootstrap.m; path = LatchwayExample/LatchwayDevelopmentBootstrap.m; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = LatchwayExample/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		FF789B9B30449C130077F795 /* AppIntents.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = AppIntents.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -106,6 +108,7 @@
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
 				7A11C0032F00000100A11C03 /* LatchwayEvidence.m */,
+				7A11C0072F00000100A11C07 /* LatchwayDevelopmentBootstrap.m */,
 				7A11C0012F00000100A11C01 /* LatchwayExample.entitlements */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -180,6 +183,7 @@
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
 				D2AD1B037FBFD53E094C8616 /* [CP-User] [RNFB] Core Configuration */,
 				7A11C0052F00000100A11C05 /* Copy protected Firebase configuration */,
+				7A11C0082F00000100A11C08 /* Copy development Firebase configuration */,
 			);
 			buildRules = (
 			);
@@ -317,6 +321,22 @@
 			shellScript = "\"${SRCROOT}/../../scripts/copy-protected-firebase-ios-config.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		7A11C0082F00000100A11C08 /* Copy development Firebase configuration */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Copy development Firebase configuration";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/../../scripts/copy-development-firebase-ios-config.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
 		C38B50BA6285516D6DCD4F65 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -378,6 +398,7 @@
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
 				7A11C0042F00000100A11C04 /* LatchwayEvidence.m in Sources */,
+				7A11C0062F00000100A11C06 /* LatchwayDevelopmentBootstrap.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

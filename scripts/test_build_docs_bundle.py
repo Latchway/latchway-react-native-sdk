@@ -21,6 +21,25 @@ SPEC.loader.exec_module(MODULE)
 
 
 class DocumentationBundleTests(unittest.TestCase):
+    def test_full_source_references_and_quickstarts_are_exact(self) -> None:
+        config = json.loads((ROOT / "docs-bundle.config.json").read_text(encoding="utf-8"))
+        documents = {item["path"]: item["source"] for item in config["documents"]}
+        examples = {item["name"]: item["source"] for item in config["examples"]}
+        for source in (
+            documents["release-notes.md"],
+            examples["React Native physical-device application"],
+            examples["OpenAI, Vercel AI, LangChain, and Anthropic consumers"],
+        ):
+            line_count = len((ROOT / source["file"]).read_text(encoding="utf-8").splitlines())
+            self.assertEqual(source["start_line"], 1)
+            self.assertEqual(source["end_line"], line_count)
+
+        streaming = documents["quickstart/streaming-fetch.tsx"]
+        lines = (ROOT / streaming["file"]).read_text(encoding="utf-8").splitlines()
+        region = lines[streaming["start_line"] - 1:streaming["end_line"]]
+        self.assertTrue(region[0].strip().startswith("const send = async"))
+        self.assertEqual(region[-1].strip(), "};")
+
     def test_bundle_is_reproducible_self_describing_and_checksum_bound(self) -> None:
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             archives = []
@@ -70,6 +89,17 @@ class DocumentationBundleTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(payloads[name]).hexdigest(), digest)
             for name, key in (("supported-versions.json", "versions"), ("public-symbols.json", "symbols"), ("errors.json", "errors"), ("examples.json", "examples")):
                 self.assertTrue(json.loads(payloads[name])[key])
+            framework = payloads["frameworks/react-native-consumers.ts"].decode("utf-8")
+            for marker in (
+                "export interface FrameworkFeatureBindings",
+                "responsesFetch = client.fetchFor(features.responses)",
+                "chatFetch = client.fetchFor(features.chat)",
+                "embeddingsFetch = client.fetchFor(features.embeddings)",
+                "anthropicFetch = client.fetchFor(features.anthropic)",
+                "consumers.openaiResponses.responses.create",
+                "consumers.openaiChat.chat.completions.create",
+            ):
+                self.assertIn(marker, framework)
 
     def test_path_validation_and_archive_verifier_reject_traversal(self) -> None:
         for value in ("/absolute", "../escape", "a/../escape", "a\\b"):
