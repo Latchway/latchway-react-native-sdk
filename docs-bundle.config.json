@@ -12,14 +12,14 @@
   ],
   "supported_versions": [
     {"name": "@latchway/react-native", "version": "1.0.0", "source": {"file": "package.json", "start_line": 1, "end_line": 16}},
-    {"name": "React Native minimum", "version": "0.82.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
-    {"name": "React Native latest", "version": "0.82.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
+    {"name": "React Native minimum", "version": "0.82.0", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
+    {"name": "React Native latest", "version": "0.82.0", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
     {"name": "iOS", "version": "15.0", "source": {"file": "LatchwayReactNative.podspec", "start_line": 5, "end_line": 21}},
     {"name": "Android API", "version": "24", "source": {"file": "android/build.gradle.kts", "start_line": 24, "end_line": 32}},
-    {"name": "OpenAI JavaScript", "version": "7.8.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
-    {"name": "Vercel AI SDK", "version": "7.0.85", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
-    {"name": "LangChain JavaScript", "version": "1.5.10", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
-    {"name": "Vercel AI Anthropic", "version": "4.0.46", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 17, "end_line": 20}}
+    {"name": "OpenAI JavaScript", "version": "7.8.0", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "Vercel AI SDK", "version": "7.0.85", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "LangChain JavaScript", "version": "1.5.10", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "Vercel AI Anthropic", "version": "4.0.46", "source": {"file": "Conformance/framework/react-native-fetch.json", "start_line": 17, "end_line": 20}}
   ],
   "public_symbols": [
     {"glob": "src/**/*.ts", "pattern": "(?m)^export (?:const|function|class|interface|type|enum) (?P<name>[A-Za-z][A-Za-z0-9_]*)"},
