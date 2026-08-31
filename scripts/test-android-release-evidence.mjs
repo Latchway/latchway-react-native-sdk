@@ -41,10 +41,11 @@ test("checked-out Android source agrees with the locked schema constants", async
   ]) assert.match(source, new RegExp(`^${constant} = "${schema.replaceAll(".", "\\.")}"$`, "mu"));
 });
 
-test("Android dependency contract requires the exact nine release assets", () => {
+test("Android dependency contract requires the exact ten release assets", () => {
   assert.deepEqual(androidReleaseAssetNames("1.0.0"), [
     "latchway-android-1.0.0-maven-repository.zip",
     "latchway-android-1.0.0-central-portal.zip",
+    "docs-bundle-1.0.0.tar.gz",
     "SHA256SUMS",
     "github-release-tag-binding.json",
     "latchway-maven-signing-public-key.asc",

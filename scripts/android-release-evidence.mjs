@@ -17,6 +17,7 @@ export function androidReleaseAssetNames(version) {
   return [
     `latchway-android-${version}-maven-repository.zip`,
     `latchway-android-${version}-central-portal.zip`,
+    `docs-bundle-${version}.tar.gz`,
     "SHA256SUMS",
     "github-release-tag-binding.json",
     "latchway-maven-signing-public-key.asc",

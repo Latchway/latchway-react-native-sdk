@@ -162,13 +162,18 @@ async function verifyDependencySources(lock) {
     lock.contract.core_commit,
     "core source ancestry",
   );
+  const frozenContractPaths = [
+    "api",
+    "compatibility/frameworks.yaml",
+    "compatibility/frameworks.schema.json",
+  ];
   const contractDrift = gitOutput(
     coreRoot,
     "diff",
     "--name-only",
     `${lock.contract.core_commit}..${coreHead}`,
     "--",
-    "api",
+    ...frozenContractPaths,
   );
   if (contractDrift.length !== 0) {
     throw new Error(`Core source changed frozen contract files after ${lock.contract.core_commit}: ${contractDrift}`);

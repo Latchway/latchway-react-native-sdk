@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/Latchway/latchway-react-native-sdk",
+  "release": "v1.0.0",
+  "version": "1.0.0",
+  "package": "@latchway/react-native",
+  "documents": [
+    {"path": "quickstart/create-client.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 50, "end_line": 74}},
+    {"path": "quickstart/streaming-fetch.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 87, "end_line": 113}},
+    {"path": "frameworks/react-native-consumers.ts", "kind": "framework", "source": {"file": "example/src/framework-consumers.ts", "start_line": 31, "end_line": 126}},
+    {"path": "release-notes.md", "kind": "release_notes", "source": {"file": "CHANGELOG.md", "start_line": 1, "end_line": 85}}
+  ],
+  "supported_versions": [
+    {"name": "@latchway/react-native", "version": "1.0.0", "source": {"file": "package.json", "start_line": 1, "end_line": 16}},
+    {"name": "React Native minimum", "version": "0.82.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
+    {"name": "React Native latest", "version": "0.82.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 1, "end_line": 16}},
+    {"name": "iOS", "version": "15.0", "source": {"file": "LatchwayReactNative.podspec", "start_line": 5, "end_line": 21}},
+    {"name": "Android API", "version": "24", "source": {"file": "android/build.gradle.kts", "start_line": 24, "end_line": 32}},
+    {"name": "OpenAI JavaScript", "version": "7.8.0", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "Vercel AI SDK", "version": "7.0.85", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "LangChain JavaScript", "version": "1.5.10", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 12, "end_line": 20}},
+    {"name": "Vercel AI Anthropic", "version": "4.0.46", "source": {"file": "conformance/framework/react-native-fetch.json", "start_line": 17, "end_line": 20}}
+  ],
+  "public_symbols": [
+    {"glob": "src/**/*.ts", "pattern": "(?m)^export (?:const|function|class|interface|type|enum) (?P<name>[A-Za-z][A-Za-z0-9_]*)"},
+    {"file": "src/index.ts", "pattern": "(?m)^\\s{2}(?P<name>[A-Za-z][A-Za-z0-9_]*),?$"},
+    {"file": "src/index.ts", "pattern": "(?m)^export (?:type )?\\{ (?P<name>[A-Za-z][A-Za-z0-9_]*)"},
+    {"file": "src/index.ts", "pattern": "(?m)^export (?:type )?\\{ [A-Za-z][A-Za-z0-9_]*, (?P<name>[A-Za-z][A-Za-z0-9_]*)"}
+  ],
+  "errors": [
+    {"file": "src/errors.ts", "start_line": 6, "end_line": 73, "pattern": "(?m)^\\s{2}(?P<name>[a-z][a-z0-9_]+): true,"}
+  ],
+  "examples": [
+    {"name": "React Native physical-device application", "kind": "physical_device", "source": {"file": "example/src/App.tsx", "start_line": 1, "end_line": 812}},
+    {"name": "OpenAI, Vercel AI, LangChain, and Anthropic consumers", "kind": "framework", "source": {"file": "example/src/framework-consumers.ts", "start_line": 1, "end_line": 126}},
+    {"name": "iOS App Intent extension", "kind": "component", "source": {"file": "example/ios/AppIntents/AppIntents.swift", "start_line": 1, "end_line": 29}},
+    {"name": "Android host application", "kind": "physical_device", "source": {"file": "example/android/app/src/main/java/com/latchwayexample/MainApplication.kt", "start_line": 1, "end_line": 22}}
+  ]
+}

@@ -763,6 +763,14 @@ jobs:
           pnpm verify:reproducible
           pnpm consumer:check --published
         working-directory: latchway-react-native-sdk
+      - name: Build deterministic source-provenanced documentation bundle
+        run: |
+          python3 scripts/build_docs_bundle.py \
+            --output-dir .artifacts \
+            --version "${{ steps.lock.outputs.react_native_version }}" \
+            --commit "${{ needs.promote.outputs.commit }}" \
+            --require-clean
+        working-directory: latchway-react-native-sdk
       - name: Stage exact published-dependency evidence with the package
         run: install -m 600 "$RUNNER_TEMP/published-dependency-evidence.json" .artifacts/published-dependency-evidence.json
         working-directory: latchway-react-native-sdk
@@ -773,6 +781,7 @@ jobs:
           path: |
             latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz
             latchway-react-native-sdk/.artifacts/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256
+            latchway-react-native-sdk/.artifacts/docs-bundle-${{ steps.lock.outputs.react_native_version }}.tar.gz
             latchway-react-native-sdk/.artifacts/package-evidence.json
             latchway-react-native-sdk/.artifacts/build-reproducibility.json
             latchway-react-native-sdk/.artifacts/published-dependency-evidence.json
@@ -1429,6 +1438,7 @@ jobs:
           install -m 600 -- \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz" \
             "../.release/latchway-react-native-${{ steps.lock.outputs.react_native_version }}.tgz.sha256" \
+            "../.release/docs-bundle-${{ steps.lock.outputs.react_native_version }}.tar.gz" \
             ../.release/package-evidence.json \
             ../.release/build-reproducibility.json \
             ../.release/published-dependency-evidence.json \
@@ -1514,6 +1524,7 @@ jobs:
           expected=(
             "latchway-react-native-$RELEASE_VERSION.tgz"
             "latchway-react-native-$RELEASE_VERSION.tgz.sha256"
+            "docs-bundle-$RELEASE_VERSION.tar.gz"
             package-evidence.json
             build-reproducibility.json
             published-dependency-evidence.json
@@ -1570,6 +1581,7 @@ jobs:
           fixed_assets=(
             "$asset_root/latchway-react-native-$RELEASE_VERSION.tgz"
             "$asset_root/latchway-react-native-$RELEASE_VERSION.tgz.sha256"
+            "$asset_root/docs-bundle-$RELEASE_VERSION.tar.gz"
             "$asset_root/package-evidence.json"
             "$asset_root/build-reproducibility.json"
             "$asset_root/published-dependency-evidence.json"
@@ -1587,7 +1599,7 @@ jobs:
             test -s "$asset"
           done
           for asset in "${fixed_assets[@]}"; do printf '%s\n' "${asset##*/}" >> "$RUNNER_TEMP/fixed-assets.txt"; done
-          test "$(sort -u "$RUNNER_TEMP/fixed-assets.txt" | wc -l | tr -d ' ')" = 11
+          test "$(sort -u "$RUNNER_TEMP/fixed-assets.txt" | wc -l | tr -d ' ')" = 12
           fixed_names=$(sort "$RUNNER_TEMP/fixed-assets.txt" | jq --raw-input --slurp 'split("\n")[:-1]')
 
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/tag-ref.json"

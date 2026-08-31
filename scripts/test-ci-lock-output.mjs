@@ -30,3 +30,15 @@ test("Android workflows install packages from the immutable compatibility lock",
     assert.doesNotMatch(workflow, /platforms;android-\$\{\{ steps\.lock\.outputs\.android_compile_sdk \}\}/u, path);
   }
 });
+
+test("standalone source verification freezes every contract-bundle source", async () => {
+  const verifier = await readFile(new URL("scripts/verify-compatibility.mjs", root), "utf8");
+  for (const path of [
+    "api",
+    "compatibility/frameworks.yaml",
+    "compatibility/frameworks.schema.json",
+  ]) {
+    assert.ok(verifier.includes(`    "${path}",`), path);
+  }
+  assert.match(verifier, /"--",\s*\.\.\.frozenContractPaths,/u);
+});

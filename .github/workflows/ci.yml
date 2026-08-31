@@ -48,6 +48,7 @@ jobs:
           python3 scripts/test-verify-gateway-deployment.py
           python3 scripts/test_release_promotion.py
           python3 scripts/test_require_gh_version.py
+          python3 -m unittest scripts/test_build_docs_bundle.py
           bash -n scripts/gateway-deployment-evidence.sh
           bash -n scripts/run-physical-react-native-ios.sh
           bash -n scripts/run-physical-react-native-android.sh

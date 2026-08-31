@@ -94,6 +94,7 @@ async function verifyJavaScript() {
   const archiveName = `latchway-client-${dependency.version}.tgz`;
   const fixed = [
     archiveName,
+    `docs-bundle-${dependency.version}.tar.gz`,
     "SHA256SUMS",
     "build-reproducibility.json",
     "contract-evidence.json",
@@ -116,7 +117,8 @@ async function verifyJavaScript() {
   const releaseAttestation = verifyImmutableReleaseAttestations(
     repository, tag, dependency.source_commit, assets,
   );
-  for (const name of [archiveName, "build-reproducibility.json", "package-evidence.json",
+  for (const name of [archiveName, `docs-bundle-${dependency.version}.tar.gz`,
+    "build-reproducibility.json", "package-evidence.json",
     "post-publish-evidence.json", "npm-registry-version.json", "npm-registry-view.json",
     "npm-attestations.json", "npm-audit-signatures.json", "npm-registry-evidence-manifest.json",
     ...adoptions]) {
@@ -319,6 +321,7 @@ async function verifyIOS() {
   const names = [
     archiveName,
     `${archiveName}.sha256`,
+    `docs-bundle-${dependency.version}.tar.gz`,
     "cocoapods-published-podspec.json",
     "cocoapods-reviewed-podspec.json",
     "cocoapods-release-evidence.json",

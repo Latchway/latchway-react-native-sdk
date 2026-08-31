@@ -155,6 +155,7 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   assert.ok(npmPublish < registryVerify && registryVerify < assetClosure
     && assetClosure < evidenceAttestation && evidenceAttestation < githubPublish);
   for (const asset of [
+    "docs-bundle-$RELEASE_VERSION.tar.gz",
     "npm-registry-version.json",
     "npm-registry-view.json",
     "npm-attestations.json",
