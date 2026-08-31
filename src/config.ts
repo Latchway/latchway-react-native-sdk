@@ -3,6 +3,7 @@ import type {
   LatchwayComponentOptions,
   LatchwayOptions,
   ReactNativeDirectAttestationComponent,
+  ReactNativeIOSComponent,
 } from "./types.js";
 import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 
@@ -13,6 +14,7 @@ export interface RuntimeConfiguration {
   identityProvider: string;
   appVersion: string;
   getIdentityToken: () => Promise<string>;
+  appleSharedKeychainAccessGroups: readonly string[];
   nativeJSON: string;
   fingerprint: string;
   scope: string;
@@ -95,10 +97,51 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     identityProvider,
     appVersion,
     getIdentityToken,
+    appleSharedKeychainAccessGroups: Array.from(legacySharedKeychainAccessGroups),
     nativeJSON,
     fingerprint: nativeJSON,
     scope: `${baseURL.origin}|${applicationID}|${environment}`,
   };
+}
+
+export function encodeIOSComponentDescriptors(
+  values: readonly ReactNativeIOSComponent[],
+  sharedKeychainAccessGroups: readonly string[],
+): string {
+  if (!runtimeArray(values) || values.length === 0 || values.length > 256) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "At least one native iOS component descriptor is required.",
+    );
+  }
+  const components = values.map((value) => validateIOSComponent(value, sharedKeychainAccessGroups));
+  if (new Set(components.map((component) => component.definitionID)).size !== components.length) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "Native iOS component definition IDs must be unique in one operation.",
+    );
+  }
+  return boundedComponentJSON(components);
+}
+
+export function encodeIOSComponentDescriptor(
+  value: ReactNativeIOSComponent,
+  sharedKeychainAccessGroups: readonly string[],
+): string {
+  return boundedComponentJSON(validateIOSComponent(value, sharedKeychainAccessGroups));
+}
+
+function boundedComponentJSON(value: ReactNativeIOSComponent | readonly ReactNativeIOSComponent[]): string {
+  const encoded = JSON.stringify(value);
+  // Every validated descriptor field is ASCII, so UTF-16 length is the exact
+  // UTF-8 byte length accepted by the native bridge.
+  if (encoded.length > 65_536) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "Native iOS component descriptors exceed the 64 KiB bridge limit.",
+    );
+  }
+  return encoded;
 }
 
 export function configureComponent(options: LatchwayComponentOptions): RuntimeComponentConfiguration {
@@ -264,8 +307,47 @@ function validateDirectAttestationComponent(value: ReactNativeDirectAttestationC
   };
 }
 
+function validateIOSComponent(
+  value: ReactNativeIOSComponent,
+  sharedKeychainAccessGroups: readonly string[],
+): ReactNativeIOSComponent {
+  const kinds = new Set([
+    "widget",
+    "share_extension",
+    "app_intent_extension",
+    "notification_service_extension",
+    "action_extension",
+    "sso_extension",
+  ]);
+  if (!isRecord(value) ||
+      !hasOnlyKeys(value, ["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"]) ||
+      typeof value.definitionID !== "string" || !validIdentifier(value.definitionID) ||
+      typeof value.kind !== "string" || !kinds.has(value.kind) ||
+      !concreteKeychainAccessGroup(value.keychainAccessGroup) ||
+      !sharedKeychainAccessGroups.includes(value.keychainAccessGroup) ||
+      !Array.isArray(value.requestedFeatures) || value.requestedFeatures.length === 0 ||
+      value.requestedFeatures.length > 256 ||
+      !value.requestedFeatures.every((feature) => typeof feature === "string" && validIdentifier(feature)) ||
+      new Set(value.requestedFeatures).size !== value.requestedFeatures.length) {
+    throw new LatchwayError(
+      "client_configuration_invalid",
+      "The native iOS component descriptor is invalid or its Keychain group is not explicitly shared.",
+    );
+  }
+  return {
+    definitionID: value.definitionID,
+    kind: value.kind,
+    keychainAccessGroup: value.keychainAccessGroup,
+    requestedFeatures: Array.from(value.requestedFeatures as string[]),
+  };
+}
+
 function validIdentifier(value: string): boolean {
   return /^[a-z][a-z0-9_-]{0,62}$/u.test(value);
+}
+
+function runtimeArray(value: unknown): boolean {
+  return Array.isArray(value);
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, names: readonly string[]): boolean {

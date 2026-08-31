@@ -39,6 +39,7 @@ class PhysicalExampleHostTests(unittest.TestCase):
         cls.app_intent = (ROOT / "example/ios/AppIntents/AppIntents.swift").read_text(
             encoding="utf-8"
         )
+        cls.podfile = (ROOT / "example/ios/Podfile").read_text(encoding="utf-8")
         cls.project = (
             ROOT / "example/ios/LatchwayExample.xcodeproj/project.pbxproj"
         ).read_text(encoding="utf-8")
@@ -367,13 +368,47 @@ class PhysicalExampleHostTests(unittest.TestCase):
         self.assertIn("invocation fails closed", self.readme)
         self.assertIn("`attestation_unsupported`", self.readme)
 
-    def test_app_intents_target_is_explicitly_not_delegated_request_evidence(self) -> None:
-        self.assertIn("throw LatchwayDelegatedRequestUnavailable()", self.app_intent)
-        self.assertIn("delegated component requests are unsupported", self.app_intent.lower())
-        self.assertNotIn("LatchwayExtensionClient", self.app_intent)
+    def test_app_intents_release_fails_closed_while_debug_runs_delegated_only(self) -> None:
+        debug, release = self.app_intent.split("#else", 1)
+        self.assertIn("#if DEBUG", debug)
+        self.assertIn("LatchwayExtensionClient", debug)
+        self.assertIn("clientRuntime: .reactNativeIOS", debug)
+        self.assertNotIn("import LatchwayAppExtensions", debug)
+        self.assertIn("for try await _ in streaming.bytes", debug)
+        self.assertLess(
+            debug.index("LatchwayDebugIntentProofStore.readChallenge("),
+            debug.index("let client = try LatchwayExtensionClient("),
+        )
+        self.assertLess(
+            debug.index("streaming.finish()"),
+            debug.index("LatchwayDebugIntentProofStore.writeReceipt("),
+        )
+        self.assertIn('"run_id": runID', debug)
+        write_receipt = debug.split("static func writeReceipt", 1)[1].split(
+            "private static func keychainCoordinates", 1
+        )[0]
+        self.assertIn(
+            "guard try readChallenge(accessGroup: accessGroup) == runID else",
+            write_receipt,
+        )
+        self.assertLess(
+            write_receipt.index("guard try readChallenge(accessGroup: accessGroup) == runID else"),
+            write_receipt.index("SecItemDelete(coordinates as CFDictionary)"),
+        )
+        self.assertIn('static let challengeAccount = "challenge-v1"', debug)
+        self.assertIn('static let receiptAccount = "receipt-v1"', debug)
+        self.assertIn("guard data.count <= 512", debug)
+        self.assertIn("throw LatchwayDelegatedRequestUnavailable()", release)
+        self.assertNotIn("LatchwayExtensionClient", release)
         self.assertNotIn("createLatchwayComponentClient", self.app_intent)
+        self.assertEqual(2, self.podfile.count("pod 'Latchway/AppExtensions'"))
+        self.assertEqual(2, self.podfile.count(":configurations => ['Debug']"))
+        app_intents_target = self.podfile.split("target 'AppIntents' do", 1)[1].split(
+            "post_install do", 1
+        )[0]
+        self.assertNotIn("inherit!", app_intents_target)
         self.assertIn("does not host a React Native JavaScript runtime", self.readme)
-        self.assertIn("delegated-component execution evidence", self.readme)
+        self.assertIn("Release fixture", self.readme)
 
     def test_ios_targets_have_distinct_overridable_bundle_and_profile_settings(self) -> None:
         for marker in (

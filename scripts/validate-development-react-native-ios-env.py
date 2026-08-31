@@ -17,6 +17,7 @@ PROJECT_NUMBER = re.compile(r"^[1-9][0-9]{5,18}$")
 
 REQUIRED_NAMES = frozenset({
     "LATCHWAY_APPLICATION_ID",
+    "LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID",
     "LATCHWAY_BASE_URL",
     "LATCHWAY_CONFORMANCE_AUTORUN",
     "LATCHWAY_DEVELOPMENT_DEVICE_BOOTSTRAP",
@@ -112,6 +113,8 @@ def validate_environment(
         raise InvalidEnvironment("development root Keychain access group mismatch")
     if values["LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS"] != expected_shared_group:
         raise InvalidEnvironment("development legacy shared Keychain access groups mismatch")
+    if IDENTIFIER.fullmatch(values["LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID"]) is None:
+        raise InvalidEnvironment("development App Intent component definition ID is invalid")
 
     feature_names = (
         "LATCHWAY_FEATURE",
@@ -146,10 +149,11 @@ def main() -> int:
     parser.add_argument("bundle_identifier")
     parser.add_argument("app_id_prefix")
     parser.add_argument("shared_keychain_access_group")
+    parser.add_argument("--emit-app-intent-build-values", action="store_true")
     arguments = parser.parse_args()
     try:
         validate_environment(
-            load_environment(arguments.environment_file),
+            values := load_environment(arguments.environment_file),
             arguments.bundle_identifier,
             arguments.app_id_prefix,
             arguments.shared_keychain_access_group,
@@ -157,6 +161,16 @@ def main() -> int:
     except InvalidEnvironment as failure:
         print(str(failure), file=sys.stderr)
         return 2
+    if arguments.emit_app_intent_build_values:
+        for name in (
+            "LATCHWAY_BASE_URL",
+            "LATCHWAY_APPLICATION_ID",
+            "LATCHWAY_ENVIRONMENT",
+            "LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID",
+            "LATCHWAY_FEATURE",
+            "LATCHWAY_MODEL",
+        ):
+            print(values[name])
     return 0
 
 

@@ -5,7 +5,7 @@ import { LatchwayError } from "@latchway/client";
 import type { LatchwayErrorCode } from "@latchway/client";
 import { createLatchwayClient, createLatchwayComponentClient, errorFromResponse } from "../src/index.js";
 import { fromNativeError } from "../src/errors.js";
-import type { LatchwayClient, LatchwayComponentClient } from "../src/types.js";
+import type { LatchwayClient, LatchwayComponentClient, ReactNativeIOSComponent } from "../src/types.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 interface ProtocolFixture {
@@ -87,6 +87,12 @@ const DIRECT_COMPONENT = {
   definitionID: "action_extension",
   kind: "action_extension",
   keychainAccessGroup: "ABCDE12345.com.example.app.action-extension",
+  requestedFeatures: ["habit_assistant"],
+} as const;
+const APP_INTENT_COMPONENT = {
+  definitionID: "app_intent",
+  kind: "app_intent_extension",
+  keychainAccessGroup: "ABCDE12345.com.example.app.shared",
   requestedFeatures: ["habit_assistant"],
 } as const;
 let restoreNative: (() => void) | undefined;
@@ -762,6 +768,157 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.lastIdentityToken).toBe("app-owned-identity-token");
   });
 
+  it("prepares native iOS components with only a public descriptor crossing JavaScript", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    const diagnostics = await client.prepareComponents([APP_INTENT_COMPONENT]);
+
+    expect(native.prepareComponentInputs).toHaveLength(1);
+    expect(JSON.parse(native.prepareComponentInputs[0]?.componentsJSON ?? "null"))
+      .toEqual([APP_INTENT_COMPONENT]);
+    expect(native.prepareComponentInputs[0]?.identityToken).toBe("app-owned-identity-token");
+    expect(diagnostics).toEqual([{
+      familyID: "fam_0000000000000001",
+      componentID: "cmp_0000000000000001",
+      definitionID: APP_INTENT_COMPONENT.definitionID,
+      keychainAccessGroup: APP_INTENT_COMPONENT.keychainAccessGroup,
+      keyAvailable: true,
+      keyStorage: "secure_enclave",
+      grantAvailable: true,
+      sessionAvailable: false,
+      trustSource: "delegated_from_attested_root",
+      trustExpiresAt: "2026-08-28T00:00:00Z",
+      containingAppActionRequired: false,
+    }]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private|jwk/iu);
+  });
+
+  it("rejects unshared, duplicate, or evidence-bearing host component descriptors", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    await expect(client.prepareComponents([{
+      ...APP_INTENT_COMPONENT,
+      keychainAccessGroup: "ABCDE12345.com.example.app.unshared",
+    }])).rejects.toMatchObject({ code: "client_configuration_invalid" });
+    await expect(client.prepareComponents([APP_INTENT_COMPONENT, APP_INTENT_COMPONENT]))
+      .rejects.toMatchObject({ code: "client_configuration_invalid" });
+    await expect(client.prepareComponents([{
+      ...APP_INTENT_COMPONENT,
+      attestationEvidence: "synthetic",
+    } as never])).rejects.toMatchObject({ code: "client_configuration_invalid" });
+    expect(native.prepareComponentInputs).toHaveLength(0);
+  });
+
+  it("fails closed if prepared component diagnostics contain credential material", async () => {
+    const native = new FakeNativeModule();
+    native.preparedComponentDiagnosticsExtra = { refreshToken: "synthetic-secret" };
+    install(native);
+    const client = create();
+
+    await expect(client.prepareComponents([APP_INTENT_COMPONENT])).rejects.toMatchObject({
+      code: "protocol_response_invalid",
+      message: "Latchway native output crossed the credential boundary.",
+    });
+  });
+
+  it("replaces one component through root identity and returns redacted diagnostics", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    const diagnostics = await client.replaceComponent(APP_INTENT_COMPONENT);
+
+    expect(native.replaceComponentInputs).toEqual([{
+      componentJSON: JSON.stringify(APP_INTENT_COMPONENT),
+      identityToken: "app-owned-identity-token",
+    }]);
+    expect(diagnostics).toMatchObject({
+      definitionID: APP_INTENT_COMPONENT.definitionID,
+      keyStorage: "secure_enclave",
+      trustSource: "delegated_from_attested_root",
+    });
+  });
+
+  it("reads root-side component diagnostics without requesting identity", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const identity = vi.fn(async () => "app-owned-identity-token");
+    const client = create({ getIdentityToken: identity });
+    await client.ready;
+    identity.mockClear();
+
+    const diagnostics = await client.componentDiagnostics(APP_INTENT_COMPONENT);
+
+    expect(identity).not.toHaveBeenCalled();
+    expect(native.rootComponentDiagnosticsInputs).toEqual([
+      JSON.stringify(APP_INTENT_COMPONENT),
+    ]);
+    expect(diagnostics.definitionID).toBe(APP_INTENT_COMPONENT.definitionID);
+  });
+
+  it("snapshots descriptors before asynchronous native component operations", async () => {
+    for (const operation of ["prepare", "replace", "diagnostics"] as const) {
+      const native = new FakeNativeModule();
+      let release!: () => void;
+      native.componentOperationGate = new Promise<void>((resolve) => { release = resolve; });
+      install(native);
+      const component: ReactNativeIOSComponent = {
+        ...APP_INTENT_COMPONENT,
+        requestedFeatures: [...APP_INTENT_COMPONENT.requestedFeatures],
+      };
+      const result = operation === "prepare"
+        ? create().prepareComponents([component])
+        : operation === "replace"
+          ? create().replaceComponent(component)
+          : create().componentDiagnostics(component);
+      component.definitionID = "mutated_definition";
+      (component.requestedFeatures as string[])[0] = "mutated_feature";
+      release();
+
+      const diagnostics = await result;
+      const first = Array.isArray(diagnostics) ? diagnostics[0] : diagnostics;
+      expect(first?.definitionID, operation).toBe(APP_INTENT_COMPONENT.definitionID);
+      restoreNative?.();
+      restoreNative = undefined;
+    }
+  });
+
+  it("rejects component descriptor batches larger than the native bridge limit", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const identity = vi.fn(async () => "app-owned-identity-token");
+    const client = create({ getIdentityToken: identity });
+    const features = Array.from({ length: 128 }, (_, index) => `feature_${index}`);
+    const components: ReactNativeIOSComponent[] = Array.from({ length: 256 }, (_, index) => ({
+      ...APP_INTENT_COMPONENT,
+      definitionID: `app_intent_${index}`,
+      requestedFeatures: features,
+    }));
+
+    await expect(client.prepareComponents(components)).rejects.toMatchObject({
+      code: "client_configuration_invalid",
+    });
+    expect(native.prepareComponentInputs).toHaveLength(0);
+    expect(identity).not.toHaveBeenCalled();
+  });
+
+  it("revokes one native iOS component through its exact public descriptor", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    await client.revokeComponent(APP_INTENT_COMPONENT);
+
+    expect(native.revokeComponentInputs).toEqual([{
+      componentJSON: JSON.stringify(APP_INTENT_COMPONENT),
+      identityToken: "app-owned-identity-token",
+    }]);
+  });
+
   it("revokes the complete installation family through the native boundary", async () => {
     const native = new FakeNativeModule();
     install(native);
@@ -769,6 +926,20 @@ describe("React Native Latchway native-owned fetch", () => {
     await client.revokeCurrentInstallationFamily();
     expect(native.revokeFamilyCalls).toBe(1);
     expect(native.lastIdentityToken).toBe("app-owned-identity-token");
+  });
+
+  it("retires supplied component state during complete family revocation", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+
+    await client.revokeCurrentInstallationFamily([APP_INTENT_COMPONENT]);
+
+    expect(native.revokeFamilyCalls).toBe(0);
+    expect(native.revokeFamilyComponentInputs).toEqual([{
+      componentsJSON: JSON.stringify([APP_INTENT_COMPONENT]),
+      identityToken: "app-owned-identity-token",
+    }]);
   });
 
   it("exports canonical HTTP problem conversion", async () => {
@@ -978,10 +1149,17 @@ class FakeNativeModule {
   metadataExtra: Record<string, unknown> = {};
   chunkExtra: Record<string, unknown> = {};
   componentDiagnosticsExtra: Record<string, unknown> = {};
+  preparedComponentDiagnosticsExtra: Record<string, unknown> = {};
+  componentOperationGate: Promise<void> | undefined;
   readonly requests: NativeRequestRecord[] = [];
   directAttestationCalls = 0;
   componentConfigureError: Error | undefined;
   readonly componentConfigureInputs: Array<{ configurationJSON: string; componentJSON: string }> = [];
+  readonly prepareComponentInputs: Array<{ componentsJSON: string; identityToken: string }> = [];
+  readonly replaceComponentInputs: Array<{ componentJSON: string; identityToken: string }> = [];
+  readonly rootComponentDiagnosticsInputs: string[] = [];
+  readonly revokeComponentInputs: Array<{ componentJSON: string; identityToken: string }> = [];
+  readonly revokeFamilyComponentInputs: Array<{ componentsJSON: string; identityToken: string }> = [];
   readonly configureInputs: string[] = [];
   readonly configuredComponents = new Map<string, typeof DIRECT_COMPONENT>();
   readonly cancelCalls: string[] = [];
@@ -1134,6 +1312,69 @@ class FakeNativeModule {
     });
   }
 
+  async prepareComponents(
+    _clientID: string,
+    _operationID: string,
+    identityToken: string,
+    componentsJSON: string,
+  ): Promise<string> {
+    if (this.error !== undefined) throw this.error;
+    this.prepareComponentInputs.push({ componentsJSON, identityToken });
+    if (this.componentOperationGate !== undefined) await this.componentOperationGate;
+    const components = JSON.parse(componentsJSON) as Array<typeof APP_INTENT_COMPONENT>;
+    return JSON.stringify({
+      components: components.map((component) => ({
+        familyID: "fam_0000000000000001",
+        componentID: "cmp_0000000000000001",
+        definitionID: component.definitionID,
+        keychainAccessGroup: component.keychainAccessGroup,
+        keyAvailable: true,
+        keyStorage: "secure_enclave",
+        grantAvailable: true,
+        sessionAvailable: false,
+        trustSource: "delegated_from_attested_root",
+        trustExpiresAt: "2026-08-28T00:00:00Z",
+        containingAppActionRequired: false,
+        ...this.preparedComponentDiagnosticsExtra,
+      })),
+    });
+  }
+
+  async revokeComponent(
+    _clientID: string,
+    _operationID: string,
+    identityToken: string,
+    componentJSON: string,
+  ): Promise<void> {
+    if (this.error !== undefined) throw this.error;
+    this.revokeComponentInputs.push({ componentJSON, identityToken });
+  }
+
+  async replaceComponent(
+    _clientID: string,
+    _operationID: string,
+    identityToken: string,
+    componentJSON: string,
+  ): Promise<string> {
+    if (this.error !== undefined) throw this.error;
+    this.replaceComponentInputs.push({ componentJSON, identityToken });
+    if (this.componentOperationGate !== undefined) await this.componentOperationGate;
+    const component = JSON.parse(componentJSON) as typeof APP_INTENT_COMPONENT;
+    return JSON.stringify(componentDiagnosticsFixture(component, this.preparedComponentDiagnosticsExtra));
+  }
+
+  async rootComponentDiagnostics(
+    _clientID: string,
+    _operationID: string,
+    componentJSON: string,
+  ): Promise<string> {
+    if (this.error !== undefined) throw this.error;
+    this.rootComponentDiagnosticsInputs.push(componentJSON);
+    if (this.componentOperationGate !== undefined) await this.componentOperationGate;
+    const component = JSON.parse(componentJSON) as typeof APP_INTENT_COMPONENT;
+    return JSON.stringify(componentDiagnosticsFixture(component, this.preparedComponentDiagnosticsExtra));
+  }
+
   async revoke(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
     this.lastIdentityToken = identityToken;
     if (this.error !== undefined) throw this.error;
@@ -1143,6 +1384,16 @@ class FakeNativeModule {
     this.lastIdentityToken = identityToken;
     this.revokeFamilyCalls += 1;
     if (this.error !== undefined) throw this.error;
+  }
+
+  async revokeFamilyWithComponents(
+    _clientID: string,
+    _operationID: string,
+    identityToken: string,
+    componentsJSON: string,
+  ): Promise<void> {
+    if (this.error !== undefined) throw this.error;
+    this.revokeFamilyComponentInputs.push({ componentsJSON, identityToken });
   }
 
   cancel(_clientID: string, operationID: string): void {
@@ -1160,4 +1411,24 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+function componentDiagnosticsFixture(
+  component: typeof APP_INTENT_COMPONENT,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    familyID: "fam_0000000000000001",
+    componentID: "cmp_0000000000000001",
+    definitionID: component.definitionID,
+    keychainAccessGroup: component.keychainAccessGroup,
+    keyAvailable: true,
+    keyStorage: "secure_enclave",
+    grantAvailable: true,
+    sessionAvailable: false,
+    trustSource: "delegated_from_attested_root",
+    trustExpiresAt: "2026-08-28T00:00:00Z",
+    containingAppActionRequired: false,
+    ...extra,
+  };
 }

@@ -113,7 +113,40 @@ extension-shared group in `legacySharedKeychainAccessGroups`; native code scans
 only exact root-record coordinates and surfaces `storage_unavailable` if stale
 implicit root state requires an explicit migration.
 
-Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them. `revokeCurrentInstallation()` removes only the current installation; `revokeCurrentInstallationFamily()` revokes the full wire-v2 family and retires the root native key and session state.
+Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them. `revokeCurrentInstallation()` removes only the root installation and leaves independently provisioned family components addressable.
+
+The root application manages the complete native iOS component lifecycle with
+public descriptors:
+
+```ts
+import type { ReactNativeIOSComponent } from "@latchway/react-native";
+
+const appIntent: ReactNativeIOSComponent = {
+  definitionID: "habit_app_intent",
+  kind: "app_intent_extension",
+  keychainAccessGroup: "ABCDE12345.com.example.app.app-intent",
+  requestedFeatures: ["habit_assistant"],
+};
+
+const [prepared] = await latchway.prepareComponents([appIntent]);
+const replaced = await latchway.replaceComponent(appIntent);
+const localState = await latchway.componentDiagnostics(appIntent);
+await latchway.revokeComponent(appIntent);
+
+// On sign-out, pass the same complete descriptor set used for preparation.
+await latchway.revokeCurrentInstallationFamily([appIntent]);
+```
+
+Each descriptor contains exactly a definition ID, kind, fully resolved Keychain
+access group, and requested feature IDs. Its access group must be signed into
+both targets and listed in `apple.legacySharedKeychainAccessGroups`.
+Preparation, replacement, component revocation, and family retirement acquire
+the root identity only transiently inside native code. Root-side
+`componentDiagnostics` reads redacted local state without acquiring identity.
+Inputs are normalized before asynchronous work, and all component credentials,
+keys, grants, and sessions remain native. Family retirement cannot discover
+component access groups safely, so omitting a prepared descriptor leaves its
+server-revoked local material for the application to retire explicitly.
 
 An independently executing iOS action or SSO extension whose containing app
 has already provisioned its component descriptor can inspect its isolated,
@@ -161,16 +194,26 @@ with `attestation_unsupported`; their presence is not a claim that iOS can
 produce that state. Only redacted component diagnostics return. Android also
 fails closed for direct component attestation.
 
-The example's `AppIntents.appex` is a signing, bundle-identity, and shared
-Keychain-entitlement fixture. The root's signed groups are exactly its private
-app-ID group first and the shared component group second; App Intents signs only
-the shared group. Consequently, implicit root Keychain writes remain private
-and the extension cannot access root key, credential, or session state. It does not host a React Native JavaScript runtime or expose a delegated request
-operation; its sample intent fails closed with an
-unsupported error. Consequently, building or invoking that intent is not
-delegated-component execution evidence. The React Native v1 physical gate
-claims root App Attest only and imports separately validated native iOS
-component evidence without re-attributing it to this App Intents target.
+The example's `AppIntents.appex` does not host a React Native JavaScript runtime.
+In Debug only, its separate CocoaPods target links `Latchway/AppExtensions`
+(Swift module `Latchway`) and constructs a native `LatchwayExtensionClient` with
+runtime `react_native_ios`. After the root prepares the descriptor, the intent
+publishes a nonsecret exact-run challenge in the shared Keychain immediately
+before its waiting marker. The intent captures that challenge before creating
+its client, proves an independently keyed delegated session, fully consumes one
+successful bounded Responses body, rechecks that the challenge is still current,
+and then echoes it in a bounded shared-Keychain receipt. Resume accepts only the
+native-captured exact run and deletes both challenge and receipt. The receipt
+contains only the nonsecret `dev_<32hex>` run nonce, status booleans, and a
+timestamp; it contains no component, installation, or user IDs, tokens, proofs,
+request body, or response body. The intent never receives the root identity or
+root-private Keychain state.
+
+The Release fixture has no AppExtensions dependency or executable Latchway
+client path and its intent fails closed with an unsupported error. Both variants
+retain private-first/shared-second root entitlements and a shared-only extension
+entitlement. The local Debug intent is integration proof only and does not
+broaden or replace the protected Release physical-evidence claim.
 
 Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. JavaScript never clones or replays an authenticated request; any bounded pre-dispatch retry is exclusively a native transport decision. Android installs the locked Latchway OkHttp interceptor, origin guard, and authenticator. iOS uses the locked feature transport, whose private redirect-rejecting URL session classifies at most 64 KiB of one canonical pre-dispatch rejection before its single safe retry.
 
@@ -182,7 +225,7 @@ The compatible subset guarantees request method, headers, body, `AbortSignal`, r
 
 ## Security boundary
 
-The root client's only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of the native operation. The separate component client has no identity callback and cannot acquire the containing app's native root lease. Its component JSON contains only definition ID, kind, fully resolved Keychain access group, and requested feature IDs. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Native code attaches Authorization and DPoP, sends the request, and owns the response stream. Authorization, DPoP, access tokens, refresh tokens, private keys, attestation evidence, and reusable credentials never return to JavaScript.
+The root client's only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of a native operation that requires identity. Root component descriptors and extension-client descriptors contain only definition ID, kind, fully resolved Keychain access group, and requested feature IDs. Root-side and extension-side component diagnostics do not acquire identity. The separate component client cannot acquire the containing app's native root lease. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Native code attaches Authorization and DPoP, sends the request, and owns the response stream. Authorization, DPoP, access tokens, refresh tokens, private keys, attestation evidence, and reusable credentials never return to JavaScript.
 
 Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, transport-owned headers, and Latchway protocol headers are removed before the request crosses the bridge. This permits SDKs that require a placeholder API-key option without forwarding that placeholder or a real provider credential. Provider-credential query names are rejected, including percent-encoded and case-varied names. Insecure HTTP is limited to explicitly enabled loopback conformance.
 
@@ -219,9 +262,9 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
 current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `1fa6b2bf67906390e7af9be81fc946dedae71741`, and
+window), core commit `b07a4762f08e6b68d5829cda500bae9d79e5f16c`, and
 bundle SHA-256
-`33c57d9dfeb227ca2472a4a4a964e6df37f4932699cacb423dee11ce15e8824e`.
+`397a3920aaa2ed0438a96156cd8a51f0fa85ac2e3fb9266b4fe79618812a3d9a`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and

@@ -38,7 +38,12 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "LATCHWAY_DEVELOPMENT_DEVICE_BOOTSTRAP",
             "NativeModules.LatchwayDevelopmentBootstrap",
             "consumeDevelopmentIdentityGrant(",
+            "developmentVerificationPhase()",
+            "clearDevelopmentAppIntentArtifacts(",
+            "markDevelopmentAppIntentWaiting(",
+            "consumeDevelopmentAppIntentReceipt(",
             "completeDevelopmentVerification()",
+            "completeDevelopmentAbort()",
             "failDevelopmentVerification(",
             "developmentHTTPFailureCode(result)",
             "result.problemCode ?? result.diagnosticProblemCode",
@@ -76,20 +81,66 @@ class DevelopmentExampleHostTests(unittest.TestCase):
         self.assertNotIn("grant", self.app.split("useState(", 1)[0])
 
         verification = self.app.split("async function runDevelopmentVerification", 1)[1]
+        initial = verification.split('if (phase === "resume")', 1)[1]
+        initial = initial.split("await sink.clearDevelopmentAppIntentArtifacts", 1)[1]
         ordered = (
             "await developmentIdentityToken()",
-            "await freshClientAfterRevocation(current, makeClient)",
+            "await current.revokeCurrentInstallationFamily([component])",
+            "measured = makeClient()",
             'measured.fetch("/v1/responses"',
             "await measured.diagnostics()",
             "await measured.quota(deployment.feature)",
-            "await measured.revokeCurrentInstallation()",
-            "await measured.dispose()",
-            "await firebaseAuth().signOut()",
-            "firebaseAuth().currentUser !== null",
-            "completeDevelopmentVerification()",
+            "await measured.prepareComponents([component])",
+            'setStatus("Waiting for the Run Latchway Proof App Intent")',
+            "await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup)",
         )
-        positions = [verification.index(marker) for marker in ordered]
+        positions = [initial.index(marker) for marker in ordered]
         self.assertEqual(positions, sorted(positions))
+        after_waiting_marker = initial.split(
+            "await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup)", 1
+        )[1].split("} catch", 1)[0]
+        self.assertNotIn("await ", after_waiting_marker)
+        self.assertNotIn("measured.dispose()", after_waiting_marker)
+        self.assertLess(
+            initial.index("await measured.prepareComponents([component])"),
+            initial.index("await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup)"),
+        )
+        self.assertLess(
+            initial.index("familyCleanupRequired = true"),
+            initial.index('failureStage = "family_revoke"'),
+        )
+        self.assertLess(
+            initial.index('failureStage = "family_revoke"'),
+            initial.index("await current.revokeCurrentInstallationFamily([component])"),
+        )
+        self.assertLess(
+            initial.index('failureStage = "native_session_establishment"'),
+            initial.index("await current.dispose()"),
+        )
+        abort = verification.split('if (phase === "abort" || phase === "abort_sign_out")', 1)[1]
+        abort = abort.split('if (phase === "resume")', 1)[0]
+        self.assertLess(
+            abort.index("await sink.clearDevelopmentAppIntentArtifacts(component.keychainAccessGroup)"),
+            abort.index("await current.revokeCurrentInstallationFamily([component])"),
+        )
+        finalizer = verification.split("} finally {", 1)[1].split(
+            "function developmentAppIntentComponent", 1
+        )[0]
+        self.assertIn('terminalFailure?.stage !== "family_revoke"', finalizer)
+        self.assertIn("developmentIdentityEstablished && !familyCleanupRequired", finalizer)
+        self.assertIn('stage: "family_revoke"', finalizer)
+        self.assertIn('stage: "firebase_sign_out"', finalizer)
+        self.assertLess(
+            finalizer.index("await measured.revokeCurrentInstallationFamily([component])"),
+            finalizer.index("await firebaseAuth().signOut()"),
+        )
+        self.assertLess(
+            finalizer.index("await firebaseAuth().signOut()"),
+            finalizer.index("await sink.failDevelopmentVerification("),
+        )
+        verification_prefix = verification.split("const phase =", 1)[0]
+        self.assertLess(verification_prefix.index("try {"), verification_prefix.index("sink ="))
+        self.assertLess(verification_prefix.index("try {"), verification_prefix.index("component ="))
 
     def test_separate_native_module_captures_before_react_native_and_is_debug_only(self) -> None:
         for marker in (
@@ -102,6 +153,10 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             'unsetenv("LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT")',
             'unsetenv("LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256")',
             'unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID")',
+            'unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME")',
+            'unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT")',
+            "dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(180 * NSEC_PER_SEC))",
+            "LatchwayDevelopmentCapturedGrant = nil",
             "TARGET_OS_IOS",
             "!TARGET_OS_SIMULATOR",
             "!TARGET_OS_MACCATALYST",
@@ -109,10 +164,16 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "LatchwayDevelopmentDebuggerAttached",
             "LatchwayDevelopmentTesting",
             "completeDevelopmentVerification",
+            "completeDevelopmentAbort",
+            "consumeDevelopmentAppIntentReceipt",
+            "clearDevelopmentAppIntentArtifacts",
+            "markDevelopmentAppIntentWaiting",
             "failDevelopmentVerification",
             "LatchwayDevelopmentTerminalFailureRunID",
             "latchway-development-verification.json",
             'diagnostics_app_attest_app_verified_react_native_ios',
+            'app_intent_delegated_session',
+            'installation_family_revoked',
         ):
             self.assertIn(marker, self.native)
         self.assertLess(
@@ -121,6 +182,36 @@ class DevelopmentExampleHostTests(unittest.TestCase):
         )
         self.assertIn("LatchwayDevelopmentCapturedGrant = nil", self.native)
         self.assertIn("LatchwayDevelopmentGrantConsumed", self.native)
+        mark = self.native.split("RCT_REMAP_METHOD(markDevelopmentAppIntentWaiting", 1)[1]
+        mark = mark.split("RCT_REMAP_METHOD(consumeDevelopmentAppIntentReceipt", 1)[0]
+        self.assertLess(
+            mark.index("LatchwayDevelopmentWriteAppIntentChallenge(accessGroup, runID)"),
+            mark.index("LatchwayDevelopmentWriteMarker(marker)"),
+        )
+        self.assertGreaterEqual(
+            mark.count("LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup)"),
+            3,
+        )
+        consume_receipt = self.native.split(
+            "RCT_REMAP_METHOD(consumeDevelopmentAppIntentReceipt", 1
+        )[1].split("RCT_REMAP_METHOD(consumeDevelopmentIdentityGrant", 1)[0]
+        for marker in (
+            "LatchwayDevelopmentChallengeAccount",
+            "LatchwayDevelopmentReceiptAccount",
+            "LatchwayDevelopmentVerificationRunID",
+            '[challenge isEqualToString:expectedRunID]',
+            '[receipt[@"run_id"] isEqual:expectedRunID]',
+            "LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup)",
+        ):
+            self.assertIn(marker, consume_receipt)
+        self.assertLess(
+            consume_receipt.index("NSString *expectedRunID"),
+            consume_receipt.index("BOOL valid ="),
+        )
+        self.assertLess(
+            consume_receipt.index("BOOL valid ="),
+            consume_receipt.index("LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup)"),
+        )
         take_grant = self.native.split("static NSString *LatchwayDevelopmentTakeGrant", 1)[1]
         take_grant = take_grant.split("static BOOL LatchwayDevelopmentDebuggerAttached", 1)[0]
         self.assertIn(
@@ -256,6 +347,8 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT",
             "DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256",
             "DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID",
+            "DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME",
+            "DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT",
             "devicectl device install app",
             "devicectl device process launch",
             "--terminate-existing",
@@ -273,27 +366,39 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "devicectl device copy from",
             "latchway-development-verification.json",
             "development React Native iOS verification accepted",
-            "development verification failed at",
+            "devicectl device notification observe",
+            "shortcuts://run-shortcut?name=Run%20Latchway%20Proof",
+            "descriptor-bound family cleanup completed",
         ):
             self.assertIn(marker, self.runner)
         export_grant = self.runner.index(
             "export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT"
         )
         launch = self.runner.index("devicectl device process launch", export_grant)
-        unset_grant = self.runner.index(
-            "unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT",
-            launch,
-        )
+        unset_grant = self.runner.index("clear_development_child_state", launch)
         self.assertLess(export_grant, launch)
         self.assertLess(launch, unset_grant)
         build = self.runner.index("  xcodebuild \\")
         revalidation = self.runner.index("validate_development_grant", build)
-        marker_copy = self.runner.index("devicectl device copy from", launch)
+        marker_copy = self.runner.index("if copy_development_marker", launch)
         accepted = self.runner.index("development React Native iOS verification accepted", marker_copy)
         self.assertLess(build, revalidation)
         self.assertLess(revalidation, export_grant)
         self.assertLess(unset_grant, marker_copy)
         self.assertLess(marker_copy, accepted)
+        self.assertLess(unset_grant, self.runner.index("devicectl device notification observe", launch))
+        child_clear = self.runner.split("clear_development_child_state() {", 1)[1].split(
+            "\n}\n\ncleanup()", 1
+        )[0]
+        self.assertIn("unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT", child_clear)
+        self.assertIn("unset latchway_development_grant", child_clear)
+        resume_export = self.runner.index(
+            "export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME=1"
+        )
+        abort_export = self.runner.index(
+            "export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT=1"
+        )
+        self.assertNotIn("ONE_TIME_DEVICE_GRANT", self.runner[resume_export:abort_export])
         self.assertIn(
             '-destination "platform=iOS,id=$LATCHWAY_IOS_XCODE_DESTINATION_ID"',
             self.runner,
@@ -329,6 +434,183 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256",
         ):
             self.assertNotIn(forbidden, build_environment)
+
+    def test_post_wait_runner_exit_always_uses_one_exact_run_abort_finalizer(self) -> None:
+        for marker in (
+            "waiting_observed=false",
+            "terminal_cleanup_observed=false",
+            "abort_cleanup_in_progress=false",
+            "finalize_runner()",
+            "run_abort_cleanup()",
+            "trap finalize_runner EXIT",
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
+            "trap - EXIT INT TERM HUP",
+            "local original_status=$?",
+            'exit "$original_status"',
+            "failed\\ app_intent_receipt\\ *",
+            "failed\\ family_revoke\\ *",
+            "failed\\ firebase_sign_out\\ *",
+            "failed\\ success_marker\\ *",
+            "initial_launch_attempted=false",
+            "refresh_exact_run_cleanup_state",
+            "refresh_attempt < 5",
+            "wait_for_app_intent_window_remaining",
+            "preserving the remaining manual App Shortcut window",
+        ):
+            self.assertIn(marker, self.runner)
+        self.assertEqual(
+            1,
+            self.runner.count(
+                "export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT=1"
+            ),
+        )
+        finalizer = self.runner.split("finalize_runner()", 1)[1].split(
+            "trap finalize_runner EXIT", 1
+        )[0]
+        self.assertIn('"$waiting_observed" == true', finalizer)
+        self.assertIn('"$terminal_cleanup_observed" != true', finalizer)
+        self.assertIn("run_abort_cleanup || abort_status=$?", finalizer)
+        self.assertIn("if (( original_status == 0 )); then original_status=1; fi", finalizer)
+        self.assertLess(
+            self.runner.index("refresh_exact_run_cleanup_state()"),
+            self.runner.index("initial_launch_attempted=true"),
+        )
+        self.assertLess(
+            self.runner.index("run_abort_cleanup()"),
+            self.runner.index("initial_launch_attempted=true"),
+        )
+
+        abort_admission = self.native.split(
+            "static NSString *LatchwayDevelopmentAbortStageForMarker", 1
+        )[1].split("static void LatchwayDevelopmentCaptureAndClearEnvironment", 1)[0]
+        for stage in ("app_intent_receipt", "family_revoke", "firebase_sign_out"):
+            self.assertIn(f'@"{stage}"', abort_admission)
+        self.assertNotIn('@"success_marker"', abort_admission)
+        self.assertIn('? @"abort_sign_out" : @"abort"', self.native)
+        self.assertIn('phase === "abort_sign_out"', self.app)
+        sign_out_retry = self.app.split('phase === "abort" || phase === "abort_sign_out"', 1)[1]
+        sign_out_retry = sign_out_retry.split('if (phase === "resume")', 1)[0]
+        self.assertIn('if (phase === "abort")', sign_out_retry)
+        self.assertIn("await current.revokeCurrentInstallationFamily([component])", sign_out_retry)
+        self.assertIn("await firebaseAuth().signOut()", sign_out_retry)
+
+    def test_mocked_runner_finalizer_and_observer_fallback_are_deterministic(self) -> None:
+        finalizer_body = self.runner.split("finalize_runner() {", 1)[1].split(
+            "\n}\ntrap finalize_runner EXIT", 1
+        )[0]
+        finalizer = "finalize_runner() {" + finalizer_body + "\n}"
+        clear_body = self.runner.split("clear_development_child_state() {", 1)[1].split(
+            "\n}\n\ncleanup()", 1
+        )[0]
+        clear_function = "clear_development_child_state() {" + clear_body + "\n}"
+
+        def run_case(
+            *, waiting: bool, refresh: str, trigger: str, expected_status: int,
+            expected_aborts: int,
+        ) -> None:
+            script = f'''\nset +e
+waiting_observed={str(waiting).lower()}
+terminal_cleanup_observed=false
+abort_cleanup_in_progress=false
+initial_launch_attempted=true
+notification_observer_pid=""
+refresh_state={refresh!r}
+latchway_development_grant=raw-grant
+latchway_development_grant_sha256=raw-digest
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT=raw-grant
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256=raw-digest
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID=dev_test
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME=1
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT=1
+stop_notification_observer() {{ :; }}
+refresh_exact_run_cleanup_state() {{
+  case "$refresh_state" in
+    waiting) waiting_observed=true ;;
+    success_marker) terminal_cleanup_observed=true ;;
+  esac
+}}
+run_abort_cleanup() {{
+  if env | grep -q '^DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_'; then
+    printf 'contaminated\\n'
+    return 91
+  fi
+  if [[ -n "${{latchway_development_grant+x}}" ||
+        -n "${{latchway_development_grant_sha256+x}}" ]]; then
+    printf 'contaminated\\n'
+    return 91
+  fi
+  printf 'abort\\n'
+  return 0
+}}
+cleanup() {{ printf 'cleanup\\n'; }}
+{clear_function}
+{finalizer}
+trap finalize_runner EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+{trigger}
+'''
+            completed = subprocess.run(
+                ["bash", "-c", script], check=False, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertEqual(completed.returncode, expected_status, completed.stderr)
+            self.assertEqual(completed.stdout.splitlines().count("abort"), expected_aborts)
+            self.assertNotIn("contaminated", completed.stdout.splitlines())
+            self.assertEqual(completed.stdout.splitlines().count("cleanup"), 1)
+
+        # A post-wait terminal-marker timeout remains nonzero after one abort.
+        run_case(waiting=True, refresh="none", trigger="exit 17", expected_status=17, expected_aborts=1)
+        # A failed resume launch takes the same exact-run abort route.
+        run_case(waiting=True, refresh="none", trigger="exit 29", expected_status=29, expected_aborts=1)
+        run_case(waiting=False, refresh="waiting", trigger="exit 23", expected_status=23, expected_aborts=1)
+        run_case(waiting=True, refresh="none", trigger="kill -INT $$", expected_status=130, expected_aborts=1)
+        run_case(waiting=True, refresh="none", trigger="kill -TERM $$", expected_status=143, expected_aborts=1)
+        run_case(waiting=True, refresh="none", trigger="kill -HUP $$", expected_status=129, expected_aborts=1)
+        run_case(waiting=True, refresh="success_marker", trigger="exit 41", expected_status=41, expected_aborts=0)
+        run_case(waiting=True, refresh="none", trigger="exit 0", expected_status=1, expected_aborts=1)
+
+        wait_body = self.runner.split("wait_for_app_intent_window_remaining() {", 1)[1].split(
+            "\n}\n\ncleanup()", 1
+        )[0]
+        wait_function = "wait_for_app_intent_window_remaining() {" + wait_body + "\n}"
+        completed = subprocess.run(
+            ["bash", "-c", f'''\ncount=0
+sleep() {{ count=$((count + 1)); }}
+{wait_function}
+wait_for_app_intent_window_remaining 4
+printf '%s\\n' "$count"
+'''],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "4")
+
+        refresh_body = self.runner.split("refresh_exact_run_cleanup_state() {", 1)[1].split(
+            "\n}\n\n# Define every exact-run", 1
+        )[0]
+        refresh_function = "refresh_exact_run_cleanup_state() {" + refresh_body + "\n}"
+        completed = subprocess.run(
+            ["bash", "-c", f'''\nwaiting_observed=false
+terminal_cleanup_observed=false
+attempts=0
+sleeps=0
+copy_development_marker() {{
+  attempts=$((attempts + 1))
+  (( attempts >= 4 ))
+}}
+marker_state() {{ printf 'waiting\\n'; }}
+sleep() {{ sleeps=$((sleeps + 1)); }}
+{refresh_function}
+refresh_exact_run_cleanup_state
+printf '%s %s %s %s\\n' "$attempts" "$sleeps" "$waiting_observed" "$terminal_cleanup_observed"
+'''],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "4 3 true false")
 
     def test_runner_force_bundles_without_a_local_network_dependency(self) -> None:
         self.assertIn("FORCE_BUNDLING=1", self.runner)

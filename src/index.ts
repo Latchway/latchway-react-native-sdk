@@ -36,6 +36,8 @@ export type {
   ReactNativeComponentAppleOptions,
   ReactNativeComponentTrustSource,
   ReactNativeDiagnostics,
+  ReactNativeIOSComponent,
+  ReactNativeIOSComponentKind,
   ReactNativeDirectAttestationComponent,
   ReactNativeDirectAttestationComponentKind,
   ReactNativePlatform,

@@ -103,6 +103,26 @@ export interface ReactNativeDiagnostics {
   lastErrorCode?: string;
 }
 
+/** Native iOS execution boundaries that can hold delegated component sessions. */
+export type ReactNativeIOSComponentKind =
+  | "widget"
+  | "share_extension"
+  | "app_intent_extension"
+  | "notification_service_extension"
+  | "action_extension"
+  | "sso_extension";
+
+/**
+ * Public, non-secret descriptor used by the containing application to prepare
+ * and retire one independently keyed native iOS component.
+ */
+export interface ReactNativeIOSComponent {
+  definitionID: string;
+  kind: ReactNativeIOSComponentKind;
+  keychainAccessGroup: string;
+  requestedFeatures: readonly string[];
+}
+
 /** iOS component kinds retained for delegated-session protocol compatibility. */
 export type ReactNativeDirectAttestationComponentKind =
   | "action_extension"
@@ -195,10 +215,24 @@ export interface LatchwayClient {
   diagnostics(): Promise<ReactNativeDiagnostics>;
   /** Explicitly rotates the native session credentials for this installation. */
   refresh(): Promise<void>;
+  /**
+   * Creates or restores independent native iOS component keys and delegated
+   * provisioning grants. Descriptor fields are public; credentials remain native.
+   */
+  prepareComponents(components: readonly ReactNativeIOSComponent[]): Promise<ReactNativeComponentDiagnostics[]>;
+  /** Replaces one component key and its delegated provisioning grant. */
+  replaceComponent(component: ReactNativeIOSComponent): Promise<ReactNativeComponentDiagnostics>;
+  /** Reads redacted local state for one descriptor without using root identity. */
+  componentDiagnostics(component: ReactNativeIOSComponent): Promise<ReactNativeComponentDiagnostics>;
+  /** Revokes and erases one native iOS component without affecting its siblings. */
+  revokeComponent(component: ReactNativeIOSComponent): Promise<void>;
   /** Revokes this installation while leaving independently provisioned family components addressable. */
   revokeCurrentInstallation(): Promise<void>;
-  /** Revokes the complete Installation Family and retires the root native key and session state. */
-  revokeCurrentInstallationFamily(): Promise<void>;
+  /**
+   * Revokes the complete Installation Family and retires the root plus every
+   * supplied component. Pass the same complete descriptor set used to prepare.
+   */
+  revokeCurrentInstallationFamily(retiring?: readonly ReactNativeIOSComponent[]): Promise<void>;
   /** Releases this JavaScript instance. Secure installation state remains until revocation. */
   dispose(): Promise<void>;
 }

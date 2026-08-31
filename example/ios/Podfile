@@ -16,36 +16,48 @@ $RNFirebaseDisableSPM = true
 $RNFirebaseAsStaticFramework = true
 use_frameworks! :linkage => :static
 
+react_native_config = nil
 target 'LatchwayExample' do
   if ENV['LATCHWAY_IOS_SDK_PATH']
     pod 'Latchway', :path => ENV.fetch('LATCHWAY_IOS_SDK_PATH')
   end
 
   config = use_native_modules!
+  react_native_config = config
   use_react_native!(
     :path => config[:reactNativePath],
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  post_install do |installer|
-    react_native_post_install(
-      installer,
-      config[:reactNativePath],
-      :mac_catalyst_enabled => false
-    )
+end
 
-    # Current Xcode SDKs reject legacy deployment targets emitted by some
-    # transitive resource-bundle pods. The host's supported floor is RN's floor.
-    installer.pods_project.targets.each do |pod_target|
-      pod_target.build_configurations.each do |build_configuration|
-        build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
-        next unless pod_target.name == 'fmt'
+target 'AppIntents' do
+  if ENV['LATCHWAY_IOS_SDK_PATH']
+    pod 'Latchway/AppExtensions', :path => ENV.fetch('LATCHWAY_IOS_SDK_PATH'), :configurations => ['Debug']
+  else
+    pod 'Latchway/AppExtensions', '1.0.0', :configurations => ['Debug']
+  end
+end
 
-        # Xcode 27's Clang rejects fmt 11's C++20 consteval parser. fmt's
-        # supported C++17 path avoids that compiler regression without editing
-        # generated Pods sources or changing React Native's other C++ targets.
-        build_configuration.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
-      end
+post_install do |installer|
+  raise 'React Native target configuration was not resolved' if react_native_config.nil?
+  react_native_post_install(
+    installer,
+    react_native_config[:reactNativePath],
+    :mac_catalyst_enabled => false
+  )
+
+  # Current Xcode SDKs reject legacy deployment targets emitted by some
+  # transitive resource-bundle pods. The host's supported floor is RN's floor.
+  installer.pods_project.targets.each do |pod_target|
+    pod_target.build_configurations.each do |build_configuration|
+      build_configuration.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = minimum_ios_version
+      next unless pod_target.name == 'fmt'
+
+      # Xcode 27's Clang rejects fmt 11's C++20 consteval parser. fmt's
+      # supported C++17 path avoids that compiler regression without editing
+      # generated Pods sources or changing React Native's other C++ targets.
+      build_configuration.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
     end
   end
 end

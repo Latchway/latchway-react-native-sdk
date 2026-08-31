@@ -7,6 +7,7 @@ React Native application
   └─ @latchway/react-native
        ├─ @latchway/client 1.0.0 (errors and shared transport concepts)
        ├─ Latchway/AppAttest 1.0.0 (iOS)
+       ├─ Latchway/AppExtensions 1.0.0 (optional Debug extension target)
        └─ dev.latchway:latchway-okhttp + latchway-play-integrity 1.0.0 (Android)
 ```
 
@@ -36,30 +37,45 @@ core revision. Generated bridge and wire types do not become public API.
 
 Authorization, DPoP, access tokens, refresh tokens, private keys, and attestation evidence never appear in a native return value. Response bodies are application data, not credential envelopes, and remain incrementally delivered rather than eagerly buffered.
 
+The containing application's root client owns the public descriptor lifecycle:
+prepare, replace, descriptor diagnostics, descriptor revoke, and whole-family
+retirement. Descriptors are normalized and snapshotted before any identity
+await; native results must match the same snapshot. Identity is acquired only
+transiently for prepare, replace, revoke, and family retirement. Root-side
+component diagnostics are identity-free. A 65,536-byte JavaScript serialization
+limit keeps oversized descriptor sets from reaching the native bridge.
+
 The component path uses a separate extension-process client, not the containing
-app's root client or lease. JavaScript running inside the signed `.appex`
-supplies one validated public component descriptor; native configuration
-rejects a containing-app process, selects `.reactNativeIOS`, and retains a
+app's root client or lease. JavaScript running inside a signed `.appex` can
+supply one validated public descriptor; native configuration rejects a
+containing-app process, selects `.reactNativeIOS`, and retains a
 `LatchwayExtensionClient` with no direct App Attest provider. iOS extensions
 cannot call `DCAppAttestService.generateKey`, and the containing application
 must not attest on their behalf. The extension can use only independently
 keyed, component-scoped delegated sessions. React Native v1 exposes no
-component request operation. A second bridge operation returns only
-`LatchwayComponentDiagnostics`; direct-attestation trust-source decoders
-are retained for protocol compatibility but are not reachable proof claims.
-The identity callback is not invoked, and component credentials and DPoP
-material never cross the TurboModule. Both platforms report
-`attestation_unsupported` for the legacy direct operation.
+JavaScript component request operation. A second bridge operation returns only
+`LatchwayComponentDiagnostics`; direct-attestation trust-source decoders are
+retained for protocol compatibility but are not reachable proof claims. The
+identity callback is not invoked, and component credentials and DPoP material
+never cross the TurboModule. Both platforms report `attestation_unsupported`
+for the legacy direct operation.
 
-The example App Intents extension is intentionally not presented as an
-execution implementation: it has no React Native runtime or Latchway bridge,
-and its intent fails closed. It exists so archive production can prove distinct
-root/extension bundle identities, distinct provisioning profiles, an exact
-private-first/shared-second Keychain entitlement on the root, and a shared-only
-entitlement on the extension. The root's first/default group keeps its key and
-session state outside the extension's reach. Native iOS delegated-request
-evidence is validated as linked evidence; it is not evidence that this React
-Native target performed a delegated request.
+The example App Intents extension has no React Native runtime or TurboModule
+bridge. Its Debug target optionally links `Latchway/AppExtensions` and calls the
+native extension client directly to prove an independently keyed delegated
+session and one fully consumed bounded Responses request. The root publishes a
+nonsecret exact-run shared-Keychain challenge immediately before waiting. The
+intent captures it before client construction, rechecks it immediately before
+echoing the run in a bounded receipt, and cannot publish for a superseded run.
+The containing app accepts only its native-captured exact run and deletes both
+challenge and receipt before descriptor-bound family retirement and sign-out;
+abort also deletes both artifacts. This is local integration proof. In Release the
+AppExtensions pod is absent, no executable Latchway client path is compiled,
+and the intent fails closed. Both variants retain distinct root/extension
+bundle identities and provisioning profiles, private-first/shared-second root
+Keychain entitlements, and a shared-only extension entitlement. The root's
+first/default group keeps its key, identity, and session state outside the
+extension's reach.
 
 The bridge intentionally implements a bounded fetch subset: method, headers,
 an at-most-8-MiB buffered request body, cancellation, response metadata, and a
@@ -89,7 +105,19 @@ Native persistence namespaces include `react_native_ios` or `react_native_androi
 
 ## TurboModule boundary
 
-The handwritten spec carries root and component configuration as distinct operations, a bounded request description, the root client's transient application identity token, opaque response-handle start/read/close operations, quota/diagnostic results, a public component descriptor for delegated-session compatibility, cancellation, and disposal. The legacy direct-attestation operation remains ABI-compatible but fails closed. Component operations have no identity-token argument. The spec has no authorization-envelope operation and does not return or accept provider attestation evidence, Play request hashes, App Attest client-data hashes, session tokens, DPoP proofs, or key material. Generated Objective-C++ and Java specs are disposable codegen output, not public API.
+The handwritten spec carries root and component configuration as distinct
+operations, a bounded request description, the root client's transient
+application identity token, opaque response-handle start/read/close operations,
+quota/diagnostic results, public component descriptors for lifecycle and
+delegated-session compatibility, cancellation, and disposal. Root lifecycle
+mutations carry identity transiently; root-side and extension-side component
+diagnostics do not. The legacy direct-attestation operation remains
+ABI-compatible but fails closed. Extension-process component operations have no
+identity-token argument. The spec has no authorization-envelope operation and
+does not return or accept provider attestation evidence, Play request hashes,
+App Attest client-data hashes, session tokens, DPoP proofs, or key material.
+Generated Objective-C++ and Java specs are disposable codegen output, not
+public API.
 
 ## Native dependencies
 

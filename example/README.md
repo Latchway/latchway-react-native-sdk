@@ -43,6 +43,8 @@ Configure these values in the host's uncommitted environment:
 - `LATCHWAY_ERROR_MAPPING_FEATURE` (a protected feature intentionally absent
   from the root component's grant; it may also be absent from configuration)
 - `LATCHWAY_MODEL`
+- `LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID` (iOS Debug device lane only;
+  the generated definition ID for the delegated App Intent component)
 - `LATCHWAY_GOOGLE_CLOUD_PROJECT_NUMBER`
 - `LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP` (iOS only; the exact private root
   group signed into the application)
@@ -61,7 +63,7 @@ Integrity tokens, session credentials, or provider keys.
 Copy `.env.example` to the ignored `.env` file and replace only its non-secret
 deployment identifiers; provider credentials never belong there.
 
-### Debug-only physical iPhone bootstrap
+### Debug-only physical iPhone or iPad bootstrap
 
 The iOS host has an opt-in development lane for exercising the current source
 on a physical iPhone before producing protected Release evidence. It is
@@ -77,6 +79,13 @@ provide its path and SHA-256 only to the development runner. Do not put the
 Firebase custom token, plist path, plist bytes, or either digest in `.env`, an
 Xcode scheme, an argument, or a log. The copied plist is non-secret Firebase
 client configuration; the custom token remains credential material.
+
+In the development gateway, create the App Intent component definition with
+platform `react_native_ios`, kind `app_intent_extension`, delegated-only trust,
+and a requested feature equal to `LATCHWAY_FEATURE`. Copy its generated
+definition ID into `LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID`. The delegated
+credential is runtime-bound, so a definition registered as platform `ios`
+cannot be used by this React Native host.
 
 The development runner force-bundles the exact JavaScript checkout into its
 signed Debug application. It does not use Metro or depend on the Mac's LAN
@@ -122,17 +131,53 @@ This does not retain a trusted Latchway or Firebase session: the app consumes a
 new grant, signs out any old Firebase user, and explicitly revokes the prior
 Latchway installation before it creates the measured replacement.
 
-Apart from answering iOS's one-time Debug permission sheet on the first install,
-no in-app action is required. The app first consumes the validated grant, signs out any old Firebase
-user, and completes the custom-token sign-in. It then explicitly
-revokes any persisted Latchway installation, creates a replacement, makes a
-non-streaming `/v1/responses` request, checks quota, and requires diagnostics to
-report `react_native_ios`, `app_attest`, and `app_verified`. Only after terminal
-installation revocation and Firebase sign-out does the native Debug bridge
-write a non-secret, random-run-bound success marker. The runner retrieves and
-validates that exact marker from the app container; process launch alone never
-passes. The local slot prevents a second bridge read, and provider-wide one-use
-must still be enforced by the issuer/lease service.
+The run is deliberately staged across the containing app and the extension:
+
+1. The root app consumes the validated one-use grant, signs out any old
+   Firebase user, revokes the prior descriptor-bound installation family, and
+   establishes a fresh App Attest-backed root. It verifies Responses, quota,
+   and `react_native_ios`/`app_attest`/`app_verified` diagnostics, then calls
+   `prepareComponents` with the exact App Intent descriptor.
+2. Immediately after current-family preparation, the root replaces any prior
+   receipt/challenge with a nonsecret exact-run `dev_<32hex>` shared-Keychain
+   challenge, writes the matching `waiting_for_app_intent` marker, and stops.
+   The one-use custom token and digest have already been destroyed, while the
+   prepared component family remains available for the separately launched
+   extension.
+3. The runner starts a bounded Darwin-notification wait and tries the public
+   Shortcuts URL for **Run Latchway Proof**. iOS may still require a user to
+   open Shortcuts and tap that App Shortcut; the runner prints this waiting
+   instruction and never treats URL launch or notification delivery as proof.
+4. In Debug, the native App Intent captures the exact-run challenge before it
+   constructs `LatchwayExtensionClient` with runtime `react_native_ios`,
+   refreshes only its independently keyed delegated session, sends one Responses
+   request, and fully consumes the successful body. Immediately before replacing
+   the receipt it re-reads the challenge, requires it to match the captured run,
+   and echoes that run in the authoritative shared-Keychain receipt.
+5. The runner relaunches the containing app with only the random run ID and a
+   resume bit. The root accepts only a receipt and challenge matching its
+   native-captured exact run, deletes both, retires the same descriptor-bound
+   family, signs out Firebase, and only then writes the final success marker.
+
+The receipt is at most 512 bytes and contains only a schema version, the
+nonsecret `dev_<32hex>` run nonce, passed status, delegated-session/request
+booleans, and completion timestamp. It never contains component, installation,
+or user IDs, tokens, proofs, request bodies, or response bodies. Initial work
+clears both artifacts; resume consumes and deletes both; abort also deletes both.
+Every abnormal exit after the waiting marker—including an
+interrupt, notification wait failure, resume launch failure, or terminal-marker
+timeout—uses one centralized bounded exact-run abort launch. That launch retries
+family retirement and sign-out as required, verifies an `aborted` cleanup
+marker, and preserves the runner's original nonzero status. A failure writing
+the final success marker is already after verified family retirement and
+sign-out, so it remains terminal nonzero without attempting to recreate an
+identity.
+
+The App Intents CocoaPods target links `Latchway/AppExtensions` only in Debug;
+the CocoaPods product's Swift module is `Latchway`. The Release extension has no
+Latchway dependency or executable client path and its intent fails closed. This
+Debug path is local integration proof only, not protected release or conformance
+evidence.
 
 This example pins Firebase App and Auth only. A Firebase web App Check
 registration does not protect native iOS Auth traffic. If the target Firebase

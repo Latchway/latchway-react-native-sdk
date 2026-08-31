@@ -23,6 +23,8 @@ if (!spec.includes("identityToken: string")) {
 for (const required of [
   "startRequest(", "readResponseChunk(", "closeResponse(", "revokeFamily(",
   "configureComponent(", "establishDirectAttestation(", "componentDiagnostics(",
+  "prepareComponents(", "replaceComponent(", "rootComponentDiagnostics(",
+  "revokeComponent(", "revokeFamilyWithComponents(",
 ]) {
   if (!spec.includes(required)) throw new Error(`TurboModule omits native-owned transport primitive: ${required}`);
 }
@@ -34,6 +36,10 @@ for (const method of ["establishDirectAttestation", "componentDiagnostics"]) {
   if (signature.includes("identityToken") || signature.includes("componentJSON")) {
     throw new Error(`${method} must use the separately configured component context without root identity input.`);
   }
+}
+const rootComponentDiagnostics = spec.match(/rootComponentDiagnostics\([\s\S]*?\): Promise<string>/u)?.[0] ?? "";
+if (rootComponentDiagnostics.includes("identityToken")) {
+  throw new Error("Root-side component diagnostics must inspect local native state without identity input.");
 }
 
 const packageJSON = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -55,6 +61,15 @@ for (const marker of [
   "legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups",
 ]) {
   if (!ios.includes(marker)) throw new Error(`iOS bridge omits explicit root Keychain boundary: ${marker}`);
+}
+for (const marker of [
+  "client.prepareComponents(components.map(\\.configuration))",
+  "client.replaceComponent(component.configuration)",
+  "client.componentDiagnostics(component.configuration)",
+  "client.revokeComponent(component.configuration)",
+  "revokeCurrentInstallationFamily(retiring: components.map(\\.configuration))",
+]) {
+  if (!ios.includes(marker)) throw new Error(`iOS bridge omits root component lifecycle operation: ${marker}`);
 }
 if (!android.includes('"rootKeychainAccessGroup", "legacySharedKeychainAccessGroups"')) {
   throw new Error("Android strict decoding does not accept the cross-platform Apple Keychain fields.");

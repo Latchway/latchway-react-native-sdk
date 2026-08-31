@@ -9,6 +9,14 @@ Versioning once package publication begins.
 
 ### Changed
 
+- Added the root React Native installation-family component lifecycle:
+  descriptor-snapshotted prepare, replace, identity-free diagnostics, revoke,
+  and descriptor-bound family retirement, with Android reporting the iOS-only
+  operations explicitly unsupported.
+- Added a Debug-only App Intent integration proof that uses an independently
+  keyed delegated `react_native_ios` session, fully consumes a Responses request,
+  and binds its bounded shared-Keychain receipt to the root's exact-run challenge;
+  the Release fixture remains fail-closed with no AppExtensions linkage.
 - Physical React Native evidence now requires the authorization-first HTTP 403
   `component_feature_not_granted` mapping for an ungranted feature instead of
   the feature-enumerating HTTP 404 expectation.

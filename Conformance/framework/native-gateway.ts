@@ -168,9 +168,29 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
     throw new Error("The framework fixture does not expose component diagnostics.");
   }
 
+  async prepareComponents(): Promise<string> {
+    throw new Error("The framework fixture does not provision native iOS components.");
+  }
+
+  async replaceComponent(): Promise<string> {
+    throw new Error("The framework fixture does not replace native iOS components.");
+  }
+
+  async rootComponentDiagnostics(): Promise<string> {
+    throw new Error("The framework fixture does not inspect native iOS components.");
+  }
+
+  async revokeComponent(): Promise<void> {
+    throw new Error("The framework fixture does not revoke native iOS components.");
+  }
+
   async revoke(): Promise<void> {}
 
   async revokeFamily(): Promise<void> {}
+
+  async revokeFamilyWithComponents(): Promise<void> {
+    throw new Error("The framework fixture does not retire native iOS component descriptors.");
+  }
 
   cancel(_clientID: string, operationID: string): void {
     this.cancelCalls.push(operationID);

@@ -236,6 +236,65 @@ public class NativeLatchwayModule(
         }
     }
 
+    override fun prepareComponents(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentsJSON: String,
+        promise: Promise,
+    ) {
+        operate(clientID, operationID, promise) {
+            throw LatchwayException(
+                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+                safeMessage = "Native iOS component provisioning is not supported by this Android SDK",
+            )
+        }
+    }
+
+    override fun replaceComponent(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentJSON: String,
+        promise: Promise,
+    ) {
+        operate(clientID, operationID, promise) {
+            throw LatchwayException(
+                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+                safeMessage = "Native iOS component replacement is not supported by this Android SDK",
+            )
+        }
+    }
+
+    override fun rootComponentDiagnostics(
+        clientID: String,
+        operationID: String,
+        componentJSON: String,
+        promise: Promise,
+    ) {
+        operate(clientID, operationID, promise) {
+            throw LatchwayException(
+                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+                safeMessage = "Native iOS root component diagnostics are not supported by this Android SDK",
+            )
+        }
+    }
+
+    override fun revokeComponent(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentJSON: String,
+        promise: Promise,
+    ) {
+        operate(clientID, operationID, promise) {
+            throw LatchwayException(
+                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+                safeMessage = "Native iOS component revocation is not supported by this Android SDK",
+            )
+        }
+    }
+
     override fun revoke(clientID: String, operationID: String, identityToken: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
             context.withIdentityToken(identityToken) { client -> client.revokeCurrentInstallation() }
@@ -245,6 +304,21 @@ public class NativeLatchwayModule(
     override fun revokeFamily(clientID: String, operationID: String, identityToken: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
             context.withIdentityToken(identityToken) { client -> client.revokeCurrentInstallationFamily() }
+        }
+    }
+
+    override fun revokeFamilyWithComponents(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentsJSON: String,
+        promise: Promise,
+    ) {
+        operate(clientID, operationID, promise) {
+            throw LatchwayException(
+                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+                safeMessage = "Descriptor-bound iOS family retirement is not supported by this Android SDK",
+            )
         }
     }
 

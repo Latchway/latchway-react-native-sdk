@@ -23,6 +23,11 @@ describe("JavaScript security boundary", () => {
     expect(spec).toContain("establishDirectAttestation(");
     expect(spec).toContain("componentDiagnostics(");
     expect(spec).toContain("configureComponent(");
+    expect(spec).toContain("prepareComponents(");
+    expect(spec).toContain("replaceComponent(");
+    expect(spec).toContain("rootComponentDiagnostics(");
+    expect(spec).toContain("revokeComponent(");
+    expect(spec).toContain("revokeFamilyWithComponents(");
     expect(spec).not.toContain("authorize(");
     expect(types).not.toContain("authorize(");
     expect(spec).not.toMatch(/accessToken|refreshToken|privateKey|clientDataHash|requestHash|integrityToken|attestationEvidence/gu);
@@ -37,6 +42,13 @@ describe("JavaScript security boundary", () => {
     expect(android).toContain('"rootKeychainAccessGroup", "legacySharedKeychainAccessGroups"');
     expect(ios).toContain("runComponent(clientID:");
     expect(android).toContain("Direct component attestation is not supported by this Android SDK");
+    const rootDiagnostics = spec.match(/rootComponentDiagnostics\([\s\S]*?\): Promise<string>;/u)?.[0] ?? "";
+    expect(rootDiagnostics).not.toContain("identityToken");
+    expect(ios).toContain("client.prepareComponents(components.map(\\.configuration))");
+    expect(ios).toContain("client.replaceComponent(component.configuration)");
+    expect(ios).toContain("client.componentDiagnostics(component.configuration)");
+    expect(ios).toContain("client.revokeComponent(component.configuration)");
+    expect(ios).toContain("revokeCurrentInstallationFamily(retiring: components.map(\\.configuration))");
     expect(ios).not.toMatch(/"(?:authorization|dpop|accessToken|refreshToken|privateKey)"\s*:/gu);
     expect(android).not.toMatch(/\.put\("(?:authorization|dpop|accessToken|refreshToken|privateKey)"/gu);
   });

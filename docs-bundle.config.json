@@ -5,10 +5,10 @@
   "version": "1.0.0",
   "package": "@latchway/react-native",
   "documents": [
-    {"path": "quickstart/create-client.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 52, "end_line": 73}},
-    {"path": "quickstart/streaming-fetch.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 87, "end_line": 113}},
+    {"path": "quickstart/create-client.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 57, "end_line": 78}},
+    {"path": "quickstart/streaming-fetch.tsx", "kind": "quickstart", "source": {"file": "example/src/App.tsx", "start_line": 92, "end_line": 118}},
     {"path": "frameworks/react-native-consumers.ts", "kind": "framework", "source": {"file": "example/src/framework-consumers.ts", "start_line": 1, "end_line": 153}},
-    {"path": "release-notes.md", "kind": "release_notes", "source": {"file": "CHANGELOG.md", "start_line": 1, "end_line": 87}}
+    {"path": "release-notes.md", "kind": "release_notes", "source": {"file": "CHANGELOG.md", "start_line": 1, "end_line": 95}}
   ],
   "supported_versions": [
     {"name": "@latchway/react-native", "version": "1.0.0", "source": {"file": "package.json", "start_line": 1, "end_line": 16}},
@@ -31,9 +31,9 @@
     {"file": "src/errors.ts", "start_line": 6, "end_line": 73, "pattern": "(?m)^\\s{2}(?P<name>[a-z][a-z0-9_]+): true,"}
   ],
   "examples": [
-    {"name": "React Native physical-device application", "kind": "physical_device", "source": {"file": "example/src/App.tsx", "start_line": 1, "end_line": 1110}},
+    {"name": "React Native physical-device application", "kind": "physical_device", "source": {"file": "example/src/App.tsx", "start_line": 1, "end_line": 1271}},
     {"name": "OpenAI, Vercel AI, LangChain, and Anthropic consumers", "kind": "framework", "source": {"file": "example/src/framework-consumers.ts", "start_line": 1, "end_line": 153}},
-    {"name": "iOS App Intent extension", "kind": "component", "source": {"file": "example/ios/AppIntents/AppIntents.swift", "start_line": 1, "end_line": 29}},
+    {"name": "iOS App Intent extension", "kind": "component", "source": {"file": "example/ios/AppIntents/AppIntents.swift", "start_line": 1, "end_line": 264}},
     {"name": "Android host application", "kind": "physical_device", "source": {"file": "example/android/app/src/main/java/com/latchwayexample/MainApplication.kt", "start_line": 1, "end_line": 22}}
   ]
 }

@@ -177,6 +177,79 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         }
     }
 
+    @objc(prepareComponentsWithClientID:operationID:identityToken:componentsJSON:resolve:reject:)
+    public func prepareComponents(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentsJSON: String,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.prepareComponents(identityToken: identityToken, encoded: componentsJSON)
+                })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(replaceComponentWithClientID:operationID:identityToken:componentJSON:resolve:reject:)
+    public func replaceComponent(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentJSON: String,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.replaceComponent(identityToken: identityToken, encoded: componentJSON)
+                })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(rootComponentDiagnosticsWithClientID:operationID:componentJSON:resolve:reject:)
+    public func rootComponentDiagnostics(
+        clientID: String,
+        operationID: String,
+        componentJSON: String,
+        resolve: @escaping LatchwayResolveString,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                resolve(try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.componentDiagnostics(encoded: componentJSON)
+                })
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
+    @objc(revokeComponentWithClientID:operationID:identityToken:componentJSON:resolve:reject:)
+    public func revokeComponent(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentJSON: String,
+        resolve: @escaping LatchwayResolveVoid,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                _ = try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.revokeComponent(identityToken: identityToken, encoded: componentJSON)
+                    return true
+                }
+                resolve()
+            } catch { Self.reject(error, with: reject) }
+        }
+    }
+
     @objc(revokeWithClientID:operationID:identityToken:resolve:reject:)
     public func revoke(
         clientID: String,
@@ -200,6 +273,26 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
     ) {
         runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
             try await $0.revokeCurrentInstallationFamily()
+        }
+    }
+
+    @objc(revokeFamilyWithComponentsWithClientID:operationID:identityToken:componentsJSON:resolve:reject:)
+    public func revokeFamilyWithComponents(
+        clientID: String,
+        operationID: String,
+        identityToken: String,
+        componentsJSON: String,
+        resolve: @escaping LatchwayResolveVoid,
+        reject: @escaping LatchwayReject
+    ) {
+        Task {
+            do {
+                _ = try await store.run(clientID: clientID, operationID: operationID) { context in
+                    try await context.revokeFamily(identityToken: identityToken, encoded: componentsJSON)
+                    return true
+                }
+                resolve()
+            } catch { Self.reject(error, with: reject) }
         }
     }
 
@@ -364,6 +457,7 @@ private final class NativeClientContext: @unchecked Sendable {
     private let client: LatchwayClient
     private let baseURL: URL
     private let responses = NativeResponseRegistry()
+    private let sharedKeychainAccessGroups: Set<String>
 
     init(configuration: NativeConfiguration) throws {
         let baseURL = try validatedNativeBaseURL(
@@ -371,6 +465,7 @@ private final class NativeClientContext: @unchecked Sendable {
             allowInsecureLoopback: configuration.allowInsecureLoopback
         )
         self.baseURL = baseURL
+        sharedKeychainAccessGroups = Set(configuration.apple.legacySharedKeychainAccessGroups)
         let attestation: (any LatchwayAttestationProvider)?
         if configuration.apple.appAttestEnabled {
             if let namespace = configuration.apple.storageNamespace {
@@ -530,12 +625,65 @@ private final class NativeClientContext: @unchecked Sendable {
         try await withIdentityToken(identityToken) { try await $0.refresh() }
     }
 
+    func prepareComponents(identityToken: String, encoded: String) async throws -> String {
+        let components = try NativeHostComponentInput.decodeMany(
+            encoded,
+            sharedKeychainAccessGroups: sharedKeychainAccessGroups
+        )
+        let diagnostics = try await withIdentityToken(identityToken) { client in
+            try await client.prepareComponents(components.map(\.configuration))
+        }
+        return try jsonString([
+            "components": diagnostics.map(componentDiagnosticsDictionary),
+        ])
+    }
+
+    func revokeComponent(identityToken: String, encoded: String) async throws {
+        let component = try NativeHostComponentInput.decodeOne(
+            encoded,
+            sharedKeychainAccessGroups: sharedKeychainAccessGroups
+        )
+        try await withIdentityToken(identityToken) { client in
+            try await client.revokeComponent(component.configuration)
+        }
+    }
+
+    func replaceComponent(identityToken: String, encoded: String) async throws -> String {
+        let component = try NativeHostComponentInput.decodeOne(
+            encoded,
+            sharedKeychainAccessGroups: sharedKeychainAccessGroups
+        )
+        let diagnostics = try await withIdentityToken(identityToken) { client in
+            try await client.replaceComponent(component.configuration)
+        }
+        return try jsonString(componentDiagnosticsDictionary(diagnostics))
+    }
+
+    func componentDiagnostics(encoded: String) async throws -> String {
+        let component = try NativeHostComponentInput.decodeOne(
+            encoded,
+            sharedKeychainAccessGroups: sharedKeychainAccessGroups
+        )
+        let diagnostics = await client.componentDiagnostics(component.configuration)
+        return try jsonString(componentDiagnosticsDictionary(diagnostics))
+    }
+
     func revokeCurrentInstallation(identityToken: String) async throws {
         try await withIdentityToken(identityToken) { try await $0.revokeCurrentInstallation() }
     }
 
     func revokeCurrentInstallationFamily(identityToken: String) async throws {
         try await withIdentityToken(identityToken) { try await $0.revokeCurrentInstallationFamily() }
+    }
+
+    func revokeFamily(identityToken: String, encoded: String) async throws {
+        let components = try NativeHostComponentInput.decodeMany(
+            encoded,
+            sharedKeychainAccessGroups: sharedKeychainAccessGroups
+        )
+        try await withIdentityToken(identityToken) { client in
+            try await client.revokeCurrentInstallationFamily(retiring: components.map(\.configuration))
+        }
     }
 
     func withIdentityToken<T: Sendable>(
@@ -611,19 +759,7 @@ private final class NativeComponentContext: @unchecked Sendable {
 
     func diagnostics() async throws -> String {
         let diagnostics = await client.diagnostics()
-        return try jsonString([
-            "familyID": diagnostics.familyID as Any,
-            "componentID": diagnostics.componentID as Any,
-            "definitionID": diagnostics.definitionID,
-            "keychainAccessGroup": diagnostics.keychainAccessGroup,
-            "keyAvailable": diagnostics.keyAvailable,
-            "keyStorage": diagnostics.keyStorage.rawValue,
-            "grantAvailable": diagnostics.grantAvailable,
-            "sessionAvailable": diagnostics.sessionAvailable,
-            "trustSource": diagnostics.trustSource?.rawValue as Any,
-            "trustExpiresAt": diagnostics.trustExpiresAt.map(iso8601) as Any,
-            "containingAppActionRequired": diagnostics.containingAppActionRequired,
-        ])
+        return try jsonString(componentDiagnosticsDictionary(diagnostics))
     }
 }
 
@@ -872,6 +1008,74 @@ private struct NativeComponentInput: Decodable, Equatable {
     }
 }
 
+private struct NativeHostComponentInput: Decodable, Equatable {
+    let definitionID: String
+    let kind: String
+    let keychainAccessGroup: String
+    let requestedFeatures: [String]
+
+    var configuration: LatchwayComponentConfiguration {
+        LatchwayComponentConfiguration(
+            definitionID: definitionID,
+            kind: kind,
+            keychainAccessGroup: keychainAccessGroup,
+            requestedFeatures: requestedFeatures
+        )
+    }
+
+    static func decodeOne(
+        _ encoded: String,
+        sharedKeychainAccessGroups: Set<String>
+    ) throws -> Self {
+        guard let data = encoded.data(using: .utf8), data.count <= 65_536,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+        try validateKeys(object)
+        let value = try decodeStrict(Self.self, encoded: encoded)
+        try validate(value, sharedKeychainAccessGroups: sharedKeychainAccessGroups)
+        return value
+    }
+
+    static func decodeMany(
+        _ encoded: String,
+        sharedKeychainAccessGroups: Set<String>
+    ) throws -> [Self] {
+        guard let data = encoded.data(using: .utf8), data.count <= 65_536,
+              let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              !objects.isEmpty, objects.count <= 256
+        else { throw LatchwayError.invalidRequest("native component descriptors are invalid") }
+        try objects.forEach(validateKeys)
+        let values = try decodeStrict([Self].self, encoded: encoded)
+        try values.forEach { try validate($0, sharedKeychainAccessGroups: sharedKeychainAccessGroups) }
+        guard Set(values.map(\.definitionID)).count == values.count else {
+            throw LatchwayError.invalidRequest("native component definition IDs must be unique")
+        }
+        return values
+    }
+
+    private static func validateKeys(_ object: [String: Any]) throws {
+        guard Set(object.keys) == Set(["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"])
+        else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+    }
+
+    private static func validate(
+        _ value: Self,
+        sharedKeychainAccessGroups: Set<String>
+    ) throws {
+        guard matches(value.definitionID, pattern: "^[a-z][a-z0-9_-]{0,62}$"),
+              nativeIOSComponentKinds.contains(value.kind),
+              sharedKeychainAccessGroups.contains(value.keychainAccessGroup),
+              !value.requestedFeatures.isEmpty,
+              value.requestedFeatures.count <= 256,
+              Set(value.requestedFeatures).count == value.requestedFeatures.count,
+              value.requestedFeatures.allSatisfy(validFeature)
+        else { throw LatchwayError.invalidRequest("native component descriptor is invalid") }
+        try LatchwayRootKeychainPreflight.validateAccessGroups(
+            rootKeychainAccessGroup: value.keychainAccessGroup
+        )
+    }
+}
+
 private struct NativeRequestInput: Decodable {
     let url: String
     let method: String
@@ -1108,6 +1312,10 @@ private let allowedDataPlanePaths = Set([
 ])
 private let opaqueDataPlaneMethods = Set(["GET", "POST", "PUT", "PATCH", "DELETE"])
 private let reactNativeDirectAttestationComponentKinds = Set(["action_extension", "sso_extension"])
+private let nativeIOSComponentKinds = Set([
+    "widget", "share_extension", "app_intent_extension", "notification_service_extension",
+    "action_extension", "sso_extension",
+])
 private let forbiddenRequestHeaders = Set([
     "authorization", "proxy-authorization", "api-key", "api_key", "apikey", "x-api-key",
     "openai-api-key", "openai_api_key", "x-openai-api-key", "anthropic-api-key", "anthropic_api_key",
@@ -1255,6 +1463,24 @@ private func jsonString(_ value: [String: Any]) throws -> String {
     let compacted = compact(value)
     guard JSONSerialization.isValidJSONObject(compacted) else { throw LatchwayError.invalidServerResponse }
     return String(decoding: try JSONSerialization.data(withJSONObject: compacted, options: [.sortedKeys]), as: UTF8.self)
+}
+
+private func componentDiagnosticsDictionary(
+    _ diagnostics: LatchwayComponentDiagnostics
+) -> [String: Any] {
+    compact([
+        "familyID": diagnostics.familyID as Any,
+        "componentID": diagnostics.componentID as Any,
+        "definitionID": diagnostics.definitionID,
+        "keychainAccessGroup": diagnostics.keychainAccessGroup,
+        "keyAvailable": diagnostics.keyAvailable,
+        "keyStorage": diagnostics.keyStorage.rawValue,
+        "grantAvailable": diagnostics.grantAvailable,
+        "sessionAvailable": diagnostics.sessionAvailable,
+        "trustSource": diagnostics.trustSource?.rawValue as Any,
+        "trustExpiresAt": diagnostics.trustExpiresAt.map(iso8601) as Any,
+        "containingAppActionRequired": diagnostics.containingAppActionRequired,
+    ])
 }
 
 private func compact(_ value: [String: Any]) -> [String: Any] {

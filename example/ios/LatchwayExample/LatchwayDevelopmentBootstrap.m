@@ -2,7 +2,11 @@
 
 #import <CommonCrypto/CommonDigest.h>
 #import <React/RCTBridgeModule.h>
+#import <Security/Security.h>
 #import <TargetConditionals.h>
+#import <dispatch/dispatch.h>
+#import <float.h>
+#import <string.h>
 #import <sys/sysctl.h>
 #import <unistd.h>
 
@@ -11,6 +15,17 @@ static NSString *LatchwayDevelopmentCapturedGrant;
 static NSString *LatchwayDevelopmentVerificationRunID;
 static BOOL LatchwayDevelopmentGrantInvalid = YES;
 static BOOL LatchwayDevelopmentGrantConsumed = NO;
+static BOOL LatchwayDevelopmentResume = NO;
+static BOOL LatchwayDevelopmentAbort = NO;
+static NSString *LatchwayDevelopmentAbortMarkerStage;
+static BOOL LatchwayDevelopmentReceiptConsumed = NO;
+
+static NSString *const LatchwayDevelopmentAppIntentService = @"dev.latchway.debug.app-intent-proof";
+static NSString *const LatchwayDevelopmentChallengeAccount = @"challenge-v1";
+static NSString *const LatchwayDevelopmentReceiptAccount = @"receipt-v1";
+
+static BOOL LatchwayDevelopmentDebuggerAttached(void);
+static BOOL LatchwayDevelopmentTesting(void);
 
 static BOOL LatchwayDevelopmentMatches(NSString *value, NSString *pattern) {
   if (value == nil) return NO;
@@ -62,17 +77,51 @@ static BOOL LatchwayDevelopmentWriteMarker(NSDictionary *marker) {
   return written;
 }
 
+static NSDictionary *LatchwayDevelopmentReadMarker(void) {
+  NSData *data = [NSData dataWithContentsOfURL:LatchwayDevelopmentVerificationMarkerURL()];
+  if (data == nil || data.length == 0 || data.length > 4096) return nil;
+  id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  return [value isKindOfClass:NSDictionary.class] ? value : nil;
+}
+
+static BOOL LatchwayDevelopmentIsWaitingMarker(NSString *runID) {
+  NSDictionary *marker = LatchwayDevelopmentReadMarker();
+  if (marker.count != 3) return NO;
+  return [marker[@"schema_version"] isEqual:@2] &&
+    [marker[@"run_id"] isEqual:runID] && [marker[@"status"] isEqual:@"waiting_for_app_intent"];
+}
+
+static NSString *LatchwayDevelopmentAbortStageForMarker(NSString *runID) {
+  NSDictionary *marker = LatchwayDevelopmentReadMarker();
+  if (![marker[@"schema_version"] isEqual:@2] || ![marker[@"run_id"] isEqual:runID]) return nil;
+  if (marker.count == 3 && [marker[@"status"] isEqual:@"waiting_for_app_intent"]) return @"waiting";
+  NSSet<NSString *> *abortableStages = [NSSet setWithArray:@[
+    @"app_intent_receipt", @"family_revoke", @"firebase_sign_out",
+  ]];
+  NSString *stage = [marker[@"failure_stage"] isKindOfClass:NSString.class]
+    ? marker[@"failure_stage"] : nil;
+  if (marker.count == 5 && [marker[@"status"] isEqual:@"failed"] &&
+      [abortableStages containsObject:stage] &&
+      LatchwayDevelopmentMatches(marker[@"failure_code"], @"^[a-z][a-z0-9_]{1,99}$")) {
+    return stage;
+  }
+  return nil;
+}
+
 static void LatchwayDevelopmentCaptureAndClearEnvironment(void) {
   const char *grantValue = getenv("LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT");
   const char *digestValue = getenv("LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256");
   const char *runIDValue = getenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID");
+  const char *resumeValue = getenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME");
+  const char *abortValue = getenv("LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT");
   NSString *grant = grantValue == NULL ? nil : [NSString stringWithUTF8String:grantValue];
   NSString *expectedDigest = digestValue == NULL ? nil : [NSString stringWithUTF8String:digestValue];
   NSString *runID = runIDValue == NULL ? nil : [NSString stringWithUTF8String:runIDValue];
   unsetenv("LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT");
   unsetenv("LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256");
   unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID");
-  [NSFileManager.defaultManager removeItemAtURL:LatchwayDevelopmentVerificationMarkerURL() error:nil];
+  unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME");
+  unsetenv("LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT");
 
   [LatchwayDevelopmentGrantLock lock];
   @try {
@@ -80,6 +129,25 @@ static void LatchwayDevelopmentCaptureAndClearEnvironment(void) {
     LatchwayDevelopmentVerificationRunID = nil;
     LatchwayDevelopmentGrantInvalid = YES;
     LatchwayDevelopmentGrantConsumed = NO;
+    LatchwayDevelopmentResume = NO;
+    LatchwayDevelopmentAbort = NO;
+    LatchwayDevelopmentAbortMarkerStage = nil;
+    LatchwayDevelopmentReceiptConsumed = NO;
+    if (resumeValue != NULL || abortValue != NULL) {
+      if ((resumeValue != NULL && abortValue != NULL) || grantValue != NULL || digestValue != NULL ||
+          !LatchwayDevelopmentMatches(runID, @"^dev_[0-9a-f]{32}$")) return;
+      if (resumeValue != NULL &&
+          (strcmp(resumeValue, "1") != 0 || !LatchwayDevelopmentIsWaitingMarker(runID))) return;
+      NSString *abortStage = abortValue == NULL ? nil : LatchwayDevelopmentAbortStageForMarker(runID);
+      if (abortValue != NULL && (strcmp(abortValue, "1") != 0 || abortStage == nil)) return;
+      LatchwayDevelopmentVerificationRunID = [runID copy];
+      LatchwayDevelopmentGrantConsumed = YES;
+      LatchwayDevelopmentResume = resumeValue != NULL;
+      LatchwayDevelopmentAbort = abortValue != NULL;
+      LatchwayDevelopmentAbortMarkerStage = [abortStage copy];
+      return;
+    }
+    [NSFileManager.defaultManager removeItemAtURL:LatchwayDevelopmentVerificationMarkerURL() error:nil];
     if ((grantValue == NULL) != (digestValue == NULL) || grant == nil || expectedDigest == nil || runID == nil) return;
     NSData *grantData = [grant dataUsingEncoding:NSUTF8StringEncoding];
     if (grantData == nil || grantData.length < 32 || grantData.length > 65536) return;
@@ -91,6 +159,25 @@ static void LatchwayDevelopmentCaptureAndClearEnvironment(void) {
     LatchwayDevelopmentCapturedGrant = [grant copy];
     LatchwayDevelopmentVerificationRunID = [runID copy];
     LatchwayDevelopmentGrantInvalid = NO;
+    // If JavaScript cannot acquire the Debug bridge or construct its public
+    // component descriptor, the one-use launch grant must not remain resident
+    // in the containing process indefinitely. The expiry block captures only
+    // the public random run ID, never the grant itself.
+    NSString *expiringRunID = [runID copy];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(180 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+      [LatchwayDevelopmentGrantLock lock];
+      @try {
+        if (!LatchwayDevelopmentGrantConsumed &&
+            [LatchwayDevelopmentVerificationRunID isEqualToString:expiringRunID]) {
+          LatchwayDevelopmentCapturedGrant = nil;
+          LatchwayDevelopmentGrantInvalid = YES;
+          LatchwayDevelopmentGrantConsumed = YES;
+        }
+      } @finally {
+        [LatchwayDevelopmentGrantLock unlock];
+      }
+    });
   } @finally {
     [LatchwayDevelopmentGrantLock unlock];
   }
@@ -99,7 +186,8 @@ static void LatchwayDevelopmentCaptureAndClearEnvironment(void) {
 static NSString *LatchwayDevelopmentCompletedRunID(void) {
   [LatchwayDevelopmentGrantLock lock];
   @try {
-    if (!LatchwayDevelopmentGrantConsumed || !LatchwayDevelopmentGrantInvalid ||
+    if (!LatchwayDevelopmentResume || !LatchwayDevelopmentReceiptConsumed ||
+        !LatchwayDevelopmentGrantConsumed || !LatchwayDevelopmentGrantInvalid ||
         LatchwayDevelopmentCapturedGrant != nil || LatchwayDevelopmentVerificationRunID == nil) {
       return nil;
     }
@@ -107,6 +195,75 @@ static NSString *LatchwayDevelopmentCompletedRunID(void) {
   } @finally {
     [LatchwayDevelopmentGrantLock unlock];
   }
+}
+
+static NSString *LatchwayDevelopmentAbortRunID(void) {
+  [LatchwayDevelopmentGrantLock lock];
+  @try {
+    if (!LatchwayDevelopmentAbort || !LatchwayDevelopmentGrantConsumed ||
+        !LatchwayDevelopmentGrantInvalid || LatchwayDevelopmentCapturedGrant != nil ||
+        LatchwayDevelopmentVerificationRunID == nil) return nil;
+    return [LatchwayDevelopmentVerificationRunID copy];
+  } @finally {
+    [LatchwayDevelopmentGrantLock unlock];
+  }
+}
+
+static BOOL LatchwayDevelopmentRuntimeValid(void) {
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST
+  BOOL validPlatform = YES;
+#else
+  BOOL validPlatform = NO;
+#endif
+  return validPlatform && !LatchwayDevelopmentTesting() && !LatchwayDevelopmentDebuggerAttached() &&
+    [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"dev.latchway"];
+}
+
+static NSDictionary *LatchwayDevelopmentAppIntentCoordinates(
+  NSString *accessGroup,
+  NSString *account
+) {
+  return @{
+    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+    (__bridge id)kSecAttrService: LatchwayDevelopmentAppIntentService,
+    (__bridge id)kSecAttrAccount: account,
+    (__bridge id)kSecAttrAccessGroup: accessGroup,
+  };
+}
+
+static NSData *LatchwayDevelopmentReadAppIntentItem(NSString *accessGroup, NSString *account) {
+  NSMutableDictionary *query = [LatchwayDevelopmentAppIntentCoordinates(accessGroup, account) mutableCopy];
+  query[(__bridge id)kSecReturnData] = @YES;
+  query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+  CFTypeRef result = NULL;
+  OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+  return status == errSecSuccess && result != NULL ? CFBridgingRelease(result) : nil;
+}
+
+static BOOL LatchwayDevelopmentDeleteAppIntentArtifacts(NSString *accessGroup) {
+  BOOL deleted = YES;
+  for (NSString *account in @[LatchwayDevelopmentChallengeAccount, LatchwayDevelopmentReceiptAccount]) {
+    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)
+      LatchwayDevelopmentAppIntentCoordinates(accessGroup, account));
+    if (status != errSecSuccess && status != errSecItemNotFound) deleted = NO;
+  }
+  return deleted;
+}
+
+static BOOL LatchwayDevelopmentWriteAppIntentChallenge(NSString *accessGroup, NSString *runID) {
+  if (!LatchwayDevelopmentMatches(runID, @"^dev_[0-9a-f]{32}$")) return NO;
+  NSData *data = [runID dataUsingEncoding:NSUTF8StringEncoding];
+  if (data.length != 36) return NO;
+  NSDictionary *coordinates = LatchwayDevelopmentAppIntentCoordinates(
+    accessGroup,
+    LatchwayDevelopmentChallengeAccount
+  );
+  OSStatus removal = SecItemDelete((__bridge CFDictionaryRef)coordinates);
+  if (removal != errSecSuccess && removal != errSecItemNotFound) return NO;
+  NSMutableDictionary *item = [coordinates mutableCopy];
+  item[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+  item[(__bridge id)kSecValueData] = data;
+  return SecItemAdd((__bridge CFDictionaryRef)item, NULL) == errSecSuccess;
 }
 
 static NSString *LatchwayDevelopmentTerminalFailureRunID(void) {
@@ -175,6 +332,143 @@ RCT_EXPORT_MODULE_NO_LOAD(LatchwayDevelopmentBootstrap, LatchwayDevelopmentBoots
   return NO;
 }
 
+RCT_REMAP_METHOD(developmentVerificationPhase,
+                 developmentVerificationPhaseWithResolve:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  if (!LatchwayDevelopmentRuntimeValid()) {
+    reject(@"development_verification_invalid", @"The Debug-only verification phase is unavailable.", nil);
+    return;
+  }
+  [LatchwayDevelopmentGrantLock lock];
+  @try {
+    BOOL validRun = LatchwayDevelopmentVerificationRunID != nil && LatchwayDevelopmentGrantInvalid;
+    if (LatchwayDevelopmentResume && validRun && LatchwayDevelopmentGrantConsumed &&
+        LatchwayDevelopmentCapturedGrant == nil) {
+      resolve(@"resume");
+      return;
+    }
+    if (LatchwayDevelopmentAbort && validRun && LatchwayDevelopmentGrantConsumed &&
+        LatchwayDevelopmentCapturedGrant == nil) {
+      resolve([LatchwayDevelopmentAbortMarkerStage isEqual:@"firebase_sign_out"]
+        ? @"abort_sign_out" : @"abort");
+      return;
+    }
+    if (!LatchwayDevelopmentResume && !LatchwayDevelopmentGrantInvalid &&
+        !LatchwayDevelopmentGrantConsumed && LatchwayDevelopmentCapturedGrant != nil) {
+      resolve(@"initial");
+      return;
+    }
+  } @finally {
+    [LatchwayDevelopmentGrantLock unlock];
+  }
+  reject(@"development_verification_invalid", @"The Debug-only verification phase is unavailable.", nil);
+}
+
+RCT_REMAP_METHOD(clearDevelopmentAppIntentArtifacts,
+                 clearDevelopmentAppIntentArtifacts:(NSString *)accessGroup
+                 resolve:(RCTPromiseResolveBlock)resolve
+                 reject:(RCTPromiseRejectBlock)reject) {
+  if (!LatchwayDevelopmentRuntimeValid() || LatchwayDevelopmentResume ||
+      !LatchwayDevelopmentMatches(accessGroup, @"^[A-Z0-9]{10}\\.dev\\.latchway\\.keychain$")) {
+    reject(@"development_verification_invalid", @"The Debug App Intent artifact boundary is invalid.", nil);
+    return;
+  }
+  if (!LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup)) {
+    reject(@"development_verification_invalid", @"The Debug App Intent artifacts were not cleared.", nil);
+    return;
+  }
+  resolve(nil);
+}
+
+RCT_REMAP_METHOD(markDevelopmentAppIntentWaiting,
+                 markDevelopmentAppIntentWaiting:(NSString *)accessGroup
+                 resolve:(RCTPromiseResolveBlock)resolve
+                 reject:(RCTPromiseRejectBlock)reject) {
+  if (!LatchwayDevelopmentRuntimeValid() || LatchwayDevelopmentResume || LatchwayDevelopmentAbort ||
+      !LatchwayDevelopmentMatches(accessGroup, @"^[A-Z0-9]{10}\\.dev\\.latchway\\.keychain$")) {
+    reject(@"development_verification_invalid", @"The Debug App Intent waiting marker is unavailable.", nil);
+    return;
+  }
+  [LatchwayDevelopmentGrantLock lock];
+  NSString *runID = nil;
+  @try {
+    if (LatchwayDevelopmentGrantConsumed && LatchwayDevelopmentGrantInvalid &&
+        LatchwayDevelopmentCapturedGrant == nil) {
+      runID = [LatchwayDevelopmentVerificationRunID copy];
+    }
+  } @finally {
+    [LatchwayDevelopmentGrantLock unlock];
+  }
+  NSDictionary *marker = @{
+    @"schema_version": @2,
+    @"run_id": runID ?: @"",
+    @"status": @"waiting_for_app_intent",
+  };
+  if (runID == nil || !LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup) ||
+      !LatchwayDevelopmentWriteAppIntentChallenge(accessGroup, runID)) {
+    LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup);
+    reject(@"development_verification_invalid", @"The exact-run Debug App Intent challenge was not written.", nil);
+    return;
+  }
+  // The shared challenge is written only after JavaScript has prepared the
+  // current family and immediately before the atomic waiting marker.
+  if (!LatchwayDevelopmentWriteMarker(marker)) {
+    LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup);
+    reject(@"development_verification_invalid", @"The Debug App Intent waiting marker was not written.", nil);
+    return;
+  }
+  resolve(nil);
+}
+
+RCT_REMAP_METHOD(consumeDevelopmentAppIntentReceipt,
+                 consumeDevelopmentAppIntentReceipt:(NSString *)accessGroup
+                 resolve:(RCTPromiseResolveBlock)resolve
+                 reject:(RCTPromiseRejectBlock)reject) {
+  if (!LatchwayDevelopmentRuntimeValid() || !LatchwayDevelopmentResume ||
+      !LatchwayDevelopmentMatches(accessGroup, @"^[A-Z0-9]{10}\\.dev\\.latchway\\.keychain$") ||
+      !LatchwayDevelopmentIsWaitingMarker(LatchwayDevelopmentVerificationRunID)) {
+    reject(@"development_verification_invalid", @"The Debug App Intent receipt boundary is invalid.", nil);
+    return;
+  }
+  NSData *data = LatchwayDevelopmentReadAppIntentItem(accessGroup, LatchwayDevelopmentReceiptAccount);
+  NSData *challengeData = LatchwayDevelopmentReadAppIntentItem(
+    accessGroup,
+    LatchwayDevelopmentChallengeAccount
+  );
+  NSString *challenge = challengeData.length == 36
+    ? [[NSString alloc] initWithData:challengeData encoding:NSUTF8StringEncoding] : nil;
+  NSString *expectedRunID = [LatchwayDevelopmentVerificationRunID copy];
+  id decoded = data.length > 0 && data.length <= 512
+    ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+  NSDictionary *receipt = [decoded isKindOfClass:NSDictionary.class] ? decoded : nil;
+  NSSet *receiptKeys = receipt == nil ? nil : [NSSet setWithArray:receipt.allKeys];
+  NSSet *expectedKeys = [NSSet setWithArray:@[
+    @"schema_version", @"run_id", @"status", @"delegated_session", @"delegated_request",
+    @"completed_at",
+  ]];
+  NSString *completedAt = [receipt[@"completed_at"] isKindOfClass:NSString.class]
+    ? receipt[@"completed_at"] : nil;
+  NSDate *completed = completedAt == nil ? nil : [[NSISO8601DateFormatter new] dateFromString:completedAt];
+  NSTimeInterval age = completed == nil ? DBL_MAX : -[completed timeIntervalSinceNow];
+  BOOL valid = data.length > 0 && data.length <= 512 &&
+    LatchwayDevelopmentMatches(expectedRunID, @"^dev_[0-9a-f]{32}$") &&
+    [challenge isEqualToString:expectedRunID] &&
+    receipt != nil && [receiptKeys isEqual:expectedKeys] &&
+    [receipt[@"schema_version"] isEqual:@1] && [receipt[@"status"] isEqual:@"passed"] &&
+    [receipt[@"run_id"] isEqual:expectedRunID] &&
+    [receipt[@"delegated_session"] isEqual:@YES] && [receipt[@"delegated_request"] isEqual:@YES] &&
+    completed != nil && age >= -60 && age <= 600;
+  BOOL removed = LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup);
+  if (!valid || !removed) {
+    reject(@"development_verification_invalid", @"The bounded Debug App Intent receipt is invalid.", nil);
+    return;
+  }
+  [LatchwayDevelopmentGrantLock lock];
+  LatchwayDevelopmentReceiptConsumed = YES;
+  [LatchwayDevelopmentGrantLock unlock];
+  resolve(nil);
+}
+
 RCT_REMAP_METHOD(consumeDevelopmentIdentityGrant,
                  consumeDevelopmentIdentityGrant:(NSString *)applicationID
                  packageOrBundleIdentifier:(NSString *)packageOrBundleIdentifier
@@ -222,7 +516,7 @@ RCT_REMAP_METHOD(completeDevelopmentVerification,
     return;
   }
   NSDictionary *marker = @{
-    @"schema_version": @1,
+    @"schema_version": @2,
     @"run_id": runID,
     @"status": @"passed",
     @"checks": @[
@@ -230,13 +524,38 @@ RCT_REMAP_METHOD(completeDevelopmentVerification,
       @"gateway_responses",
       @"diagnostics_app_attest_app_verified_react_native_ios",
       @"quota",
-      @"installation_revoked",
+      @"component_prepared",
+      @"app_intent_delegated_session",
+      @"app_intent_delegated_request",
+      @"installation_family_revoked",
       @"firebase_signed_out",
     ],
   };
   if (!LatchwayDevelopmentWriteMarker(marker)) {
     reject(@"development_verification_invalid",
            @"The Debug-only physical-device verification marker was not written.", nil);
+    return;
+  }
+  resolve(nil);
+}
+
+RCT_REMAP_METHOD(completeDevelopmentAbort,
+                 completeDevelopmentAbortWithResolve:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject) {
+  NSString *runID = LatchwayDevelopmentAbortRunID();
+  if (!LatchwayDevelopmentRuntimeValid() || runID == nil) {
+    reject(@"development_verification_invalid", @"The Debug-only abort cleanup did not complete.", nil);
+    return;
+  }
+  NSDictionary *marker = @{
+    @"schema_version": @2,
+    @"run_id": runID,
+    @"status": @"aborted",
+    @"reason": @"delegated_verification_incomplete",
+    @"checks": @[@"installation_family_revoked", @"firebase_signed_out"],
+  };
+  if (!LatchwayDevelopmentWriteMarker(marker)) {
+    reject(@"development_verification_invalid", @"The Debug-only abort marker was not written.", nil);
     return;
   }
   resolve(nil);
@@ -259,7 +578,10 @@ RCT_REMAP_METHOD(failDevelopmentVerification,
     @"gateway_responses",
     @"diagnostics",
     @"quota",
-    @"installation_revoke",
+    @"component_prepare",
+    @"app_intent_wait",
+    @"app_intent_receipt",
+    @"family_revoke",
     @"firebase_sign_out",
     @"success_marker",
   ]];
@@ -274,7 +596,7 @@ RCT_REMAP_METHOD(failDevelopmentVerification,
     return;
   }
   NSDictionary *marker = @{
-    @"schema_version": @1,
+    @"schema_version": @2,
     @"run_id": runID,
     @"status": @"failed",
     @"failure_stage": stage,

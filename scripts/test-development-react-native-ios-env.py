@@ -24,6 +24,7 @@ def valid_values() -> dict[str, str]:
     return {
         "LATCHWAY_BASE_URL": "https://gateway.example.test",
         "LATCHWAY_APPLICATION_ID": "app_01J00000000000000000000000",
+        "LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID": "app_intent",
         "LATCHWAY_PACKAGE_OR_BUNDLE_IDENTIFIER": BUNDLE,
         "LATCHWAY_ENVIRONMENT": "development",
         "LATCHWAY_FEATURE": "assistant_responses",
@@ -122,6 +123,11 @@ class DevelopmentReactNativeIOSEnvironmentTests(unittest.TestCase):
         candidate = valid_values()
         candidate["LATCHWAY_FEATURE"] = "Responses"
         with self.assertRaisesRegex(VALIDATOR.InvalidEnvironment, "feature identifier"):
+            VALIDATOR.validate_environment(candidate, BUNDLE, PREFIX, SHARED_GROUP)
+
+        candidate = valid_values()
+        candidate["LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID"] = "AppIntent"
+        with self.assertRaisesRegex(VALIDATOR.InvalidEnvironment, "component definition"):
             VALIDATOR.validate_environment(candidate, BUNDLE, PREFIX, SHARED_GROUP)
 
 

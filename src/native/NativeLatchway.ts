@@ -37,8 +37,37 @@ export interface Spec extends TurboModule {
     clientID: string,
     operationID: string,
   ): Promise<string>;
+  prepareComponents(
+    clientID: string,
+    operationID: string,
+    identityToken: string,
+    componentsJSON: string,
+  ): Promise<string>;
+  replaceComponent(
+    clientID: string,
+    operationID: string,
+    identityToken: string,
+    componentJSON: string,
+  ): Promise<string>;
+  rootComponentDiagnostics(
+    clientID: string,
+    operationID: string,
+    componentJSON: string,
+  ): Promise<string>;
+  revokeComponent(
+    clientID: string,
+    operationID: string,
+    identityToken: string,
+    componentJSON: string,
+  ): Promise<void>;
   revoke(clientID: string, operationID: string, identityToken: string): Promise<void>;
   revokeFamily(clientID: string, operationID: string, identityToken: string): Promise<void>;
+  revokeFamilyWithComponents(
+    clientID: string,
+    operationID: string,
+    identityToken: string,
+    componentsJSON: string,
+  ): Promise<void>;
   cancel(clientID: string, operationID: string): void;
   dispose(clientID: string): Promise<void>;
 }

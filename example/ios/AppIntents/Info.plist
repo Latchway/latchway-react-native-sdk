@@ -7,6 +7,22 @@
 		<key>EXExtensionPointIdentifier</key>
 		<string>com.apple.appintents-extension</string>
 	</dict>
+	<key>LatchwayAppIntentComponentDefinitionID</key>
+	<string>$(LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID)</string>
+	<key>LatchwayAppIntentFeature</key>
+	<string>$(LATCHWAY_APPINTENT_FEATURE)</string>
+	<key>LatchwayAppIntentKeychainAccessGroup</key>
+	<string>$(LATCHWAY_APPINTENT_SHARED_KEYCHAIN_ACCESS_GROUP)</string>
+	<key>LatchwayAppIntentModel</key>
+	<string>$(LATCHWAY_APPINTENT_MODEL)</string>
+	<key>LatchwayApplicationID</key>
+	<string>$(LATCHWAY_APPINTENT_APPLICATION_ID)</string>
+	<key>LatchwayEnvironment</key>
+	<string>$(LATCHWAY_APPINTENT_ENVIRONMENT)</string>
+	<key>LatchwayGatewayURL</key>
+	<string>$(LATCHWAY_APPINTENT_GATEWAY_URL)</string>
+	<key>LatchwayRootKeychainAccessGroup</key>
+	<string>$(LATCHWAY_APPINTENT_ROOT_KEYCHAIN_ACCESS_GROUP)</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 </dict>

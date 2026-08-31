@@ -1,7 +1,9 @@
 import { LatchwayError } from "@latchway/client";
 import { ReadableStream as PonyfillReadableStream } from "web-streams-polyfill";
 import type { RuntimeConfiguration } from "./config.js";
+import { encodeIOSComponentDescriptor, encodeIOSComponentDescriptors } from "./config.js";
 import { acquire, type NativeLease } from "./coordinator.js";
+import { parseComponentDiagnostics } from "./component-client.js";
 import { abortError, fromNativeError } from "./errors.js";
 import { assertNoCredentialFields } from "./native-output.js";
 import type {
@@ -11,6 +13,8 @@ import type {
   QuotaLimit,
   QuotaSnapshot,
   ReactNativeDiagnostics,
+  ReactNativeComponentDiagnostics,
+  ReactNativeIOSComponent,
 } from "./types.js";
 import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
 
@@ -262,14 +266,72 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await this.nativeVoid("refresh");
   }
 
+  async prepareComponents(
+    components: readonly ReactNativeIOSComponent[],
+  ): Promise<ReactNativeComponentDiagnostics[]> {
+    this.assertActive();
+    const componentsJSON = encodeIOSComponentDescriptors(
+      components,
+      this.config.appleSharedKeychainAccessGroups,
+    );
+    const snapshot = JSON.parse(componentsJSON) as ReactNativeIOSComponent[];
+    const encoded = await this.nativeComponentOperation("prepare", componentsJSON);
+    return parsePreparedComponents(encoded, snapshot);
+  }
+
+  async revokeComponent(component: ReactNativeIOSComponent): Promise<void> {
+    this.assertActive();
+    const componentJSON = encodeIOSComponentDescriptor(
+      component,
+      this.config.appleSharedKeychainAccessGroups,
+    );
+    await this.nativeComponentOperation("revokeComponent", componentJSON);
+  }
+
+  async replaceComponent(component: ReactNativeIOSComponent): Promise<ReactNativeComponentDiagnostics> {
+    this.assertActive();
+    const componentJSON = encodeIOSComponentDescriptor(
+      component,
+      this.config.appleSharedKeychainAccessGroups,
+    );
+    const snapshot = JSON.parse(componentJSON) as ReactNativeIOSComponent;
+    const encoded = await this.nativeComponentOperation("replace", componentJSON);
+    return parseComponentDiagnostics(encoded, snapshot);
+  }
+
+  async componentDiagnostics(component: ReactNativeIOSComponent): Promise<ReactNativeComponentDiagnostics> {
+    this.assertActive();
+    const componentJSON = encodeIOSComponentDescriptor(
+      component,
+      this.config.appleSharedKeychainAccessGroups,
+    );
+    const snapshot = JSON.parse(componentJSON) as ReactNativeIOSComponent;
+    const lease = await this.lease;
+    await lease.ready;
+    const operationID = makeOperationID();
+    const operation = lease.module.rootComponentDiagnostics(lease.clientID, operationID, componentJSON);
+    const encoded = await abortable(operation, undefined, () => {
+      lease.module.cancel(lease.clientID, operationID);
+    });
+    return parseComponentDiagnostics(encoded, snapshot);
+  }
+
   async revokeCurrentInstallation(): Promise<void> {
     this.assertActive();
     await this.nativeVoid("revoke");
   }
 
-  async revokeCurrentInstallationFamily(): Promise<void> {
+  async revokeCurrentInstallationFamily(retiring: readonly ReactNativeIOSComponent[] = []): Promise<void> {
     this.assertActive();
-    await this.nativeVoid("revokeFamily");
+    if (retiring.length === 0) {
+      await this.nativeVoid("revokeFamily");
+      return;
+    }
+    const componentsJSON = encodeIOSComponentDescriptors(
+      retiring,
+      this.config.appleSharedKeychainAccessGroups,
+    );
+    await this.nativeComponentOperation("revokeFamily", componentsJSON);
   }
 
   async dispose(): Promise<void> {
@@ -305,6 +367,27 @@ export class DefaultLatchwayClient implements LatchwayClient {
         ? lease.module.revoke(lease.clientID, operationID, identityToken)
         : lease.module.revokeFamily(lease.clientID, operationID, identityToken);
     await abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
+  }
+
+  private async nativeComponentOperation(
+    method: "prepare" | "replace" | "revokeComponent" | "revokeFamily",
+    encodedDescriptor: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const lease = await this.lease;
+    await lease.ready;
+    const operationID = makeOperationID();
+    const identityToken = await token(this.config.getIdentityToken, signal);
+    const operation = method === "prepare"
+      ? lease.module.prepareComponents(lease.clientID, operationID, identityToken, encodedDescriptor)
+      : method === "replace"
+        ? lease.module.replaceComponent(lease.clientID, operationID, identityToken, encodedDescriptor)
+        : method === "revokeComponent"
+          ? lease.module.revokeComponent(lease.clientID, operationID, identityToken, encodedDescriptor)
+            .then(() => "")
+          : lease.module.revokeFamilyWithComponents(lease.clientID, operationID, identityToken, encodedDescriptor)
+            .then(() => "");
+    return abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
   private createRequest(input: RequestInfo | URL, init: RequestInit): Request {
@@ -344,6 +427,33 @@ export class DefaultLatchwayClient implements LatchwayClient {
       throw new LatchwayError("client_configuration_invalid", "This Latchway client has been disposed.");
     }
   }
+}
+
+function parsePreparedComponents(
+  encoded: string,
+  expected: readonly ReactNativeIOSComponent[],
+): ReactNativeComponentDiagnostics[] {
+  let value: unknown;
+  try { value = JSON.parse(encoded); } catch { throw invalidPreparedComponents(); }
+  if (typeof value !== "object" || value === null || Array.isArray(value) ||
+      Reflect.ownKeys(value).length !== 1 || !("components" in value) ||
+      !Array.isArray(value.components) || value.components.length !== expected.length) {
+    throw invalidPreparedComponents();
+  }
+  try {
+    return value.components.map((diagnostics, index) => {
+      const component = expected[index];
+      if (component === undefined) throw invalidPreparedComponents();
+      return parseComponentDiagnostics(JSON.stringify(diagnostics), component);
+    });
+  } catch (cause) {
+    if (cause instanceof LatchwayError) throw cause;
+    throw invalidPreparedComponents();
+  }
+}
+
+function invalidPreparedComponents(): LatchwayError {
+  return new LatchwayError("protocol_response_invalid", "Latchway native component output was invalid.");
 }
 
 /**

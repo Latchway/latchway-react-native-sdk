@@ -97,6 +97,41 @@ RCT_EXPORT_MODULE(NativeLatchway)
   [_bridge componentDiagnosticsWithClientID:clientID operationID:operationID resolve:resolve reject:reject];
 }
 
+- (void)prepareComponents:(NSString *)clientID
+              operationID:(NSString *)operationID
+            identityToken:(NSString *)identityToken
+           componentsJSON:(NSString *)componentsJSON
+                  resolve:(RCTPromiseResolveBlock)resolve
+                   reject:(RCTPromiseRejectBlock)reject {
+  [_bridge prepareComponentsWithClientID:clientID operationID:operationID identityToken:identityToken componentsJSON:componentsJSON resolve:resolve reject:reject];
+}
+
+- (void)replaceComponent:(NSString *)clientID
+              operationID:(NSString *)operationID
+            identityToken:(NSString *)identityToken
+            componentJSON:(NSString *)componentJSON
+                  resolve:(RCTPromiseResolveBlock)resolve
+                   reject:(RCTPromiseRejectBlock)reject {
+  [_bridge replaceComponentWithClientID:clientID operationID:operationID identityToken:identityToken componentJSON:componentJSON resolve:resolve reject:reject];
+}
+
+- (void)rootComponentDiagnostics:(NSString *)clientID
+                      operationID:(NSString *)operationID
+                    componentJSON:(NSString *)componentJSON
+                          resolve:(RCTPromiseResolveBlock)resolve
+                           reject:(RCTPromiseRejectBlock)reject {
+  [_bridge rootComponentDiagnosticsWithClientID:clientID operationID:operationID componentJSON:componentJSON resolve:resolve reject:reject];
+}
+
+- (void)revokeComponent:(NSString *)clientID
+             operationID:(NSString *)operationID
+           identityToken:(NSString *)identityToken
+           componentJSON:(NSString *)componentJSON
+                 resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject {
+  [_bridge revokeComponentWithClientID:clientID operationID:operationID identityToken:identityToken componentJSON:componentJSON resolve:^{ resolve(nil); } reject:reject];
+}
+
 - (void)revoke:(NSString *)clientID
     operationID:(NSString *)operationID
    identityToken:(NSString *)identityToken
@@ -111,6 +146,15 @@ RCT_EXPORT_MODULE(NativeLatchway)
                resolve:(RCTPromiseResolveBlock)resolve
                 reject:(RCTPromiseRejectBlock)reject {
   [_bridge revokeFamilyWithClientID:clientID operationID:operationID identityToken:identityToken resolve:^{ resolve(nil); } reject:reject];
+}
+
+- (void)revokeFamilyWithComponents:(NSString *)clientID
+                       operationID:(NSString *)operationID
+                     identityToken:(NSString *)identityToken
+                    componentsJSON:(NSString *)componentsJSON
+                           resolve:(RCTPromiseResolveBlock)resolve
+                            reject:(RCTPromiseRejectBlock)reject {
+  [_bridge revokeFamilyWithComponentsWithClientID:clientID operationID:operationID identityToken:identityToken componentsJSON:componentsJSON resolve:^{ resolve(nil); } reject:reject];
 }
 
 - (void)cancel:(NSString *)clientID operationID:(NSString *)operationID {

@@ -19,7 +19,7 @@ versions stop shipping through CocoaPods after October 2026; migrate the
 example to the compatible React Native Firebase SPM path only after its pinned
 RN 0.82 native host build is green.
 
-For a source-development run on a physical iPhone, the example offers a
+For a source-development run on a physical iPhone or iPad, the example offers a
 separate opt-in Debug bootstrap. `scripts/copy-development-firebase-ios-config.sh`
 validates an external, bundle-matched Firebase plist and copies it only into a
 Debug `iphoneos` build; `scripts/run-development-react-native-ios.sh` keeps the
@@ -29,15 +29,25 @@ force-bundles the exact JavaScript checkout before handing the grant to one
 no-debugger launch. The physical-device run therefore does not require Metro or
 Local Network access, although iOS can still show React Native's one-time Debug
 permission sheet on the first install. Later runs update the existing app so
-that OS consent persists; they do not retain Firebase or Latchway trust state.
-The app eagerly signs in with a new grant, signs out any old Firebase user, revokes prior
-installation state, exercises Responses, quota, and exact
-`react_native_ios`/`app_attest`/`app_verified` diagnostics, then revokes and
-signs out. The runner passes only after retrieving the exact random-run marker
-written after that terminal cleanup. The Debug native module and marker writer
-are absent from Release. This path verifies local integration only and cannot
+that OS consent persists. The app signs in with a new grant, revokes the old
+descriptor-bound family, verifies the root Responses/quota/diagnostics path,
+and prepares the App Intent descriptor. After the one-use grant has been
+destroyed, the root publishes a nonsecret exact-run shared-Keychain challenge
+immediately before the waiting marker. The separately launched Debug App Intent
+captures that challenge before constructing its client, refreshes an
+independently keyed delegated session, and fully consumes one successful bounded
+Responses body. It rechecks the challenge immediately before echoing the run in
+a bounded shared-Keychain receipt. The containing app accepts only its
+native-captured exact run, deletes both artifacts, retires that exact
+descriptor-bound family, and signs out. The runner passes only after retrieving
+the exact random-run
+marker written after terminal cleanup. Its bounded post-wait abort path also
+relaunches the containing app to finish and verify family retirement/sign-out
+after interruption or timeout, deleting both challenge and receipt. The Debug
+native module and marker writer are
+absent from Release. This path verifies local integration only and cannot
 satisfy the protected physical-evidence gate. See the example README for the
-exact runner workflow.
+exact runner workflow and possible Shortcuts tap.
 
 Firebase Authentication and Firebase App Check are distinct. The checked-in
 example pins Firebase App/Auth but does not install the native App Check module,
@@ -68,22 +78,57 @@ Attest provider: iOS app extensions cannot call
 `DCAppAttestService.generateKey`, so extension sessions remain independently
 keyed and delegated from the already attested root application.
 
-The checked-in App Intents target is an archive/signing fixture, not a
-delegated-request implementation. Candidate production requires a distinct
-child bundle ID and provisioning profile for it. The signed root target lists
-its private app-ID Keychain group first and the shared component group second;
-the first position keeps implicit root Keychain writes private. The signed
-extension lists only the shared group and therefore cannot read root-private
-key, credential, or session state. Each provisioning profile must authorize
-every group its target signs, either exactly or with a well-formed terminal
-wildcard. The extension must not carry App Attest. Its intent fails closed
-because React Native v1 exposes diagnostics but no delegated component request
-operation.
+The checked-in App Intents target has two intentionally different build
+boundaries. In Debug, its own CocoaPods target links `Latchway/AppExtensions`
+and the native Swift intent performs the local delegated-request proof without
+hosting a React Native JavaScript runtime. In Release, that dependency is not
+linked, no executable Latchway client path is compiled, and the archive/signing
+fixture's intent fails closed. The CocoaPods subspec is imported through module
+`Latchway`, not the SwiftPM-only module name.
 
-For local native SDK work, declare the sibling `Latchway.podspec` by path in the example/host Podfile before `use_react_native!`:
+Candidate production requires a distinct child bundle ID and provisioning
+profile. The signed root target lists its private app-ID Keychain group first
+and the shared component group second; the first position keeps implicit root
+Keychain writes private. The signed extension lists only the shared group and
+therefore cannot read root-private key, credential, identity, or session state.
+Each provisioning profile must authorize every group its target signs, either
+exactly or with a well-formed terminal wildcard. The extension must not carry
+App Attest. The Debug intent constructs its delegated client with
+`.reactNativeIOS`; the gateway component definition must therefore use platform
+`react_native_ios`, kind `app_intent_extension`, delegated-only trust, and the
+same requested feature as the descriptor prepared by the root.
+
+The root JavaScript API owns the descriptor lifecycle:
+
+- `prepareComponents` provisions one or more exact descriptors;
+- `replaceComponent` rotates/replaces one exact descriptor;
+- root-side `componentDiagnostics` reads redacted local state without acquiring
+  application identity;
+- `revokeComponent` retires one descriptor; and
+- `revokeCurrentInstallationFamily(descriptors)` retires the root plus the
+  complete supplied descriptor set during sign-out.
+
+Descriptors are normalized and snapshotted before asynchronous identity work.
+Preparation, replacement, and returned diagnostics are checked against that
+same snapshot, and serialized multi-component input larger than 65,536 bytes is
+rejected in JavaScript before crossing the native bridge. Component keys,
+grants, delegated sessions, and the root identity never cross into JavaScript.
+
+For local native SDK work, declare the sibling `Latchway.podspec` by path in the
+appropriate host targets. The root path declaration lets the autolinked React
+Native pod resolve its App Attest dependency from that source, while the
+extension subspec is Debug-only:
 
 ```ruby
-pod "Latchway", path: "../../../latchway-ios-sdk"
+target "ContainingApp" do
+  pod "Latchway", :path => "../../../latchway-ios-sdk"
+  # use_native_modules! / use_react_native! follows here.
+end
+
+target "AppIntents" do
+  pod "Latchway/AppExtensions", :path => "../../../latchway-ios-sdk",
+      :configurations => ["Debug"]
+end
 ```
 
 Local paths belong only in the host Podfile. They are absent from the published React Native podspec.

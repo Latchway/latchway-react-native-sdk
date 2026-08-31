@@ -18,6 +18,7 @@ import {
   createLatchwayClient,
   LatchwayError,
   type LatchwayClient,
+  type ReactNativeIOSComponent,
 } from "@latchway/react-native";
 import { freshClientAfterRevocation } from "./evidence-client";
 import {
@@ -43,10 +44,14 @@ const deployment = {
   legacySharedKeychainAccessGroups: Platform.OS === "ios"
     ? configuredKeychainAccessGroups("LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS")
     : [],
+  appIntentComponentDefinitionID: Platform.OS === "ios" && __DEV__
+    ? configuredOptional("LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID")
+    : undefined,
 };
 
 let physicalIdentityBootstrap: Promise<void> | undefined;
 let developmentIdentityBootstrap: Promise<void> | undefined;
+let developmentRunPhase: "initial" | "resume" | "abort" | "abort_sign_out" | undefined;
 let firebaseInitialization: Promise<void> | undefined;
 
 function makeClient(): LatchwayClient {
@@ -483,7 +488,12 @@ interface DevelopmentIdentitySink {
     packageOrBundleIdentifier: string,
     identityProvider: "firebase",
   ): Promise<string>;
+  developmentVerificationPhase(): Promise<"initial" | "resume" | "abort" | "abort_sign_out">;
+  clearDevelopmentAppIntentArtifacts(accessGroup: string): Promise<void>;
+  markDevelopmentAppIntentWaiting(accessGroup: string): Promise<void>;
+  consumeDevelopmentAppIntentReceipt(accessGroup: string): Promise<void>;
   completeDevelopmentVerification(): Promise<void>;
+  completeDevelopmentAbort(): Promise<void>;
   failDevelopmentVerification(stage: DevelopmentVerificationStage, code: string): Promise<void>;
 }
 
@@ -494,7 +504,10 @@ type DevelopmentVerificationStage =
   | "gateway_responses"
   | "diagnostics"
   | "quota"
-  | "installation_revoke"
+  | "component_prepare"
+  | "app_intent_wait"
+  | "app_intent_receipt"
+  | "family_revoke"
   | "firebase_sign_out"
   | "success_marker";
 
@@ -530,7 +543,12 @@ function evidenceSink(): EvidenceSink {
 function developmentIdentitySink(): DevelopmentIdentitySink {
   const value = NativeModules.LatchwayDevelopmentBootstrap as DevelopmentIdentitySink | undefined;
   if (value === undefined || typeof value.consumeDevelopmentIdentityGrant !== "function" ||
+      typeof value.developmentVerificationPhase !== "function" ||
+      typeof value.clearDevelopmentAppIntentArtifacts !== "function" ||
+      typeof value.markDevelopmentAppIntentWaiting !== "function" ||
+      typeof value.consumeDevelopmentAppIntentReceipt !== "function" ||
       typeof value.completeDevelopmentVerification !== "function" ||
+      typeof value.completeDevelopmentAbort !== "function" ||
       typeof value.failDevelopmentVerification !== "function") {
     throw new Error("The Debug-only Firebase identity bridge is unavailable.");
   }
@@ -590,6 +608,12 @@ async function bootstrapPhysicalIdentity(): Promise<void> {
 
 async function developmentIdentityToken(): Promise<string> {
   await ensureFirebaseApp();
+  if (developmentRunPhase === "resume" || developmentRunPhase === "abort" ||
+      developmentRunPhase === "abort_sign_out") {
+    const resumedUser = firebaseAuth().currentUser;
+    if (resumedUser === null) throw new Error("The Debug cleanup identity is unavailable.");
+    return resumedUser.getIdToken();
+  }
   const bootstrap = developmentIdentityBootstrap ?? bootstrapDevelopmentIdentity();
   developmentIdentityBootstrap = bootstrap;
   try {
@@ -632,17 +656,86 @@ async function runDevelopmentVerification(
   setOutput: (value: string) => void,
   setBusy: (value: boolean) => void,
 ): Promise<void> {
+  let sink: DevelopmentIdentitySink | undefined;
+  let component: ReactNativeIOSComponent | undefined;
   let measured: LatchwayClient | undefined;
   let developmentIdentityEstablished = false;
   let terminalCleanupComplete = false;
+  let waitingForAppIntent = false;
+  let familyCleanupRequired = false;
+  let terminalFailure: { stage: DevelopmentVerificationStage; code: string } | undefined;
   let failureStage: DevelopmentVerificationStage = "firebase_configuration";
   setBusy(true);
   setOutput("");
   setStatus("Running Debug physical-device verification");
   try {
+    sink = developmentIdentitySink();
+    component = developmentAppIntentComponent();
+    const phase = await sink.developmentVerificationPhase();
+    developmentRunPhase = phase;
+    if (phase === "abort" || phase === "abort_sign_out") {
+      failureStage = "family_revoke";
+      await sink.clearDevelopmentAppIntentArtifacts(component.keychainAccessGroup);
+      await ensureFirebaseApp();
+      if (phase === "abort" && firebaseAuth().currentUser === null) {
+        throw new Error("The Debug abort cleanup identity is unavailable.");
+      }
+      developmentIdentityEstablished = firebaseAuth().currentUser !== null;
+      if (phase === "abort") {
+        await current.ready;
+        await current.revokeCurrentInstallationFamily([component]);
+      }
+      // `abort_sign_out` is admitted only after descriptor-bound family
+      // retirement completed. It does not create a new root merely to revoke
+      // it again and retries only the remaining Firebase cleanup below.
+      failureStage = "firebase_sign_out";
+      await current.dispose();
+      if (firebaseAuth().currentUser !== null) await firebaseAuth().signOut();
+      if (firebaseAuth().currentUser !== null) {
+        throw new Error("Debug abort Firebase cleanup did not complete.");
+      }
+      developmentIdentityBootstrap = undefined;
+      terminalCleanupComplete = true;
+      await sink.completeDevelopmentAbort();
+      setStatus("Debug App Intent timeout cleanup completed");
+      return;
+    }
+    if (phase === "resume") {
+      failureStage = "app_intent_receipt";
+      await ensureFirebaseApp();
+      if (firebaseAuth().currentUser === null) {
+        throw new Error("The Debug cleanup identity is unavailable.");
+      }
+      developmentIdentityEstablished = true;
+      await sink.consumeDevelopmentAppIntentReceipt(component.keychainAccessGroup);
+      failureStage = "family_revoke";
+      await current.ready;
+      await current.revokeCurrentInstallationFamily([component]);
+      failureStage = "firebase_sign_out";
+      await current.dispose();
+      await firebaseAuth().signOut();
+      if (firebaseAuth().currentUser !== null) {
+        throw new Error("Debug Firebase identity cleanup did not complete.");
+      }
+      developmentIdentityBootstrap = undefined;
+      developmentRunPhase = undefined;
+      terminalCleanupComplete = true;
+      failureStage = "success_marker";
+      await sink.completeDevelopmentVerification();
+      setOutput(JSON.stringify({
+        app_intent_delegated_session: true,
+        app_intent_delegated_request: true,
+        installation_family_revoked: true,
+        firebase_signed_out: true,
+      }, null, 2));
+      setStatus("Debug delegated App Intent verification completed");
+      return;
+    }
+
+    await sink.clearDevelopmentAppIntentArtifacts(component.keychainAccessGroup);
     // Establish the exact fresh Firebase user first. The following explicit
-    // revocation makes any persisted native installation unusable before the
-    // replacement performs the measured App Attest session establishment.
+    // family revocation also retires any prior descriptor-bound component
+    // material before the replacement performs App Attest establishment.
     await ensureFirebaseApp();
     failureStage = "firebase_custom_token";
     await developmentIdentityToken();
@@ -650,8 +743,19 @@ async function runDevelopmentVerification(
       throw new Error("Debug Firebase identity was not established.");
     }
     developmentIdentityEstablished = true;
+    // From this point until the old family is retired, Firebase identity must
+    // survive any failure so the runner can relaunch this exact run in its
+    // bounded abort phase. A unique one-use Firebase user cannot be recreated.
+    familyCleanupRequired = true;
+    failureStage = "family_revoke";
+    await current.ready;
+    await current.revokeCurrentInstallationFamily([component]);
+    familyCleanupRequired = false;
     failureStage = "native_session_establishment";
-    measured = await freshClientAfterRevocation(current, makeClient);
+    await current.dispose();
+    measured = makeClient();
+    familyCleanupRequired = true;
+    await measured.ready;
 
     failureStage = "gateway_responses";
     const response = await measured.fetch("/v1/responses", {
@@ -685,56 +789,113 @@ async function runDevelopmentVerification(
       throw new Error("Debug quota verification returned the wrong feature.");
     }
 
-    // The success marker is deliberately after both terminal operations. A
-    // launch, request, or diagnostic result can never be mistaken for a clean
-    // verification if installation revocation or Firebase sign-out fails.
-    failureStage = "installation_revoke";
-    await measured.revokeCurrentInstallation();
-    await measured.dispose();
-    measured = undefined;
-    failureStage = "firebase_sign_out";
-    await firebaseAuth().signOut();
-    if (firebaseAuth().currentUser !== null) {
-      throw new Error("Debug Firebase identity cleanup did not complete.");
+    failureStage = "component_prepare";
+    const prepared = await measured.prepareComponents([component]);
+    const componentDiagnostics = prepared[0];
+    if (prepared.length !== 1 || componentDiagnostics === undefined ||
+        componentDiagnostics.definitionID !== component.definitionID ||
+        componentDiagnostics.keychainAccessGroup !== component.keychainAccessGroup ||
+        !componentDiagnostics.keyAvailable || componentDiagnostics.keyStorage !== "secure_enclave" ||
+        !componentDiagnostics.grantAvailable ||
+        componentDiagnostics.trustSource !== "delegated_from_attested_root" ||
+        componentDiagnostics.containingAppActionRequired) {
+      throw new Error("Debug delegated App Intent provisioning did not become ready.");
     }
-    developmentIdentityBootstrap = undefined;
-    terminalCleanupComplete = true;
-    failureStage = "success_marker";
-    await developmentIdentitySink().completeDevelopmentVerification();
+
+    // Leave the prepared family intact for the separately launched extension.
+    // The marker is the last fallible operation in this branch: once it is
+    // visible, every exit belongs to the runner's exact-run abort boundary.
+    // The one-use launch grant was already destroyed in both processes.
+    failureStage = "app_intent_wait";
     setOutput(JSON.stringify({
       platform: diagnostics.platform,
       provider: diagnostics.attestation.provider,
       trust_level: diagnostics.attestation.trustLevel,
       responses_status: result.status,
       quota_feature: quota.feature,
-      terminal_cleanup: true,
+      component_prepared: true,
+      waiting_for_app_intent: true,
     }, null, 2));
-    setStatus("Debug physical-device verification completed");
+    setStatus("Waiting for the Run Latchway Proof App Intent");
+    await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup);
+    waitingForAppIntent = true;
+    familyCleanupRequired = false;
+    developmentIdentityBootstrap = undefined;
+    developmentRunPhase = undefined;
   } catch (error) {
     const failureCode = safeDevelopmentFailureCode(error);
+    terminalFailure = { stage: failureStage, code: failureCode };
     setOutput(JSON.stringify({ failure_stage: failureStage, failure_code: failureCode }, null, 2));
-    try {
-      await developmentIdentitySink().failDevelopmentVerification(failureStage, failureCode);
-    } catch {
-      // A missing/invalid/consumed native grant cannot produce an exact-run
-      // receipt. The host then retains its bounded timeout and fails closed.
-    }
     setStatus("Debug physical-device verification failed.");
   } finally {
-    if (!terminalCleanupComplete) {
-      if (measured !== undefined) {
-        try { await measured.revokeCurrentInstallation(); } catch { /* no marker is emitted */ }
-        try { await measured.dispose(); } catch { /* no marker is emitted */ }
+    if (!terminalCleanupComplete && !waitingForAppIntent) {
+      const exactRunCleanupPending = developmentRunPhase === "resume" ||
+        developmentRunPhase === "abort" || developmentRunPhase === "abort_sign_out";
+      if (!exactRunCleanupPending) {
+        // Do not immediately retry the operation that just failed: retain its
+        // exact Firebase identity and publish an abort-admissible family_revoke
+        // marker. For a later-stage failure, attempt local compensation once;
+        // only a verified retirement permits sign-out.
+        if (familyCleanupRequired && terminalFailure?.stage !== "family_revoke" &&
+            measured !== undefined && component !== undefined) {
+          try {
+            await measured.revokeCurrentInstallationFamily([component]);
+            familyCleanupRequired = false;
+          } catch (cleanupError) {
+            terminalFailure = {
+              stage: "family_revoke",
+              code: safeDevelopmentFailureCode(cleanupError),
+            };
+          }
+        }
+        if (measured !== undefined) {
+          try { await measured.dispose(); } catch { /* native state remains retryable */ }
+        }
+        if (developmentIdentityEstablished && !familyCleanupRequired) {
+          try { await firebaseAuth().signOut(); } catch { /* verify persisted state below */ }
+          if (firebaseAuth().currentUser === null) {
+            developmentIdentityBootstrap = undefined;
+          } else {
+            terminalFailure = { stage: "firebase_sign_out", code: "verification_failed" };
+          }
+        }
+        if (sink !== undefined && component !== undefined) {
+          try {
+            await sink.clearDevelopmentAppIntentArtifacts(component.keychainAccessGroup);
+          } catch { /* no marker is emitted */ }
+        }
       }
-      if (developmentIdentityEstablished) {
-        try { await firebaseAuth().signOut(); } catch { /* no marker is emitted */ }
-        developmentIdentityBootstrap = undefined;
-      }
-      // When the native slot was unavailable, leave any pre-existing Firebase
-      // session untouched; a Metro reload cannot destroy valid authentication.
+      // Resume/abort failures retain their exact marker and cleanup state for
+      // the runner's one centralized bounded abort launch. Before the waiting
+      // boundary, a missing native slot still leaves prior Firebase state
+      // untouched so a Metro reload cannot destroy valid authentication.
     }
+    if (terminalFailure !== undefined && sink !== undefined) {
+      try {
+        await sink.failDevelopmentVerification(terminalFailure.stage, terminalFailure.code);
+      } catch {
+        // A missing/invalid/consumed native slot cannot produce an exact-run
+        // marker. Any cleanup authority retained above remains persisted.
+      }
+    }
+    if (!waitingForAppIntent) developmentRunPhase = undefined;
     setBusy(false);
   }
+}
+
+function developmentAppIntentComponent(): ReactNativeIOSComponent {
+  const definitionID = deployment.appIntentComponentDefinitionID;
+  const keychainAccessGroup = deployment.legacySharedKeychainAccessGroups[0];
+  if (definitionID === undefined || keychainAccessGroup === undefined ||
+      deployment.legacySharedKeychainAccessGroups.length !== 1) {
+    throw new Error("The Debug App Intent component descriptor is unavailable.");
+  }
+  return {
+    definitionID,
+    kind: "app_intent_extension",
+    keychainAccessGroup,
+    requestedFeatures: [deployment.feature],
+  };
 }
 
 function safeDevelopmentFailureCode(error: unknown): string {

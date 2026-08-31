@@ -7,6 +7,8 @@ import type {
   LatchwayComponentClient,
   ReactNativeComponentDiagnostics,
   ReactNativeComponentTrustSource,
+  ReactNativeDirectAttestationComponent,
+  ReactNativeIOSComponent,
 } from "./types.js";
 
 const componentTrustSources = new Set<ReactNativeComponentTrustSource>([
@@ -54,7 +56,7 @@ export class DefaultLatchwayComponentClient implements LatchwayComponentClient {
     } catch (cause) {
       throw fromNativeError(cause);
     }
-    return parseComponentDiagnostics(encoded, this.config);
+    return parseComponentDiagnostics(encoded, this.config.component);
   }
 
   async dispose(): Promise<void> {
@@ -71,17 +73,17 @@ export class DefaultLatchwayComponentClient implements LatchwayComponentClient {
   }
 }
 
-function parseComponentDiagnostics(
+export function parseComponentDiagnostics(
   encoded: string,
-  config: RuntimeComponentConfiguration,
+  component: ReactNativeDirectAttestationComponent | ReactNativeIOSComponent,
 ): ReactNativeComponentDiagnostics {
   const value = parseRecord(encoded);
   assertNoCredentialFields(value);
   if (!hasOnlyKeys(value, [
     "familyID", "componentID", "definitionID", "keychainAccessGroup", "keyAvailable", "keyStorage",
     "grantAvailable", "sessionAvailable", "trustSource", "trustExpiresAt", "containingAppActionRequired",
-  ]) || value.definitionID !== config.component.definitionID ||
-      value.keychainAccessGroup !== config.component.keychainAccessGroup ||
+  ]) || value.definitionID !== component.definitionID ||
+      value.keychainAccessGroup !== component.keychainAccessGroup ||
       typeof value.keyAvailable !== "boolean" || typeof value.keyStorage !== "string" ||
       value.keyStorage.length === 0 || value.keyStorage.length > 128 || /\p{Cc}/u.test(value.keyStorage) ||
       typeof value.grantAvailable !== "boolean" || typeof value.sessionAvailable !== "boolean" ||
@@ -99,8 +101,8 @@ function parseComponentDiagnostics(
   return {
     ...(familyID === undefined ? {} : { familyID }),
     ...(componentID === undefined ? {} : { componentID }),
-    definitionID: config.component.definitionID,
-    keychainAccessGroup: config.component.keychainAccessGroup,
+    definitionID: component.definitionID,
+    keychainAccessGroup: component.keychainAccessGroup,
     keyAvailable: value.keyAvailable,
     keyStorage: value.keyStorage,
     grantAvailable: value.grantAvailable,

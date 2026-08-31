@@ -118,6 +118,24 @@ git -C "$repository_root" check-ignore --quiet -- "$development_envfile" || {
 python3 "$repository_root/scripts/validate-development-react-native-ios-env.py" \
   "$development_envfile" "$LATCHWAY_BUNDLE_ID" "$LATCHWAY_IOS_APP_ID_PREFIX" \
   "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP"
+app_intent_build_output="$(python3 "$repository_root/scripts/validate-development-react-native-ios-env.py" \
+  "$development_envfile" "$LATCHWAY_BUNDLE_ID" "$LATCHWAY_IOS_APP_ID_PREFIX" \
+  "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP" --emit-app-intent-build-values)"
+app_intent_build_values=()
+while IFS= read -r value; do
+  app_intent_build_values+=("$value")
+done <<< "$app_intent_build_output"
+[[ "${#app_intent_build_values[@]}" -eq 6 ]] || {
+  echo "development App Intent build coordinates are incomplete" >&2
+  exit 2
+}
+app_intent_gateway_url="${app_intent_build_values[0]}"
+app_intent_application_id="${app_intent_build_values[1]}"
+app_intent_environment="${app_intent_build_values[2]}"
+app_intent_component_definition_id="${app_intent_build_values[3]}"
+app_intent_feature="${app_intent_build_values[4]}"
+app_intent_model="${app_intent_build_values[5]}"
+unset app_intent_build_output app_intent_build_values
 case "$(cd "$(dirname "$LATCHWAY_DEVELOPMENT_FIREBASE_IOS_CONFIG_PATH")" && pwd -P)/$(basename "$LATCHWAY_DEVELOPMENT_FIREBASE_IOS_CONFIG_PATH")" in
   "$repository_root"|"$repository_root"/*)
     echo "development Firebase configuration must remain external to the repository" >&2
@@ -183,21 +201,87 @@ workspace="$repository_root/example/ios/LatchwayExample.xcworkspace"
 }
 
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/latchway-rn-ios-development.XXXXXX")"
-cleanup() {
+waiting_observed=false
+terminal_cleanup_observed=false
+abort_cleanup_in_progress=false
+notification_observer_pid=""
+initial_launch_attempted=false
+
+stop_notification_observer() {
+  if [[ -n "${notification_observer_pid:-}" ]]; then
+    kill "$notification_observer_pid" >/dev/null 2>&1 || true
+    wait "$notification_observer_pid" >/dev/null 2>&1 || true
+    notification_observer_pid=""
+  fi
+}
+
+wait_for_app_intent_window_remaining() {
+  local remaining="$1"
+  while (( remaining > 0 )); do
+    sleep 1
+    remaining=$((remaining - 1))
+  done
+}
+
+clear_development_child_state() {
   unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT
   unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256
   unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID
+  unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME
+  unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT
   latchway_development_grant=""
   latchway_development_grant_sha256=""
-  latchway_development_run_id=""
   unset latchway_development_grant
   unset latchway_development_grant_sha256
+}
+
+cleanup() {
+  clear_development_child_state
+  stop_notification_observer
+  latchway_development_run_id=""
   unset latchway_development_run_id
   if [[ -d "$temporary" && "$temporary" == */latchway-rn-ios-development.* ]]; then
     rm -rf "$temporary"
   fi
 }
-trap cleanup EXIT
+
+finalize_runner() {
+  local original_status=$?
+  local abort_status=0
+  # Disable every trap before cleanup so an abort failure or a second signal
+  # cannot recurse through this exact-run finalizer.
+  trap - EXIT INT TERM HUP
+  # A signal can interrupt an initial or resume launch before its normal unset
+  # statements. Clear every mutually exclusive child phase and the raw one-use
+  # grant before inspecting the marker or exporting the sole abort phase.
+  clear_development_child_state
+  set +e
+  stop_notification_observer
+  if [[ "$initial_launch_attempted" == true && "$terminal_cleanup_observed" != true ]]; then
+    # Close the atomic-marker/poll race. This exact-run refresh also recognizes
+    # terminal cleanup that completed immediately before an interrupt.
+    refresh_exact_run_cleanup_state
+  fi
+  if [[ "$waiting_observed" == true && "$terminal_cleanup_observed" != true &&
+        "$abort_cleanup_in_progress" != true ]]; then
+    echo "development verification ended after component preparation; starting exact-run abort cleanup" >&2
+    run_abort_cleanup || abort_status=$?
+    if (( abort_status == 0 )); then
+      echo "development delegated verification was incomplete; descriptor-bound family cleanup completed" >&2
+    else
+      echo "development delegated verification was incomplete and bounded cleanup was not confirmed" >&2
+    fi
+    # A path that reached the waiting boundary can never become successful
+    # merely because its compensating cleanup succeeded.
+    if (( original_status == 0 )); then original_status=1; fi
+  fi
+  cleanup
+  exit "$original_status"
+}
+trap finalize_runner EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 derived_data="$temporary/DerivedData"
 xcode_environment=(
@@ -229,6 +313,14 @@ env -i "${xcode_environment[@]}" \
   DEVELOPMENT_TEAM="$LATCHWAY_IOS_TEAM_ID" \
   LATCHWAY_ROOT_BUNDLE_IDENTIFIER="$LATCHWAY_BUNDLE_ID" \
   LATCHWAY_APPINTENTS_BUNDLE_IDENTIFIER="$LATCHWAY_IOS_APPINTENTS_BUNDLE_ID" \
+  LATCHWAY_APPINTENT_GATEWAY_URL="$app_intent_gateway_url" \
+  LATCHWAY_APPINTENT_APPLICATION_ID="$app_intent_application_id" \
+  LATCHWAY_APPINTENT_ENVIRONMENT="$app_intent_environment" \
+  LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID="$app_intent_component_definition_id" \
+  LATCHWAY_APPINTENT_FEATURE="$app_intent_feature" \
+  LATCHWAY_APPINTENT_MODEL="$app_intent_model" \
+  LATCHWAY_APPINTENT_ROOT_KEYCHAIN_ACCESS_GROUP="$private_keychain_access_group" \
+  LATCHWAY_APPINTENT_SHARED_KEYCHAIN_ACCESS_GROUP="$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP" \
   build
 
 app="$derived_data/Build/Products/Debug-iphoneos/LatchwayExample.app"
@@ -303,6 +395,28 @@ actual_appintents_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifie
   echo "signed development App Intents bundle identifier mismatch" >&2
   exit 1
 }
+python3 - "$appintents/Info.plist" "$app_intent_gateway_url" "$app_intent_application_id" \
+  "$app_intent_environment" "$private_keychain_access_group" \
+  "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP" "$app_intent_component_definition_id" \
+  "$app_intent_feature" "$app_intent_model" <<'PY'
+import pathlib
+import plistlib
+import sys
+
+value = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
+expected = {
+    "LatchwayGatewayURL": sys.argv[2],
+    "LatchwayApplicationID": sys.argv[3],
+    "LatchwayEnvironment": sys.argv[4],
+    "LatchwayRootKeychainAccessGroup": sys.argv[5],
+    "LatchwayAppIntentKeychainAccessGroup": sys.argv[6],
+    "LatchwayAppIntentComponentDefinitionID": sys.argv[7],
+    "LatchwayAppIntentFeature": sys.argv[8],
+    "LatchwayAppIntentModel": sys.argv[9],
+}
+if any(value.get(key) != item for key, item in expected.items()):
+    raise SystemExit("built development App Intent configuration mismatch")
+PY
 appintents_entitlements="$temporary/appintents-entitlements.plist"
 codesign -d --entitlements :- "$appintents" >"$appintents_entitlements" 2>/dev/null
 python3 - "$appintents_entitlements" "$LATCHWAY_IOS_TEAM_ID" \
@@ -346,66 +460,54 @@ latchway_development_run_id="dev_$(python3 -c 'import secrets; print(secrets.tok
   exit 1
 }
 export -n latchway_development_run_id
-export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT="$latchway_development_grant"
-export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256="$latchway_development_grant_sha256"
-export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID="$latchway_development_run_id"
-launch_status=0
-xcrun devicectl device process launch \
-  --device "$LATCHWAY_IOS_DEVICE_ID" --terminate-existing --timeout 30 \
-  "$LATCHWAY_BUNDLE_ID" >/dev/null || launch_status=$?
-unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT
-unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256
-unset DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID
-latchway_development_grant=""
-latchway_development_grant_sha256=""
-unset latchway_development_grant
-unset latchway_development_grant_sha256
-(( launch_status == 0 )) || {
-  echo "development application launch failed" >&2
-  exit "$launch_status"
-}
 
 marker="$temporary/latchway-development-verification.json"
-marker_observed=false
-for ((attempt = 0; attempt < 180; attempt += 1)); do
+copy_development_marker() {
   rm -f "$marker"
-  if xcrun devicectl device copy from \
-      --device "$LATCHWAY_IOS_DEVICE_ID" \
-      --domain-type appDataContainer \
-      --domain-identifier "$LATCHWAY_BUNDLE_ID" \
-      --source "Library/Caches/latchway-development-verification.json" \
-      --destination "$marker" --timeout 5 >/dev/null 2>&1; then
-    python3 - "$marker" "$latchway_development_run_id" <<'PY'
+  xcrun devicectl device copy from \
+    --device "$LATCHWAY_IOS_DEVICE_ID" \
+    --domain-type appDataContainer \
+    --domain-identifier "$LATCHWAY_BUNDLE_ID" \
+    --source "Library/Caches/latchway-development-verification.json" \
+    --destination "$marker" --timeout 5 >/dev/null 2>&1
+}
+
+marker_state() {
+  python3 - "$marker" "$latchway_development_run_id" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 path = pathlib.Path(sys.argv[1])
-if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 4096:
     raise SystemExit("development verification marker is unsafe")
 try:
     value = json.loads(path.read_text(encoding="utf-8"))
 except (OSError, UnicodeError, json.JSONDecodeError) as failure:
     raise SystemExit("development verification marker is malformed") from failure
-if value.get("schema_version") == 1 and value.get("run_id") == sys.argv[2] and value.get("status") == "failed":
+if value.get("schema_version") != 2 or value.get("run_id") != sys.argv[2]:
+    raise SystemExit("development verification marker does not identify the exact run")
+if value.get("status") == "failed":
+    stages = {
+        "firebase_configuration", "firebase_custom_token", "native_session_establishment",
+        "gateway_responses", "diagnostics", "quota", "component_prepare", "app_intent_wait",
+        "app_intent_receipt", "family_revoke", "firebase_sign_out", "success_marker",
+    }
     stage = value.get("failure_stage")
     code = value.get("failure_code")
-    stages = {
-        "firebase_configuration",
-        "firebase_custom_token",
-        "native_session_establishment",
-        "gateway_responses",
-        "diagnostics",
-        "quota",
-        "installation_revoke",
-        "firebase_sign_out",
-        "success_marker",
-    }
-    if stage not in stages or not isinstance(code, str) or not __import__("re").fullmatch(r"[a-z][a-z0-9_]{1,99}", code):
+    if set(value) != {"schema_version", "run_id", "status", "failure_stage", "failure_code"} or \
+            stage not in stages or not isinstance(code, str) or re.fullmatch(r"[a-z][a-z0-9_]{1,99}", code) is None:
         raise SystemExit("development verification failure receipt is malformed")
-    raise SystemExit(f"development verification failed at {stage}: {code}")
-expected = {
-    "schema_version": 1,
+    print(f"failed {stage} {code}")
+elif value == {
+    "schema_version": 2,
+    "run_id": sys.argv[2],
+    "status": "waiting_for_app_intent",
+}:
+    print("waiting")
+elif value == {
+    "schema_version": 2,
     "run_id": sys.argv[2],
     "status": "passed",
     "checks": [
@@ -413,20 +515,217 @@ expected = {
         "gateway_responses",
         "diagnostics_app_attest_app_verified_react_native_ios",
         "quota",
-        "installation_revoked",
+        "component_prepared",
+        "app_intent_delegated_session",
+        "app_intent_delegated_request",
+        "installation_family_revoked",
         "firebase_signed_out",
     ],
-}
-if value != expected:
-    raise SystemExit("development verification marker does not prove the exact run")
+}:
+    print("passed")
+elif value == {
+    "schema_version": 2,
+    "run_id": sys.argv[2],
+    "status": "aborted",
+    "reason": "delegated_verification_incomplete",
+    "checks": ["installation_family_revoked", "firebase_signed_out"],
+}:
+    print("aborted")
+else:
+    raise SystemExit("development verification marker is not an allowed state")
 PY
-    marker_observed=true
-    break
+}
+
+run_abort_cleanup() {
+  if [[ "$abort_cleanup_in_progress" == true ]]; then return 1; fi
+  abort_cleanup_in_progress=true
+  stop_notification_observer
+
+  export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID="$latchway_development_run_id"
+  export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_ABORT=1
+  local abort_status=0
+  xcrun devicectl device process launch \
+    --device "$LATCHWAY_IOS_DEVICE_ID" --terminate-existing --timeout 30 \
+    "$LATCHWAY_BUNDLE_ID" >/dev/null || abort_status=$?
+  clear_development_child_state
+  if (( abort_status != 0 )); then
+    echo "development exact-run abort-cleanup launch failed" >&2
+    return "$abort_status"
+  fi
+
+  local state=""
+  for ((attempt = 0; attempt < 120; attempt += 1)); do
+    if copy_development_marker && state="$(marker_state 2>/dev/null)"; then
+      case "$state" in
+        aborted)
+          terminal_cleanup_observed=true
+          return 0
+          ;;
+        # These are admitted exact-run retry states. The launched host may
+        # leave the prior marker in place until its cleanup turn completes.
+        waiting|failed\ app_intent_receipt\ *|failed\ family_revoke\ *|failed\ firebase_sign_out\ *)
+          ;;
+        *)
+          echo "development exact-run abort cleanup reached a non-abortable state" >&2
+          return 1
+          ;;
+      esac
+    fi
+    sleep 1
+  done
+  echo "development exact-run abort cleanup marker timed out" >&2
+  return 1
+}
+
+refresh_exact_run_cleanup_state() {
+  local observed_state=""
+  local refresh_attempt
+  for ((refresh_attempt = 0; refresh_attempt < 5; refresh_attempt += 1)); do
+    if copy_development_marker && observed_state="$(marker_state 2>/dev/null)"; then
+      case "$observed_state" in
+        waiting|failed\ app_intent_receipt\ *|failed\ family_revoke\ *|failed\ firebase_sign_out\ *)
+          waiting_observed=true
+          return 0
+          ;;
+        passed|aborted|failed\ success_marker\ *)
+          terminal_cleanup_observed=true
+          return 0
+          ;;
+      esac
+    fi
+    if (( refresh_attempt < 4 )); then sleep 1; fi
+  done
+  return 1
+}
+
+# Define every exact-run marker and abort helper before launching the host. If
+# launch and marker publication race an interrupt, the EXIT finalizer can still
+# inspect the atomic marker and perform the same bounded abort route.
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_ONE_TIME_DEVICE_GRANT="$latchway_development_grant"
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256="$latchway_development_grant_sha256"
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID="$latchway_development_run_id"
+initial_launch_attempted=true
+launch_status=0
+xcrun devicectl device process launch \
+  --device "$LATCHWAY_IOS_DEVICE_ID" --terminate-existing --timeout 30 \
+  "$LATCHWAY_BUNDLE_ID" >/dev/null || launch_status=$?
+clear_development_child_state
+(( launch_status == 0 )) || {
+  echo "development application launch failed" >&2
+  exit "$launch_status"
+}
+
+for ((attempt = 0; attempt < 180; attempt += 1)); do
+  if copy_development_marker; then
+    state="$(marker_state)"
+    case "$state" in
+      waiting)
+        waiting_observed=true
+        break
+        ;;
+      failed\ *)
+        echo "development verification ${state}" >&2
+        exit 1
+        ;;
+      *)
+        echo "development verification reached an unexpected initial state" >&2
+        exit 1
+        ;;
+    esac
   fi
   sleep 1
 done
-[[ "$marker_observed" == true ]] || {
-  echo "development application did not emit a passing terminal verification marker; dismiss any iOS permission sheet and rerun with a fresh grant" >&2
+[[ "$waiting_observed" == true ]] || {
+  echo "development host did not prepare the App Intent component" >&2
+  exit 1
+}
+
+# The one-use launch credential and its digest no longer exist in this process
+# or the host's native slot. Observe only a fixed Darwin notification while a
+# bounded Shortcuts URL attempt gives the system a chance to run the App
+# Shortcut. The shared-Keychain receipt remains the authoritative proof.
+[[ -z "${latchway_development_grant+x}" && -z "${latchway_development_grant_sha256+x}" ]] || {
+  echo "development launch credential survived the waiting boundary" >&2
+  exit 1
+}
+notification_result="$temporary/app-intent-notification.json"
+notification_window_started=$SECONDS
+xcrun devicectl device notification observe \
+  --device "$LATCHWAY_IOS_DEVICE_ID" \
+  --name "dev.latchway.debug.app-intent-proof-complete" \
+  --session-timeout 180 --timeout 190 --json-output "$notification_result" \
+  >/dev/null 2>&1 &
+notification_observer_pid=$!
+sleep 1
+shortcuts_url_status=0
+xcrun devicectl device process launch \
+  --device "$LATCHWAY_IOS_DEVICE_ID" --terminate-existing --timeout 15 \
+  --payload-url "shortcuts://run-shortcut?name=Run%20Latchway%20Proof" \
+  com.apple.shortcuts >/dev/null 2>&1 || shortcuts_url_status=$?
+if (( shortcuts_url_status != 0 )); then
+  echo "The bounded Shortcuts URL attempt was unavailable." >&2
+fi
+echo "Waiting up to 180 seconds for the App Intent proof. If it does not run automatically, open Shortcuts and tap ‘Run Latchway Proof’ under the LatchwayExample App Shortcuts."
+notification_status=0
+wait "$notification_observer_pid" || notification_status=$?
+notification_observer_pid=""
+if (( notification_status != 0 )); then
+  notification_elapsed=$((SECONDS - notification_window_started))
+  notification_remaining=$((180 - notification_elapsed))
+  if (( notification_remaining > 0 )); then
+    echo "The Darwin notification observer ended early; preserving the remaining manual App Shortcut window." >&2
+    wait_for_app_intent_window_remaining "$notification_remaining"
+  fi
+  echo "The Darwin notification wait ended without confirmation; the host will check the authoritative receipt." >&2
+fi
+
+# Resume with only the public exact-run identifier and a phase bit. No custom
+# token, token digest, request body, component identifier, or session material
+# crosses this second CoreDevice launch boundary.
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RUN_ID="$latchway_development_run_id"
+export DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_VERIFICATION_RESUME=1
+resume_status=0
+xcrun devicectl device process launch \
+  --device "$LATCHWAY_IOS_DEVICE_ID" --terminate-existing --timeout 30 \
+  "$LATCHWAY_BUNDLE_ID" >/dev/null || resume_status=$?
+clear_development_child_state
+(( resume_status == 0 )) || {
+  echo "development application cleanup launch failed" >&2
+  exit "$resume_status"
+}
+
+terminal_observed=false
+for ((attempt = 0; attempt < 120; attempt += 1)); do
+  if copy_development_marker; then
+    state="$(marker_state)"
+    case "$state" in
+      passed)
+        terminal_observed=true
+        terminal_cleanup_observed=true
+        break
+        ;;
+      failed\ *)
+        if [[ "$state" == failed\ success_marker\ * ]]; then
+          # The host sets success_marker only after descriptor-bound family
+          # retirement and Firebase sign-out both completed. No identity
+          # remains, so this is terminal nonzero without another abort launch.
+          terminal_cleanup_observed=true
+        fi
+        echo "development verification ${state}" >&2
+        exit 1
+        ;;
+      waiting)
+        ;;
+      *)
+        echo "development verification reached an unexpected terminal state" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  sleep 1
+done
+[[ "$terminal_observed" == true ]] || {
+  echo "development application did not emit a terminal delegated-component marker" >&2
   exit 1
 }
 
