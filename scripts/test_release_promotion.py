@@ -411,9 +411,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
             'bundle_locked_repository Latchway/latchway "$CORE_COMMIT"',
             locked_sources,
         )
+        self.assertIn(
+            'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then',
+            locked_sources,
+        )
+        self.assertIn(
+            "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\"",
+            locked_sources,
+        )
+        self.assertEqual(locked_sources.count("fetch --no-tags"), 1)
         documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
         self.assertIn("`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`", documentation)
         self.assertIn("Contents read permission and no\nwrite permission", documentation)
+        self.assertIn("credential-helper-disabled anonymous HTTPS", documentation)
+        self.assertIn("fails closed without an\nanonymous retry", documentation)
 
     def test_pull_request_workflow_cannot_receive_private_sibling_credentials(self) -> None:
         if REPOSITORY_ID != "react_native":

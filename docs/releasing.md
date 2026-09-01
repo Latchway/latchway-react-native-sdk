@@ -118,21 +118,26 @@ request URL. The main-branch/workflow-dispatch `Locked source conformance`
 workflow applies the same split to source builds. Its protected
 `authenticate-inputs` job has no candidate checkout: a fixed GitHub API request
 reads only `release-compatibility.json` and `contract.lock` at the exact workflow
-commit, then a separately scoped step exposes the sibling token only while Git
-fetches the four locked commits and creates their bundles. A credential-free
-step seals those bundles and locks as an exact six-payload-file, size-bounded,
-SHA-256-bound closure plus its manifest. Fresh JavaScript, Android, and iOS jobs
-have no protected environment, secret, registry authentication, or OIDC
-permission. Before any
+commit, then a separately scoped step fetches the four locked commits and creates
+their bundles. When all four sibling repositories are public, that step uses one
+credential-helper-disabled anonymous HTTPS fetch for each exact commit and rejects
+every credential prompt. When the optional sibling token is nonempty, it uses only
+the authenticated path; an invalid or insufficient token fails closed without an
+anonymous retry. Private sibling repositories therefore require the read-only
+`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`, while public siblings do not. A
+credential-free step seals those bundles and locks as an exact six-payload-file,
+size-bounded, SHA-256-bound closure plus its manifest. Fresh JavaScript, Android,
+and iOS jobs have no protected environment, secret, registry authentication, or
+OIDC permission. Before any
 candidate-owned `ci-lock-output.mjs` or build tooling runs, each job asserts that
 the sibling token, `GH_TOKEN`, `GITHUB_TOKEN`, `NODE_AUTH_TOKEN`, and OIDC request
 variables are empty, compares both locks byte for byte with the exact candidate,
 validates the complete archive manifest, and imports all four bundles offline.
 Pull-request `ci.yml` contains no secret reference. Configure and protect the
 `private-sibling-read` environment before enabling these evidence jobs. The
-locked-source handoff deliberately requires the fine-grained sibling token;
-other protected reads may continue to fall back to the job token when every
-sibling repository is public.
+locked-source handoff never falls back after an authenticated fetch fails; other
+protected reads may continue to fall back to the job token when every sibling
+repository is public.
 
 After the protected preflight, the workflow resolves the remote annotated tag
 object to the promoted commit immediately before it creates or resumes the

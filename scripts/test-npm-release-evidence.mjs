@@ -824,6 +824,8 @@ test("private sibling reads stay outside pull-request CI and use the bounded tok
   ]);
   assert.match(documentation, /`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`/u);
   assert.match(documentation, /Contents read permission and no\s+write permission/u);
+  assert.match(documentation, /credential-helper-disabled anonymous HTTPS/u);
+  assert.match(documentation, /fails closed without an\s+anonymous retry/u);
   assert.match(documentation, /repository_dispatch/u);
   assert.match(documentation, /tag manually/iu);
   assert.doesNotMatch(documentation, /\n(?:git tag|git push)\s/u);

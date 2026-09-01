@@ -155,7 +155,6 @@ jobs:
           LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}
         run: |
           set -Eeuo pipefail
-          test -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN"
           for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
             ACTIONS_ID_TOKEN_REQUEST_TOKEN; do
             test -z "${!name:-}"
@@ -178,12 +177,18 @@ jobs:
             "$sealed/release-compatibility.json")
 
           git_askpass="$RUNNER_TEMP/latchway-locked-sources-askpass.sh"
-          printf '%s\n' '#!/usr/bin/env bash' \
-            'case "$1" in' \
-            '*Username*) printf "%s\\n" x-access-token ;;' \
-            '*Password*) printf "%s\\n" "${LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN:?}" ;;' \
-            '*) exit 1 ;;' \
-            'esac' > "$git_askpass"
+          if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then
+            printf '%s\n' '#!/usr/bin/env bash' \
+              'case "$1" in' \
+              '*Username*) printf "%s\\n" x-access-token ;;' \
+              '*Password*) printf "%s\\n" "${LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN:?}" ;;' \
+              '*) exit 1 ;;' \
+              'esac' > "$git_askpass"
+          else
+            # Public-source mode never consults a runner credential store and
+            # fails instead of prompting if any locked repository is private.
+            printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$git_askpass"
+          fi
           chmod 700 "$git_askpass"
           trap 'rm -f -- "$git_askpass"' EXIT
 

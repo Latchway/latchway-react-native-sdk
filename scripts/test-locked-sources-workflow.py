@@ -84,6 +84,21 @@ def validate_workflow(source: str) -> None:
         authenticator, "Fetch and bundle only the four exact locked sibling objects"
     )
     require(secret_reference in bundle_step, "sibling secret must be scoped to bundle fetching")
+    require(
+        'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then'
+        in bundle_step,
+        "optional sibling token path must be selected only when the token is nonempty",
+    )
+    require(
+        "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\""
+        in bundle_step,
+        "anonymous source reads must reject every credential prompt",
+    )
+    require(
+        'GIT_ASKPASS="$git_askpass" GIT_TERMINAL_PROMPT=0' in bundle_step
+        and "git -c credential.helper=" in bundle_step,
+        "sibling fetches must disable ambient and interactive credentials",
+    )
     for marker in (
         "node ",
         "pnpm ",
@@ -142,7 +157,10 @@ def validate_workflow(source: str) -> None:
             f'bundle_locked_repository {repository} "{commit}" {name}' in bundle_step,
             f"missing exact bundle fetch for {repository}",
         )
-    require("fetch --no-tags" in bundle_step, "bundle fetch must exclude tags")
+    require(
+        bundle_step.count("fetch --no-tags") == 1,
+        "bundle fetch must exclude tags in one fail-closed attempt",
+    )
     require(
         '"$commit:refs/heads/authenticated"' in bundle_step,
         "bundle fetch must pin its only advertised ref to the locked commit",
@@ -245,12 +263,42 @@ class LockedSourcesWorkflowTests(unittest.TestCase):
         self.assert_mutation_rejected(before_secret, "candidate execution")
 
         within_secret = self.source.replace(
-            "          test -n \"$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN\"\n",
-            "          test -n \"$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN\"\n"
-            "          pnpm --dir latchway-react-native-sdk check\n",
+            '          git_askpass="$RUNNER_TEMP/latchway-locked-sources-askpass.sh"\n',
+            "          pnpm --dir latchway-react-native-sdk check\n"
+            '          git_askpass="$RUNNER_TEMP/latchway-locked-sources-askpass.sh"\n',
             1,
         )
         self.assert_mutation_rejected(within_secret, "candidate execution")
+
+    def test_rejects_weakened_public_or_private_source_authentication(self) -> None:
+        unconditional_token = self.source.replace(
+            'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then',
+            "if true; then",
+            1,
+        )
+        self.assert_mutation_rejected(unconditional_token, "optional sibling token path")
+
+        prompting_anonymous = self.source.replace(
+            "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\"",
+            "printf '%s\\n' '#!/usr/bin/env bash' 'printf retry' > \"$git_askpass\"",
+            1,
+        )
+        self.assert_mutation_rejected(prompting_anonymous, "reject every credential prompt")
+
+        ambient_credentials = self.source.replace(
+            "git -c credential.helper= -C \"$bare\" fetch --no-tags",
+            "git -C \"$bare\" fetch --no-tags",
+            1,
+        )
+        self.assert_mutation_rejected(ambient_credentials, "disable ambient")
+
+        retry = self.source.replace(
+            "git -c credential.helper= -C \"$bare\" fetch --no-tags",
+            "git -c credential.helper= -C \"$bare\" fetch --no-tags || "
+            "git -c credential.helper= -C \"$bare\" fetch --no-tags",
+            1,
+        )
+        self.assert_mutation_rejected(retry, "one fail-closed")
 
     def test_rejects_secret_or_oidc_mutation_in_consumers(self) -> None:
         leaked_secret = self.source.replace(
