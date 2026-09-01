@@ -37,6 +37,7 @@ jobs:
       contents: read
     outputs:
       archive_sha256: ${{ steps.seal.outputs.archive_sha256 }}
+      artifact_name: ${{ steps.seal.outputs.artifact_name }}
     steps:
       - name: Require fixed GitHub release tooling without credentials
         shell: bash
@@ -195,7 +196,7 @@ jobs:
             shift 2
             local temporary_output="${output}.partial"
             for attempt in $(seq 1 180); do
-              if "$@" > "$temporary_output"; then
+              if (set -o pipefail; "$@" | head -c "$((maximum_bytes + 1))") > "$temporary_output"; then
                 local bytes
                 bytes=$(wc -c < "$temporary_output" | tr -d ' ')
                 if [[ "$bytes" =~ ^[1-9][0-9]*$ ]] && (( bytes <= maximum_bytes )); then
@@ -232,18 +233,10 @@ jobs:
 
           requires_build_attestation() {
             local kind=$1 name=$2
+            if [[ "$kind" == javascript ]]; then return 0; fi
             if [[ "$kind" == android ]]; then return 0; fi
-            if [[ "$kind" == ios ]]; then [[ "$name" != *.tar.gz.sha256 ]]; return; fi
-            case "$name" in
-              latchway-client-*.tgz|build-reproducibility.json|package-evidence.json|post-publish-evidence.json|\
-              npm-registry-version.json|npm-registry-view.json|npm-attestations.json|\
-              npm-audit-signatures.json|npm-registry-evidence-manifest.json|npm-release-adoption-*.json)
-                return 0
-                ;;
-              *)
-                return 1
-                ;;
-            esac
+            if [[ "$kind" == ios ]]; then return 0; fi
+            return 1
           }
 
           authenticate_release() {
@@ -264,13 +257,18 @@ jobs:
               . as $release |
               .tag_name == $tag and .draft == false and .immutable == true and
               ([.assets[].name] | length) == ([.assets[].name] | unique | length) and
-              all($fixed[] as $name; ($release.assets | map(.name) | index($name)) != null) and
+              all($fixed[]; . as $name | ($release.assets | map(.name) | index($name)) != null) and
               if $kind == "javascript" then
-                all($release.assets[].name as $name;
+                all($release.assets[].name; . as $name |
                   ($fixed | index($name)) != null or
-                  ($name | test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))) and
+                  ($name | test("^npm-release-adoption-(client|openai|vercel-ai|langchain)-[1-9][0-9]*-[1-9][0-9]*\\.json$"))) and
                 ([$release.assets[].name |
-                  select(test("^npm-release-adoption-[1-9][0-9]*-[1-9][0-9]*\\.json$"))] | length) >= 1
+                  select(test("^npm-release-adoption-(client|openai|vercel-ai|langchain)-[1-9][0-9]*-[1-9][0-9]*\\.json$")) |
+                  capture("^npm-release-adoption-(?<id>client|openai|vercel-ai|langchain)-(?<run>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)\\.json$")
+                ] as $adoptions |
+                  ($adoptions | length) >= 4 and
+                  ($adoptions | group_by(.run + ":" + .attempt) |
+                    all(.[]; (map(.id) | sort) == ["client", "langchain", "openai", "vercel-ai"])))
               else
                 ([$release.assets[].name] | sort) == ($fixed | sort)
               end
@@ -283,10 +281,13 @@ jobs:
               (( expected_size <= 536870912 ))
               [[ -z "$expected_digest" || "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
               local asset="$directory/assets/$name"
-              gh api --method GET \
-                -H 'Accept: application/octet-stream' \
-                -H 'X-GitHub-Api-Version: 2026-03-10' \
-                "repos/$repository/releases/assets/$asset_id" > "$asset"
+              (
+                set -o pipefail
+                gh api --method GET \
+                  -H 'Accept: application/octet-stream' \
+                  -H 'X-GitHub-Api-Version: 2026-03-10' \
+                  "repos/$repository/releases/assets/$asset_id" | head -c "$((expected_size + 1))"
+              ) > "$asset"
               test -s "$asset"
               test "$(wc -c < "$asset" | tr -d ' ')" = "$expected_size"
               if [[ -n "$expected_digest" ]]; then
@@ -324,23 +325,41 @@ jobs:
 
           javascript_assets=(
             "latchway-client-$JAVASCRIPT_VERSION.tgz"
+            "latchway-openai-$JAVASCRIPT_VERSION.tgz"
+            "latchway-vercel-ai-$JAVASCRIPT_VERSION.tgz"
+            "latchway-langchain-$JAVASCRIPT_VERSION.tgz"
+            "docs-bundle-$JAVASCRIPT_VERSION.tar.gz"
             SHA256SUMS
             build-reproducibility.json
             contract-evidence.json
+            dependency-vulnerability-scan.json
             package-evidence.json
             post-publish-evidence.json
             publish-input-evidence.json
             release-candidate-evidence.json
             tag-evidence.json
-            npm-registry-version.json
-            npm-registry-view.json
-            npm-attestations.json
-            npm-audit-signatures.json
             npm-registry-evidence-manifest.json
+            npm-client-registry-version.json
+            npm-client-registry-view.json
+            npm-client-attestations.json
+            npm-client-audit-signatures.json
+            npm-openai-registry-version.json
+            npm-openai-registry-view.json
+            npm-openai-attestations.json
+            npm-openai-audit-signatures.json
+            npm-vercel-ai-registry-version.json
+            npm-vercel-ai-registry-view.json
+            npm-vercel-ai-attestations.json
+            npm-vercel-ai-audit-signatures.json
+            npm-langchain-registry-version.json
+            npm-langchain-registry-view.json
+            npm-langchain-attestations.json
+            npm-langchain-audit-signatures.json
           )
           ios_assets=(
             "latchway-ios-sdk-$IOS_VERSION.tar.gz"
             "latchway-ios-sdk-$IOS_VERSION.tar.gz.sha256"
+            "docs-bundle-$IOS_VERSION.tar.gz"
             cocoapods-published-podspec.json
             cocoapods-reviewed-podspec.json
             cocoapods-release-evidence.json
@@ -349,6 +368,7 @@ jobs:
           android_assets=(
             "latchway-android-$ANDROID_VERSION-maven-repository.zip"
             "latchway-android-$ANDROID_VERSION-central-portal.zip"
+            "docs-bundle-$ANDROID_VERSION.tar.gz"
             SHA256SUMS
             github-release-tag-binding.json
             latchway-maven-signing-public-key.asc
@@ -394,10 +414,12 @@ jobs:
           archive_sha256=$(shasum -a 256 "$archive" | awk '{print $1}')
           [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
           printf 'archive_sha256=%s\n' "$archive_sha256" >> "$GITHUB_OUTPUT"
+          printf 'artifact_name=authenticated-native-consumer-inputs-%s-%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Transfer one exact bounded input artifact to credential-free consumers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/native-consumer-inputs.tar
           if-no-files-found: error
           compression-level: 0
@@ -421,7 +443,7 @@ jobs:
       - name: Download authenticated inputs without credentials
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.authenticate-inputs.outputs.artifact_name }}
           path: ${{ runner.temp }}/native-consumer-artifact
       - name: Validate and materialize exact authenticated inputs without candidate code
         shell: bash
@@ -516,14 +538,14 @@ jobs:
           "platforms;android-${{ steps.lock.outputs.android_sdk_platform_version }}"
           "build-tools;${{ steps.lock.outputs.android_build_tools_version }}"
           "ndk;${{ steps.lock.outputs.android_ndk_version }}"
-      - name: Build exact JavaScript source and install workspace without credentials
+      - name: Build and deterministically pack exact JavaScript source, then install workspace without credentials
         run: |
           set -euo pipefail
           for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
             test -z "${!name:-}"
           done
           pnpm --dir ../latchway-js install --frozen-lockfile
-          pnpm --dir ../latchway-js build
+          pnpm --dir ../latchway-js pack:check
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases from authenticated inputs
@@ -579,7 +601,7 @@ jobs:
       - name: Download authenticated inputs without credentials
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: authenticated-native-consumer-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.authenticate-inputs.outputs.artifact_name }}
           path: ${{ runner.temp }}/native-consumer-artifact
       - name: Validate and materialize exact authenticated inputs without candidate code
         shell: bash
@@ -664,14 +686,14 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Build exact JavaScript source and install workspace without credentials
+      - name: Build and deterministically pack exact JavaScript source, then install workspace without credentials
         run: |
           set -euo pipefail
           for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL; do
             test -z "${!name:-}"
           done
           pnpm --dir ../latchway-js install --frozen-lockfile
-          pnpm --dir ../latchway-js build
+          pnpm --dir ../latchway-js pack:check
           pnpm install --frozen-lockfile
         working-directory: latchway-react-native-sdk
       - name: Verify immutable public dependency releases from authenticated inputs

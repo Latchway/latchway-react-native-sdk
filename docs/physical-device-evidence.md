@@ -21,6 +21,13 @@ protected, manually dispatched `Physical React Native evidence` workflow can
 collect a candidate report, and the final cross-repository adapter requires all
 four independently validated native and React Native reports.
 
+Every authorization, lease, identity grant, candidate handoff, and retained
+artifact is bound to one workflow run and attempt. Do not use **Re-run failed
+jobs** to recover a partial physical proof: a successful authorization or
+candidate job from an earlier attempt is intentionally unusable by a later
+collector. Start a fresh complete workflow dispatch so all single-use grants
+and attempt-bound evidence are reissued together.
+
 The raw React Native device record is
 `latchway.react-native-device-run.v2`. It contains only checks the opaque
 production bridge can prove without exporting credentials. The protected

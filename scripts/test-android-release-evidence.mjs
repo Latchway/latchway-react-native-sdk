@@ -5,9 +5,15 @@ import test from "node:test";
 
 import {
   ANDROID_RELEASE_SCHEMAS,
+  MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES,
+  MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES,
+  MAXIMUM_MAVEN_RETAINED_EXPANDED_BYTES,
+  accumulateMavenArchiveBytes,
   androidReleaseAssetNames,
+  expectedMavenPrimaryPaths,
   publicManifestFromFiles,
   validateAndroidReleaseEvidence,
+  validateMavenRepositoryPathClosure,
 } from "./android-release-evidence.mjs";
 
 test("Android dependency schemas match the canonical v2 release contract", () => {
@@ -54,6 +60,51 @@ test("Android dependency contract requires the exact ten release assets", () => 
     "maven-central-deployment-status.json",
     "maven-central-release-evidence.json",
   ]);
+});
+
+test("Android reviewed repository requires the exact 24-primary and 120-file closure", () => {
+  const primary = expectedMavenPrimaryPaths("1.0.0");
+  assert.equal(primary.length, 24);
+  assert.equal(new Set(primary).size, 24);
+  const closure = primary.flatMap((path) => [
+    `dev/latchway/${path}`,
+    ...["md5", "sha1", "sha256", "sha512"].map((algorithm) => `dev/latchway/${path}.${algorithm}`),
+  ]);
+  assert.equal(closure.length, 120);
+  assert.doesNotThrow(() => validateMavenRepositoryPathClosure(closure, "1.0.0"));
+  assert.throws(
+    () => validateMavenRepositoryPathClosure(closure.slice(1), "1.0.0"),
+    /exact primary-and-checksum path closure/u,
+  );
+  assert.throws(
+    () => validateMavenRepositoryPathClosure([...closure, "dev/latchway/attacker/1.0.0/extra.pom"], "1.0.0"),
+    /exact primary-and-checksum path closure/u,
+  );
+});
+
+test("Android archive expansion budgets cap each retained Map and their combined footprint", () => {
+  assert.equal(MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES, 128 * 1024 * 1024);
+  assert.equal(MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES, 160 * 1024 * 1024);
+  assert.equal(MAXIMUM_MAVEN_RETAINED_EXPANDED_BYTES, 288 * 1024 * 1024);
+  for (const [kind, maximum] of [
+    ["repository", MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES],
+    ["portal", MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES],
+  ]) {
+    let total = 0;
+    while (maximum - total > 20 * 1024 * 1024) {
+      total = accumulateMavenArchiveBytes(total, 20 * 1024 * 1024, kind);
+    }
+    total = accumulateMavenArchiveBytes(total, maximum - total, kind);
+    assert.equal(total, maximum);
+    assert.throws(
+      () => accumulateMavenArchiveBytes(total, 1, kind),
+      /aggregate expanded-byte limit/u,
+    );
+  }
+  assert.throws(
+    () => accumulateMavenArchiveBytes(0, (20 * 1024 * 1024) + 1, "repository"),
+    /invalid expanded size/u,
+  );
 });
 
 test("Android dependency contract accepts schema-v2 recoverable Portal evidence", () => {

@@ -4,6 +4,12 @@ import { isDeepStrictEqual } from "node:util";
 const SHA256 = /^[0-9a-f]{64}$/u;
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAXIMUM_MAVEN_ENTRY_BYTES = 20 * 1024 * 1024;
+
+export const MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES = 128 * 1024 * 1024;
+export const MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES = 160 * 1024 * 1024;
+export const MAXIMUM_MAVEN_RETAINED_EXPANDED_BYTES =
+  MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES + MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES;
 
 export const ANDROID_RELEASE_SCHEMAS = Object.freeze({
   intent: "latchway.maven-central-upload-intent.v2",
@@ -26,6 +32,56 @@ export function androidReleaseAssetNames(version) {
     "maven-central-deployment-status.json",
     "maven-central-release-evidence.json",
   ];
+}
+
+export function expectedMavenPrimaryPaths(version) {
+  if (typeof version !== "string"
+      || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(version)) {
+    throw new Error("Android release version is not canonical.");
+  }
+  const result = [];
+  for (const module of [
+    "latchway-core", "latchway-okhttp", "latchway-play-integrity", "latchway-firebase-auth", "latchway-bom",
+  ]) {
+    const extensions = ["pom", "module", "sources.jar", "javadoc.jar"];
+    if (module !== "latchway-bom") extensions.push("aar");
+    for (const extension of extensions) {
+      const name = new Set(["pom", "module", "aar"]).has(extension)
+        ? `${module}-${version}.${extension}`
+        : `${module}-${version}-${extension}`;
+      result.push(`${module}/${version}/${name}`);
+    }
+  }
+  return result;
+}
+
+export function validateMavenRepositoryPathClosure(paths, version) {
+  const primary = expectedMavenPrimaryPaths(version);
+  const expected = primary.flatMap((path) => [
+    `dev/latchway/${path}`,
+    ...["md5", "sha1", "sha256", "sha512"].map((algorithm) => `dev/latchway/${path}.${algorithm}`),
+  ]).sort();
+  const observed = [...paths];
+  if (observed.some((path) => typeof path !== "string")
+      || new Set(observed).size !== observed.length
+      || !isDeepStrictEqual(observed.sort(), expected)) {
+    throw new Error("Reviewed Maven repository does not contain the exact primary-and-checksum path closure.");
+  }
+}
+
+export function accumulateMavenArchiveBytes(totalBytes, entryBytes, kind) {
+  const maximumBytes = kind === "repository"
+    ? MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES
+    : kind === "portal" ? MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES : undefined;
+  if (maximumBytes === undefined || !Number.isSafeInteger(totalBytes) || totalBytes < 0
+      || !Number.isSafeInteger(entryBytes) || entryBytes < 1 || entryBytes > MAXIMUM_MAVEN_ENTRY_BYTES) {
+    throw new Error(`Reviewed Maven ${kind} archive entry has an invalid expanded size.`);
+  }
+  const next = totalBytes + entryBytes;
+  if (!Number.isSafeInteger(next) || next > maximumBytes) {
+    throw new Error(`Reviewed Maven ${kind} archive exceeds its aggregate expanded-byte limit.`);
+  }
+  return next;
 }
 
 export function validateAndroidReleaseEvidence({

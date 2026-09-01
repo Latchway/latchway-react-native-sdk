@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import {
   assertSafeRetainedOutput,
   buildAdoptionRecord,
   buildRegistryManifest,
+  normalizePublishPerformedForConsumerAttempt,
   parseProvenanceOrigin,
   requireCurrentPublicationOrigin,
   sha256,
@@ -23,11 +24,29 @@ import {
   validateGPGStatus,
   validateRetainedGPGStatus,
 } from "./gpg-status.mjs";
+import { androidReleaseAssetNames } from "./android-release-evidence.mjs";
 import {
+  decodeBase64Strict,
   RELEASE_PREDICATE_TYPE,
+  readBoundedStrictJSONFileSync,
   STATEMENT_TYPE,
   validateReleaseAttestation,
 } from "./release-attestation.mjs";
+import {
+  externalPeerDependencies,
+  inspectNpmArchive,
+  MAXIMUM_JAVASCRIPT_ADOPTION_RECORDS,
+  validateCleanJavascriptConsumer,
+  validateJavascriptAdoptionClosure,
+  validateJavascriptAdoptionRecord,
+  validateNpmArchiveMatchesLockedPack,
+} from "./javascript-release-contract.mjs";
+import { validateCocoaPodsSourceBinding } from "./ios-release-evidence.mjs";
+import {
+  MAXIMUM_JAVASCRIPT_ADOPTION_BYTES,
+  publishedDependencyAssetMaximumBytes,
+  validatePublishedDependencyAssetMetadata,
+} from "./published-dependency-assets.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 
 const repository = "https://github.com/Latchway/latchway-react-native-sdk";
@@ -80,6 +99,33 @@ test("provenance from a prior failed run can be adopted by a later attempt", () 
   assert.equal(adoption.tarball.sha256, "d".repeat(64));
 });
 
+test("publication state becomes adoption when only the consumer reruns", () => {
+  assert.equal(normalizePublishPerformedForConsumerAttempt(true, {
+    producerRunID: 41,
+    producerRunAttempt: 1,
+    currentRunID: 41,
+    currentRunAttempt: 1,
+  }), true);
+  assert.equal(normalizePublishPerformedForConsumerAttempt(true, {
+    producerRunID: 41,
+    producerRunAttempt: 1,
+    currentRunID: 41,
+    currentRunAttempt: 2,
+  }), false);
+  assert.throws(() => normalizePublishPerformedForConsumerAttempt(true, {
+    producerRunID: 41,
+    producerRunAttempt: 2,
+    currentRunID: 41,
+    currentRunAttempt: 1,
+  }), /producer workflow attempt/u);
+  assert.throws(() => normalizePublishPerformedForConsumerAttempt(true, {
+    producerRunID: 40,
+    producerRunAttempt: 1,
+    currentRunID: 41,
+    currentRunAttempt: 2,
+  }), /producer workflow attempt/u);
+});
+
 test("fresh publication cannot adopt provenance from another run", () => {
   assert.throws(() => requireCurrentPublicationOrigin(
     { run_id: 41, run_attempt: 1 },
@@ -112,6 +158,142 @@ test("retained output is bounded JSON and rejects credentials", () => {
     /credential-like/u,
   );
   assert.throws(() => assertSafeRetainedOutput(Buffer.alloc(129, 1), "test", 128), /size/u);
+  assert.throws(
+    () => assertSafeRetainedOutput(Buffer.from('{"ok":true,"ok":false}'), "test", 64),
+    /duplicate JSON key/u,
+  );
+  assert.throws(
+    () => assertSafeRetainedOutput(Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0xff, 0x7d]), "test", 64),
+    /valid UTF-8/u,
+  );
+});
+
+test("strict base64 decoding rejects noncanonical attestation encodings", () => {
+  assert.deepEqual(decodeBase64Strict("e30=", "test"), Buffer.from("{}"));
+  for (const encoded of ["e30", "e30===", "A", "e30=garbage"]) {
+    assert.throws(() => decodeBase64Strict(encoded, "test"), /malformed DSSE payload encoding/u);
+  }
+});
+
+test("production bounded JSON file reader rejects duplicate keys and pre-read oversize files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "latchway-rn-bounded-json-"));
+  try {
+    const valid = join(directory, "valid.json");
+    const duplicate = join(directory, "duplicate.json");
+    const oversized = join(directory, "oversized.json");
+    await writeFile(valid, Buffer.from('{"ok":true}'.padEnd(64, " ")));
+    await writeFile(duplicate, '{"ok":true,"ok":false}');
+    await writeFile(oversized, Buffer.alloc(65, 0x20));
+    assert.deepEqual(readBoundedStrictJSONFileSync(valid, "test lock", 64), { ok: true });
+    assert.throws(
+      () => readBoundedStrictJSONFileSync(duplicate, "test lock", 64),
+      /duplicate JSON key/u,
+    );
+    assert.throws(
+      () => readBoundedStrictJSONFileSync(oversized, "test lock", 64),
+      /invalid file byte length/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("production dependency asset metadata enforces positive safe IDs and name-specific byte ceilings", () => {
+  const adoption = "npm-release-adoption-client-41-1.json";
+  assert.equal(
+    publishedDependencyAssetMaximumBytes("javascript", adoption),
+    MAXIMUM_JAVASCRIPT_ADOPTION_BYTES,
+  );
+  const valid = {
+    id: Number.MAX_SAFE_INTEGER,
+    name: adoption,
+    size: MAXIMUM_JAVASCRIPT_ADOPTION_BYTES,
+    state: "uploaded",
+    digest: `sha256:${"a".repeat(64)}`,
+  };
+  assert.equal(
+    validatePublishedDependencyAssetMetadata(valid, "javascript", adoption),
+    MAXIMUM_JAVASCRIPT_ADOPTION_BYTES,
+  );
+  for (const candidate of [
+    { ...valid, id: 0 },
+    { ...valid, id: Number.MAX_SAFE_INTEGER + 1 },
+    { ...valid, size: MAXIMUM_JAVASCRIPT_ADOPTION_BYTES + 1 },
+    { ...valid, digest: "sha256:invalid" },
+  ]) assert.throws(
+    () => validatePublishedDependencyAssetMetadata(candidate, "javascript", adoption),
+    /invalid bounded metadata/u,
+  );
+  assert.equal(
+    publishedDependencyAssetMaximumBytes("android", "latchway-android-1.0.0-central-portal.zip"),
+    256 * 1024 * 1024,
+  );
+  assert.equal(
+    publishedDependencyAssetMaximumBytes("ios", "latchway-ios-sdk-1.0.0.tar.gz.sha256"),
+    64 * 1024,
+  );
+});
+
+test("production dependency asset caps cover every fixed platform asset without a fallback", () => {
+  const packageIDs = ["client", "openai", "vercel-ai", "langchain"];
+  const javascript = [
+    ...packageIDs.map((id) => `latchway-${id}-1.0.0.tgz`),
+    "docs-bundle-1.0.0.tar.gz",
+    "SHA256SUMS",
+    "build-reproducibility.json",
+    "contract-evidence.json",
+    "dependency-vulnerability-scan.json",
+    "package-evidence.json",
+    "post-publish-evidence.json",
+    "publish-input-evidence.json",
+    "release-candidate-evidence.json",
+    "tag-evidence.json",
+    "npm-registry-evidence-manifest.json",
+    ...packageIDs.flatMap((id) => [
+      `npm-${id}-registry-version.json`,
+      `npm-${id}-registry-view.json`,
+      `npm-${id}-attestations.json`,
+      `npm-${id}-audit-signatures.json`,
+    ]),
+    "npm-release-adoption-client-41-1.json",
+  ];
+  const ios = [
+    "latchway-ios-sdk-1.0.0.tar.gz",
+    "latchway-ios-sdk-1.0.0.tar.gz.sha256",
+    "docs-bundle-1.0.0.tar.gz",
+    "cocoapods-published-podspec.json",
+    "cocoapods-reviewed-podspec.json",
+    "cocoapods-release-evidence.json",
+    "cocoapods-release-evidence.SHA256SUMS",
+  ];
+  for (const [kind, names] of [
+    ["javascript", javascript],
+    ["ios", ios],
+    ["android", androidReleaseAssetNames("1.0.0")],
+  ]) {
+    for (const name of names) {
+      const maximum = publishedDependencyAssetMaximumBytes(kind, name);
+      assert.ok(Number.isSafeInteger(maximum) && maximum > 0, `${kind}/${name} has no finite cap`);
+    }
+  }
+  assert.throws(
+    () => publishedDependencyAssetMaximumBytes("javascript", "unreviewed.bin"),
+    /unbounded asset/u,
+  );
+});
+
+test("production CocoaPods source binding rejects proof, repository, tag, and schema substitutions", () => {
+  const repository = "https://github.com/Latchway/latchway-ios-sdk.git";
+  const source = { git: repository, tag: "v1.0.0" };
+  assert.doesNotThrow(() => validateCocoaPodsSourceBinding(source, source, repository, "v1.0.0"));
+  for (const [proof, published] of [
+    [{ ...source, tag: "v2.0.0" }, source],
+    [source, { ...source, git: "https://github.com/attacker/repo.git" }],
+    [{ ...source, branch: "main" }, source],
+  ]) assert.throws(
+    () => validateCocoaPodsSourceBinding(proof, published, repository, "v1.0.0"),
+    /does not match the bound published podspec/u,
+  );
 });
 
 test("registry manifest hashes exact retained output bytes", () => {
@@ -133,7 +315,379 @@ test("provenance invocation parser rejects ambiguous or unbounded paths", () => 
     `${repository}/actions/runs/1/attempts/0`,
     `${repository}/actions/runs/1/attempts/1/extra`,
     `${repository}@attacker/actions/runs/1/attempts/1`,
+    `${repository}/actions/runs/9007199254740992/attempts/1`,
   ]) assert.throws(() => parseProvenanceOrigin(value, repository), /provenance/u);
+});
+
+test("production JavaScript archive verifier rejects dist bytes that differ from locked source output", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "latchway-rn-javascript-archive-"));
+  try {
+    const packageRoot = join(temporary, "package");
+    await mkdir(join(packageRoot, "dist"), { recursive: true });
+    const manifest = Buffer.from(`${JSON.stringify({
+      name: "@latchway/client",
+      version: "1.0.0",
+    })}\n`);
+    const lock = await readFile(new URL("../contract.lock", import.meta.url));
+    const expectedDist = Buffer.from("export const trusted = true;\n");
+    const package_ = {
+      id: "client", package: "@latchway/client", version: "1.0.0",
+    };
+    const entries = ["package/contract.lock", "package/dist/index.js", "package/package.json"].sort();
+    const evidence = {
+      entries,
+      unpacked_bytes: manifest.byteLength + lock.byteLength + expectedDist.byteLength,
+      published_peer_dependencies: {},
+    };
+    const reproducibility = {
+      publishedPeerDependencies: new Map([[package_.package, {}]]),
+      files: [{
+        package: package_.package,
+        path: "dist/index.js",
+        bytes: expectedDist.byteLength,
+        sha256: sha256(expectedDist),
+      }],
+    };
+
+    const createArchive = async (name, dist) => {
+      await writeFile(join(packageRoot, "package.json"), manifest);
+      await writeFile(join(packageRoot, "contract.lock"), lock);
+      await writeFile(join(packageRoot, "dist", "index.js"), dist);
+      const archive = join(temporary, name);
+      execFileSync("tar", ["-czf", archive, "-C", temporary, ...entries]);
+      return archive;
+    };
+
+    const valid = await createArchive("valid.tgz", expectedDist);
+    inspectNpmArchive(valid, package_, evidence, reproducibility);
+    const lockedSourcePack = await readFile(valid);
+    validateNpmArchiveMatchesLockedPack(lockedSourcePack, lockedSourcePack, package_);
+    assert.throws(
+      () => inspectNpmArchive(valid, package_, {
+        ...evidence,
+        published_peer_dependencies: { openai: "7.8.1" },
+      }, reproducibility),
+      /peer dependencies differ from locked source/u,
+    );
+
+    const changedDist = Buffer.from(expectedDist);
+    changedDist[changedDist.indexOf("true")] = "f".charCodeAt(0);
+    const changed = await createArchive("changed.tgz", changedDist);
+    assert.throws(
+      () => inspectNpmArchive(changed, package_, evidence, reproducibility),
+      /dist bytes differ from locked source output/u,
+    );
+    const changedArchive = await readFile(changed);
+    assert.throws(
+      () => validateNpmArchiveMatchesLockedPack(changedArchive, lockedSourcePack, package_),
+      /not byte-identical to the locked-source pack/u,
+    );
+
+    const extraDist = Buffer.from("export const unreviewed = true;\n");
+    const extraEntry = "package/dist/extra.js";
+    await writeFile(join(packageRoot, "dist", "index.js"), expectedDist);
+    await writeFile(join(packageRoot, "dist", "extra.js"), extraDist);
+    const extraEntries = [...entries, extraEntry].sort();
+    const extraArchive = join(temporary, "extra.tgz");
+    execFileSync("tar", ["-czf", extraArchive, "-C", temporary, ...extraEntries]);
+    assert.throws(
+      () => inspectNpmArchive(extraArchive, package_, {
+        ...evidence,
+        entries: extraEntries,
+        unpacked_bytes: evidence.unpacked_bytes + extraDist.byteLength,
+      }, reproducibility),
+      /dist bytes differ from locked source output/u,
+    );
+    const extraArchiveBytes = await readFile(extraArchive);
+    assert.throws(
+      () => validateNpmArchiveMatchesLockedPack(extraArchiveBytes, lockedSourcePack, package_),
+      /not byte-identical to the locked-source pack/u,
+    );
+
+    const omittedEntries = entries.filter((entry) => entry !== "package/dist/index.js");
+    const omittedArchive = join(temporary, "omitted.tgz");
+    execFileSync("tar", ["-czf", omittedArchive, "-C", temporary, ...omittedEntries]);
+    assert.throws(
+      () => inspectNpmArchive(omittedArchive, package_, {
+        ...evidence,
+        entries: omittedEntries,
+        unpacked_bytes: manifest.byteLength + lock.byteLength,
+      }, reproducibility),
+      /omits locked source output/u,
+    );
+    const omittedArchiveBytes = await readFile(omittedArchive);
+    assert.throws(
+      () => validateNpmArchiveMatchesLockedPack(omittedArchiveBytes, lockedSourcePack, package_),
+      /not byte-identical to the locked-source pack/u,
+    );
+
+    const substitutedManifest = Buffer.from(`${JSON.stringify({
+      name: "@latchway/client",
+      version: "1.0.0",
+      scripts: { preinstall: "node payload.js" },
+      exports: { ".": "./payload.js" },
+    })}\n`);
+    const payload = Buffer.from('throw new Error("unreviewed lifecycle payload");\n');
+    await writeFile(join(packageRoot, "package.json"), substitutedManifest);
+    await writeFile(join(packageRoot, "payload.js"), payload);
+    const substitutedEntries = [...entries, "package/payload.js"].sort();
+    const substitutedArchive = join(temporary, "substituted.tgz");
+    execFileSync("tar", ["-czf", substitutedArchive, "-C", temporary, ...substitutedEntries]);
+    assert.doesNotThrow(() => inspectNpmArchive(substitutedArchive, package_, {
+      ...evidence,
+      entries: substitutedEntries,
+      unpacked_bytes: expectedDist.byteLength + lock.byteLength
+        + substitutedManifest.byteLength + payload.byteLength,
+    }, reproducibility));
+    const substitutedArchiveBytes = await readFile(substitutedArchive);
+    assert.throws(
+      () => validateNpmArchiveMatchesLockedPack(substitutedArchiveBytes, lockedSourcePack, package_),
+      /not byte-identical to the locked-source pack/u,
+    );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("production JavaScript retry verifier binds mode, filename, exact schema, and manifest", () => {
+  const sourceBinding = {
+    repository: "https://github.com/Latchway/latchway-js",
+    commit,
+    workflow: ".github/workflows/release.yml",
+    ref: "refs/heads/main",
+  };
+  const provenanceOrigin = {
+    invocation_id: `${sourceBinding.repository}/actions/runs/41/attempts/1`,
+    run_id: 41,
+    run_attempt: 1,
+  };
+  const tarball = {
+    name: "latchway-client-1.0.0.tgz",
+    bytes: 123,
+    sha256: "d".repeat(64),
+    sha512: "e".repeat(128),
+    integrity: `sha512-${Buffer.from("e".repeat(128), "hex").toString("base64")}`,
+  };
+  const manifestSHA = "f".repeat(64);
+  const package_ = { id: "client", package: "@latchway/client" };
+  const validate = (name, adoption) => validateJavascriptAdoptionRecord({
+    name,
+    adoption,
+    package_,
+    manifestEntry: { tarball },
+    provenanceOrigin,
+    sourceBinding,
+    version: "1.0.0",
+    tag: "v1.0.0",
+    manifestSHA,
+  });
+  const published = buildAdoptionRecord({
+    packageName: package_.package,
+    packageVersion: "1.0.0",
+    releaseTag: "v1.0.0",
+    repositoryURL: sourceBinding.repository,
+    sourceCommit: commit,
+    provenanceOrigin,
+    tarball,
+    manifestSHA256: manifestSHA,
+    currentRunID: 41,
+    currentRunAttempt: 1,
+    publishPerformed: true,
+  });
+  validate("npm-release-adoption-client-41-1.json", published);
+
+  const adopted = structuredClone(published);
+  adopted.adoption.run_id = 99;
+  adopted.adoption.run_attempt = 2;
+  adopted.adoption.mode = "adopted_existing";
+  validate("npm-release-adoption-client-99-2.json", adopted);
+
+  const falsePublication = structuredClone(adopted);
+  falsePublication.adoption.mode = "published";
+  assert.throws(
+    () => validate("npm-release-adoption-client-99-2.json", falsePublication),
+    /not bound to the locked source and provenance/u,
+  );
+  const extraKey = structuredClone(adopted);
+  extraKey.unexpected = true;
+  assert.throws(
+    () => validate("npm-release-adoption-client-99-2.json", extraKey),
+    /not bound to the locked source and provenance/u,
+  );
+  assert.throws(
+    () => validate("npm-release-adoption-client-99-3.json", adopted),
+    /not bound to the locked source and provenance/u,
+  );
+});
+
+test("production JavaScript retry history requires complete four-package attempt groups", () => {
+  const ids = ["client", "openai", "vercel-ai", "langchain"];
+  const closure = ids.map((id) => `npm-release-adoption-${id}-41-1.json`);
+  assert.doesNotThrow(() => validateJavascriptAdoptionClosure(closure, ids));
+  assert.throws(
+    () => validateJavascriptAdoptionClosure([
+      closure[0],
+      ...ids.slice(1).map((id) => `npm-release-adoption-${id}-42-1.json`),
+    ], ids),
+    /exact four-package closure/u,
+  );
+  assert.throws(
+    () => validateJavascriptAdoptionClosure([...closure, closure[0]], ids),
+    /unique non-empty package closure/u,
+  );
+  const maximum = Array.from({ length: MAXIMUM_JAVASCRIPT_ADOPTION_RECORDS / ids.length }, (_, index) => (
+    ids.map((id) => `npm-release-adoption-${id}-${index + 1}-1.json`)
+  )).flat();
+  assert.doesNotThrow(() => validateJavascriptAdoptionClosure(maximum, ids));
+  assert.throws(
+    () => validateJavascriptAdoptionClosure([
+      ...maximum,
+      ...ids.map((id) => `npm-release-adoption-${id}-999-1.json`),
+    ], ids),
+    /unique non-empty package closure/u,
+  );
+});
+
+test("production clean-consumer verifier requires the exact external peer closure", () => {
+  const package_ = { id: "vercel-ai", package: "@latchway/vercel-ai" };
+  const peers = externalPeerDependencies({
+    "@ai-sdk/openai": "4.0.52",
+    "@latchway/client": "^1.0.0",
+    ai: "7.0.85",
+  }, package_);
+  const consumer = {
+    isolated_directory: true,
+    install_scripts: "disabled",
+    exact_package_version: "1.0.0",
+    matching_client_version: "1.0.0",
+    external_peer_dependencies: peers,
+    node_esm: true,
+    registry_signatures: true,
+  };
+  validateCleanJavascriptConsumer(consumer, package_, "1.0.0", peers);
+  assert.throws(
+    () => validateCleanJavascriptConsumer({ ...consumer, external_peer_dependencies: {} }, package_, "1.0.0", peers),
+    /clean-consumer evidence is incomplete/u,
+  );
+});
+
+test("production inline dependency-release policy rejects malformed retry closures", async () => {
+  const workflows = await Promise.all([
+    readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/native-consumer.yml", import.meta.url), "utf8"),
+  ]);
+  const fixed = ["fixed.json"];
+  const adoptionNames = ["client", "openai", "vercel-ai", "langchain"]
+    .map((id) => `npm-release-adoption-${id}-41-1.json`);
+  const valid = dependencyReleaseFixture([...fixed, ...adoptionNames]);
+  for (const [index, workflow] of workflows.entries()) {
+    assert.match(workflow, /\(\( expected_size <= 536870912 \)\)/u);
+    assert.match(workflow, /\| head -c "\$\(\(expected_size \+ 1\)\)"/u);
+    const policy = dependencyReleasePolicy(workflow);
+    assert.doesNotThrow(() => executeDependencyReleasePolicy(policy, valid, fixed));
+    assert.throws(() => executeDependencyReleasePolicy(
+      policy, dependencyReleaseFixture([...fixed, ...adoptionNames.slice(0, -1)]), fixed,
+    ));
+    assert.throws(() => executeDependencyReleasePolicy(
+      policy,
+      dependencyReleaseFixture([
+        ...fixed,
+        adoptionNames[0],
+        ...["openai", "vercel-ai", "langchain"]
+          .map((id) => `npm-release-adoption-${id}-42-1.json`),
+      ]),
+      fixed,
+    ));
+    assert.throws(() => executeDependencyReleasePolicy(
+      policy, dependencyReleaseFixture([...fixed, ...adoptionNames, "unexpected.json"]), fixed,
+    ));
+    assert.throws(() => executeDependencyReleasePolicy(
+      policy, dependencyReleaseFixture([...fixed, adoptionNames[0], adoptionNames[0], ...adoptionNames.slice(1)]), fixed,
+    ));
+
+    const attestationFunction = bashFunction(workflow, "requires_build_attestation");
+    assert.doesNotThrow(() => execFileSync("bash", ["-c", `${attestationFunction}\n`
+      + "requires_build_attestation ios latchway-ios-sdk-1.0.0.tar.gz.sha256"]));
+    assert.throws(() => execFileSync("bash", ["-c", `${attestationFunction}\n`
+      + "requires_build_attestation unsupported unknown.bin"]));
+
+    const retryFunction = bashFunction(workflow, "retry_to_file");
+    await executeRetryToFilePolicy(retryFunction, `retry-${index}`, "bounded", 7);
+    await assert.rejects(
+      executeRetryToFilePolicy(retryFunction, `retry-oversized-${index}`, "oversized", 7),
+    );
+  }
+});
+
+test("attempt-qualified workflow artifacts are downloaded through producer job outputs", async () => {
+  const release = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const native = await readFile(new URL("../.github/workflows/native-consumer.yml", import.meta.url), "utf8");
+  for (const workflow of [release, native]) {
+    const uploads = artifactActionNames(workflow, "upload");
+    const downloads = artifactActionNames(workflow, "download");
+    assert.ok(uploads.length > 0 && downloads.length > 0);
+    assert.ok(uploads.every((name) => name.includes("${{ steps.")),
+      "each in-run artifact must use the producing step's exact identity");
+    assert.ok(downloads.every((name) => name.includes("${{ needs.")),
+      "each in-run artifact download must use a direct producer job output");
+  }
+
+  const releaseBindings = [
+    ["verify-promotion", "authorize-promotion", "needs.authorize-promotion.outputs.artifact_name"],
+    ["verify", "locked-sources", "needs.locked-sources.outputs.javascript_artifact_name"],
+    ["verify", "published-dependencies", "needs.published-dependencies.outputs.artifact_name"],
+    ["android", "locked-sources", "needs.locked-sources.outputs.javascript_artifact_name"],
+    ["ios", "locked-sources", "needs.locked-sources.outputs.javascript_artifact_name"],
+    ["npm-publish", "verify", "needs.verify.outputs.release_artifact_name"],
+    ["npm-publish", "trusted-npm-cli", "needs.trusted-npm-cli.outputs.artifact_name"],
+    ["publish", "verify", "needs.verify.outputs.release_artifact_name"],
+    ["publish", "trusted-npm-cli", "needs.trusted-npm-cli.outputs.artifact_name"],
+    ["github-release", "publish", "needs.publish.outputs.github_release_artifact_name"],
+  ];
+  for (const [consumer, producer, reference] of releaseBindings) {
+    const block = workflowJob(release, consumer);
+    assert.match(block, new RegExp(`needs:[^\\n]*\\b${producer}\\b`, "u"), `${consumer} omits ${producer}`);
+    assert.ok(block.includes(reference), `${consumer} does not use the stored ${producer} artifact name`);
+  }
+  const npmPublish = workflowJob(release, "npm-publish");
+  assert.match(npmPublish, /producer_run_id: \$\{\{ steps\.registry\.outputs\.producer_run_id \}\}/u);
+  assert.match(npmPublish, /producer_run_attempt: \$\{\{ steps\.registry\.outputs\.producer_run_attempt \}\}/u);
+  const registryEvidence = workflowJob(release, "publish");
+  assert.match(registryEvidence,
+    /PUBLISH_PRODUCER_RUN_ID: \$\{\{ needs\.npm-publish\.outputs\.producer_run_id \}\}/u);
+  assert.match(registryEvidence,
+    /PUBLISH_PRODUCER_RUN_ATTEMPT: \$\{\{ needs\.npm-publish\.outputs\.producer_run_attempt \}\}/u);
+  for (const consumer of ["android", "ios"]) {
+    const block = workflowJob(native, consumer);
+    assert.match(block, /needs: authenticate-inputs/u);
+    assert.match(block, /needs\.authenticate-inputs\.outputs\.artifact_name/u);
+  }
+  for (const producer of [
+    "authorize-promotion", "locked-sources", "published-dependencies", "verify", "trusted-npm-cli", "publish",
+  ]) {
+    const block = workflowJob(release, producer);
+    assert.match(block, /outputs:\n/u, `${producer} does not export its artifact identity`);
+    assert.match(block, /GITHUB_RUN_ATTEMPT/u, `${producer} does not bind its own attempt`);
+  }
+  const nativeProducer = workflowJob(native, "authenticate-inputs");
+  assert.match(nativeProducer, /artifact_name: \$\{\{ steps\.seal\.outputs\.artifact_name \}\}/u);
+  assert.match(nativeProducer, /GITHUB_RUN_ATTEMPT/u);
+});
+
+test("each dependency verifier consumes fresh deterministic locked-source JavaScript packs", async () => {
+  const command = "node scripts/verify-published-dependencies.mjs --all";
+  const release = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const releaseVerifier = workflowJob(release, "verify");
+  assert.ok(releaseVerifier.indexOf("pnpm pack:check") >= 0);
+  assert.ok(releaseVerifier.indexOf("pnpm pack:check") < releaseVerifier.indexOf(command));
+
+  const native = await readFile(new URL("../.github/workflows/native-consumer.yml", import.meta.url), "utf8");
+  for (const consumer of ["android", "ios"]) {
+    const job = workflowJob(native, consumer);
+    const pack = "pnpm --dir ../latchway-js pack:check";
+    assert.ok(job.indexOf(pack) >= 0, `${consumer} omits the locked-source pack gate`);
+    assert.ok(job.indexOf(pack) < job.indexOf(command), `${consumer} verifies before deterministic packing`);
+  }
 });
 
 test("release workflow drafts before npm and publishes GitHub only after evidence attestation", async () => {
@@ -341,11 +895,16 @@ test("raw GitHub dependency readers use only authenticated offline captures in c
     "each GitHub CLI consumer must use the authenticated wrapper");
   assert.match(source,
     /execFileSync\("gh", arguments_, \{ \.\.\.options, env: githubReadEnvironment\(\) \}\)/u);
-  assert.equal(source.match(/execFileSync\("git"/gu)?.length ?? 0, 1,
-    "all raw Git tag reads must remain visibly authenticated");
-  const gitRead = source.slice(source.indexOf('execFileSync("git"'), source.indexOf("}).trim()", source.indexOf('execFileSync("git"')));
+  assert.equal(source.match(/execFileSync\("git"/gu)?.length ?? 0, 2,
+    "Git use must remain limited to one authenticated tag read and one local source-identity read");
+  const remoteGitStart = source.indexOf('execFileSync("git", ["-c",');
+  const gitRead = source.slice(remoteGitStart, source.indexOf("}).trim()", remoteGitStart));
   assert.match(gitRead, /\["-c", "credential\.helper=", "ls-remote"/u);
   assert.match(gitRead, /env: authenticatedGitEnvironment\(\)/u);
+  const localGitStart = source.indexOf('execFileSync("git", ["-C", sourceRoot,');
+  const localGitRead = source.slice(localGitStart, source.indexOf("}).trim()", localGitStart));
+  assert.match(localGitRead, /\["-C", sourceRoot, "rev-parse", "--verify", "HEAD"\]/u);
+  assert.doesNotMatch(localGitRead, /ls-remote|authenticatedGitEnvironment|https?:\/\//u);
   assert.match(source, /GIT_ASKPASS: gitAskpass/u);
   assert.match(source, /GIT_TERMINAL_PROMPT: "0"/u);
   assert.match(source, /\["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN"/u,
@@ -357,7 +916,11 @@ test("published dependency gate requires immutable attested assets and live regi
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
   const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const androidContract = await readFile(new URL("android-release-evidence.mjs", import.meta.url), "utf8");
-  const verifierSource = `${source}\n${androidContract}`;
+  const javascriptContract = await readFile(
+    new URL("javascript-release-contract.mjs", import.meta.url),
+    "utf8",
+  );
+  const verifierSource = `${source}\n${javascriptContract}\n${androidContract}`;
   const dependencyGate = releaseWorkflow.slice(
     releaseWorkflow.indexOf("Authenticate published sibling inputs without candidate checkout"),
   );
@@ -378,6 +941,29 @@ test("published dependency gate requires immutable attested assets and live regi
     '"release", "verify-asset"',
     "requireExactReleaseAssets",
     "--source-digest",
+    "JAVASCRIPT_RELEASE_PACKAGES",
+    "The React Native JavaScript dependency must be the client entry",
+    "fixed.length !== 31",
+    "latchway_npm_package_set_evidence",
+    "latchway_npm_registry_package_set_evidence_manifest",
+    "latchway_npm_publish_input_evidence",
+    "latchway_npm_package_set_publication_evidence",
+    "npm-release-adoption-(client|openai|vercel-ai|langchain)",
+    "validatePackageSetConsumer",
+    "validateJavascriptContractEvidence",
+    "JavaScript contract evidence does not match the React Native contract lock and fixtures",
+    'digest(readFileSync(fileURLToPath(new URL("../contract.lock", import.meta.url))))',
+    "inspectNpmArchive",
+    "unpackedBytes !== evidence.unpacked_bytes",
+    "manifest.peerDependencies ?? {}",
+    "package/contract.lock",
+    "exact React Native contract lock",
+    "inspectJavascriptReproducibility",
+    "The locally built JavaScript source does not match the locked release commit",
+    "isDeepStrictEqual(reproducibility.files, reviewedReproducibility.files)",
+    'hash.update(repositoryPath).update("\\0").update(bytes).update("\\0")',
+    "matching_client_version",
+    'publication.publication_mode !== "published"',
     "npm-registry-evidence-manifest.json",
     "cocoapods-release-evidence.json",
     "maven-central-release-evidence.json",
@@ -394,6 +980,97 @@ test("published dependency gate requires immutable attested assets and live regi
     "validateRetainedGPGStatus",
     "requireAnnotatedTagRefs",
   ]) assert.ok(verifierSource.includes(control), `dependency verifier omits ${control}`);
+  for (const packageName of [
+    "@latchway/client", "@latchway/openai", "@latchway/vercel-ai", "@latchway/langchain",
+  ]) assert.ok(source.includes(packageName), `dependency verifier omits ${packageName}`);
+  for (const workflow of [
+    releaseWorkflow,
+    await readFile(new URL("../.github/workflows/native-consumer.yml", import.meta.url), "utf8"),
+  ]) {
+    assert.doesNotMatch(workflow, /\b(?:all|any)\([^;\n]+ as \$[A-Za-z_][A-Za-z0-9_]*;/u,
+      "jq all/any generators must bind variables inside the condition pipeline");
+    const closureStart = workflow.indexOf("javascript_assets=(\n");
+    const closureEnd = workflow.indexOf("\n          )", closureStart);
+    assert.ok(closureStart >= 0 && closureEnd > closureStart, "JavaScript dependency asset closure is missing");
+    const closure = workflow.slice(closureStart + "javascript_assets=(\n".length, closureEnd)
+      .split("\n").map((line) => line.trim()).filter(Boolean);
+    assert.equal(closure.length, 31, "JavaScript dependency closure must contain exactly 31 fixed assets");
+    assert.equal(new Set(closure).size, closure.length, "JavaScript dependency closure contains duplicate assets");
+    assert.deepEqual(closure, [
+      '"latchway-client-$JAVASCRIPT_VERSION.tgz"',
+      '"latchway-openai-$JAVASCRIPT_VERSION.tgz"',
+      '"latchway-vercel-ai-$JAVASCRIPT_VERSION.tgz"',
+      '"latchway-langchain-$JAVASCRIPT_VERSION.tgz"',
+      '"docs-bundle-$JAVASCRIPT_VERSION.tar.gz"',
+      "SHA256SUMS",
+      "build-reproducibility.json",
+      "contract-evidence.json",
+      "dependency-vulnerability-scan.json",
+      "package-evidence.json",
+      "post-publish-evidence.json",
+      "publish-input-evidence.json",
+      "release-candidate-evidence.json",
+      "tag-evidence.json",
+      "npm-registry-evidence-manifest.json",
+      "npm-client-registry-version.json",
+      "npm-client-registry-view.json",
+      "npm-client-attestations.json",
+      "npm-client-audit-signatures.json",
+      "npm-openai-registry-version.json",
+      "npm-openai-registry-view.json",
+      "npm-openai-attestations.json",
+      "npm-openai-audit-signatures.json",
+      "npm-vercel-ai-registry-version.json",
+      "npm-vercel-ai-registry-view.json",
+      "npm-vercel-ai-attestations.json",
+      "npm-vercel-ai-audit-signatures.json",
+      "npm-langchain-registry-version.json",
+      "npm-langchain-registry-view.json",
+      "npm-langchain-attestations.json",
+      "npm-langchain-audit-signatures.json",
+    ], "JavaScript dependency closure must match the verifier exactly");
+    for (const marker of [
+      "latchway-openai-$JAVASCRIPT_VERSION.tgz",
+      "latchway-vercel-ai-$JAVASCRIPT_VERSION.tgz",
+      "latchway-langchain-$JAVASCRIPT_VERSION.tgz",
+      "npm-client-registry-version.json",
+      "npm-openai-registry-view.json",
+      "npm-vercel-ai-attestations.json",
+      "npm-langchain-audit-signatures.json",
+      "dependency-vulnerability-scan.json",
+      "npm-release-adoption-(client|openai|vercel-ai|langchain)",
+    ]) assert.ok(workflow.includes(marker), `dependency authentication workflow omits ${marker}`);
+    for (const [name, expected] of [
+      ["ios_assets", [
+        '"latchway-ios-sdk-$IOS_VERSION.tar.gz"',
+        '"latchway-ios-sdk-$IOS_VERSION.tar.gz.sha256"',
+        '"docs-bundle-$IOS_VERSION.tar.gz"',
+        "cocoapods-published-podspec.json",
+        "cocoapods-reviewed-podspec.json",
+        "cocoapods-release-evidence.json",
+        "cocoapods-release-evidence.SHA256SUMS",
+      ]],
+      ["android_assets", [
+        '"latchway-android-$ANDROID_VERSION-maven-repository.zip"',
+        '"latchway-android-$ANDROID_VERSION-central-portal.zip"',
+        '"docs-bundle-$ANDROID_VERSION.tar.gz"',
+        "SHA256SUMS",
+        "github-release-tag-binding.json",
+        "latchway-maven-signing-public-key.asc",
+        "maven-central-upload-intent.json",
+        "maven-central-deployment.json",
+        "maven-central-deployment-status.json",
+        "maven-central-release-evidence.json",
+      ]],
+    ]) {
+      const start = workflow.indexOf(`${name}=(\n`);
+      const end = workflow.indexOf("\n          )", start);
+      assert.ok(start >= 0 && end > start, `${name} dependency asset closure is missing`);
+      const observed = workflow.slice(start + `${name}=(\n`.length, end)
+        .split("\n").map((line) => line.trim()).filter(Boolean);
+      assert.deepEqual(observed, expected, `${name} dependency closure must match the verifier exactly`);
+    }
+  }
   assert.doesNotMatch(source, /gitHead/u);
   for (const control of [
     "central-portal.zip",
@@ -678,4 +1355,86 @@ function provenanceStatement(invocation, overrides = {}) {
       },
     },
   };
+}
+
+function dependencyReleaseFixture(names) {
+  return {
+    tag_name: "v1.0.0",
+    draft: false,
+    immutable: true,
+    assets: names.map((name, index) => ({ id: index + 1, name, size: 1, state: "uploaded" })),
+  };
+}
+
+function dependencyReleasePolicy(workflow) {
+  const anchor = 'jq --exit-status --arg tag "$tag" --arg kind "$kind" --argjson fixed "$fixed_json" \'';
+  const start = workflow.indexOf(anchor);
+  assert.ok(start >= 0, "dependency release policy jq invocation is missing");
+  const programStart = start + anchor.length;
+  const end = workflow.indexOf('\n            \' "$directory/release.json"', programStart);
+  assert.ok(end > programStart, "dependency release policy jq program is incomplete");
+  return workflow.slice(programStart, end);
+}
+
+function executeDependencyReleasePolicy(policy, release, fixed) {
+  execFileSync("jq", [
+    "--exit-status",
+    "--arg", "tag", "v1.0.0",
+    "--arg", "kind", "javascript",
+    "--argjson", "fixed", JSON.stringify(fixed),
+    policy,
+  ], {
+    input: JSON.stringify(release),
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function bashFunction(workflow, name) {
+  const start = workflow.indexOf(`${name}() {`);
+  assert.ok(start >= 0, `${name} is missing from dependency workflow`);
+  const end = workflow.indexOf("\n          }", start);
+  assert.ok(end > start, `${name} is incomplete in dependency workflow`);
+  return workflow.slice(start, end + "\n          }".length);
+}
+
+async function executeRetryToFilePolicy(functionSource, stem, payload, maximumBytes) {
+  const temporary = await mkdtemp(join(tmpdir(), `latchway-rn-${stem}-`));
+  try {
+    const output = join(temporary, "captured.txt");
+    execFileSync("bash", ["-c", `${functionSource}
+seq() { printf '%s\\n' 180; }
+sleep() { :; }
+producer() { printf '%s' "$PAYLOAD"; }
+retry_to_file "$OUTPUT" "$MAXIMUM_BYTES" producer
+test "$(cat "$OUTPUT")" = "$PAYLOAD"
+`], {
+      env: {
+        ...process.env,
+        MAXIMUM_BYTES: String(maximumBytes),
+        OUTPUT: output,
+        PAYLOAD: payload,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+function workflowJob(workflow, name) {
+  const anchor = `\n  ${name}:\n`;
+  const start = workflow.indexOf(anchor);
+  assert.ok(start >= 0, `workflow job ${name} is missing`);
+  const remainder = workflow.slice(start + anchor.length);
+  const next = /\n {2}[a-z0-9][a-z0-9_-]*:\n/u.exec(remainder);
+  return next === null ? remainder : remainder.slice(0, next.index);
+}
+
+function artifactActionNames(workflow, operation) {
+  const pattern = new RegExp(
+    `uses: actions/${operation}-artifact@[^\\n]+\\n\\s+with:\\n\\s+name: ([^\\n]+)`,
+    "gu",
+  );
+  return [...workflow.matchAll(pattern)].map((match) => match[1].trim());
 }

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { parseStrictJSONBytes } from "./release-attestation.mjs";
+
 export const PROVENANCE_TYPE = "https://slsa.dev/provenance/v1";
 export const PUBLISH_TYPE = "https://github.com/npm/attestation/tree/main/specs/publish/v0.1";
 export const WORKFLOW_PATH = ".github/workflows/release.yml";
@@ -13,6 +15,7 @@ export function assertSafeRetainedOutput(bytes, label, maximumBytes) {
   if (!Buffer.isBuffer(bytes) || bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
     throw new Error(`${label} has an invalid retained-output size.`);
   }
+  const value = parseStrictJSONBytes(bytes, label, maximumBytes);
   const text = bytes.toString("utf8");
   for (const pattern of [
     /(?:^|\n)\/\/registry\.npmjs\.org\/:_authToken\s*=/iu,
@@ -21,11 +24,7 @@ export function assertSafeRetainedOutput(bytes, label, maximumBytes) {
   ]) {
     if (pattern.test(text)) throw new Error(`${label} contains credential-like material and cannot be retained.`);
   }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`${label} is not valid JSON.`);
-  }
+  return value;
 }
 
 export function parseProvenanceOrigin(invocationID, expectedRepositoryURL) {
@@ -34,7 +33,12 @@ export function parseProvenanceOrigin(invocationID, expectedRepositoryURL) {
   if (!invocationID.startsWith(prefix)) throw new Error("The npm provenance invocation repository is unexpected.");
   const match = /^([1-9]\d*)\/attempts\/([1-9]\d*)$/u.exec(invocationID.slice(prefix.length));
   if (match === null) throw new Error("The npm provenance invocation identifier is malformed.");
-  return { invocation_id: invocationID, run_id: Number(match[1]), run_attempt: Number(match[2]) };
+  const runID = Number(match[1]);
+  const runAttempt = Number(match[2]);
+  if (!Number.isSafeInteger(runID) || !Number.isSafeInteger(runAttempt)) {
+    throw new Error("The npm provenance invocation identifier is unbounded.");
+  }
+  return { invocation_id: invocationID, run_id: runID, run_attempt: runAttempt };
 }
 
 export function verifyProvenanceStatement(statement, {
@@ -66,6 +70,19 @@ export function requireCurrentPublicationOrigin(origin, { publishPerformed, curr
   if (publishPerformed && (origin.run_id !== currentRunID || origin.run_attempt !== currentRunAttempt)) {
     throw new Error("A freshly published npm version must carry provenance from this exact workflow attempt.");
   }
+}
+
+export function normalizePublishPerformedForConsumerAttempt(
+  publishPerformed,
+  { producerRunID, producerRunAttempt, currentRunID, currentRunAttempt },
+) {
+  const coordinates = [producerRunID, producerRunAttempt, currentRunID, currentRunAttempt];
+  if (typeof publishPerformed !== "boolean"
+      || coordinates.some((value) => !Number.isSafeInteger(value) || value < 1)
+      || producerRunID !== currentRunID || producerRunAttempt > currentRunAttempt) {
+    throw new Error("The npm publication state is not bound to a valid producer workflow attempt.");
+  }
+  return producerRunAttempt === currentRunAttempt && publishPerformed;
 }
 
 export function verifyPublishStatement(statement, { packageName, packageVersion, sha512, registryURL }) {

@@ -40,6 +40,23 @@ class DocumentationBundleTests(unittest.TestCase):
         self.assertTrue(region[0].strip().startswith("const send = async"))
         self.assertEqual(region[-1].strip(), "};")
 
+        supported = {item["name"] for item in config["supported_versions"]}
+        self.assertTrue({
+            "@latchway/react-native/testing", "@latchway/react-native/package.json",
+            "@latchway/client", "web-streams-polyfill", "React peer", "React Native peer",
+            "Node.js", "pnpm", "Swift language", "C++ language standard",
+            "Latchway iOS AppAttest", "Android compile SDK", "Java bytecode",
+            "Android Gradle Plugin", "Gradle", "Kotlin", "Latchway Android OkHttp",
+            "Latchway Android Play Integrity", "Vercel AI OpenAI", "LangChain core",
+            "TypeScript",
+        } <= supported)
+        package = "\n".join(
+            (ROOT / "package.json").read_text(encoding="utf-8").splitlines()[:54]
+        )
+        self.assertIn('"./testing"', package)
+        self.assertIn('"./package.json"', package)
+        self.assertIn('"version": "1.0.0"', package)
+
     def test_bundle_is_reproducible_self_describing_and_checksum_bound(self) -> None:
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             archives = []
@@ -87,8 +104,36 @@ class DocumentationBundleTests(unittest.TestCase):
             self.assertEqual(set(checksums), set(payloads) - {"SHA256SUMS"})
             for name, digest in checksums.items():
                 self.assertEqual(hashlib.sha256(payloads[name]).hexdigest(), digest)
+            catalogs = {}
             for name, key in (("supported-versions.json", "versions"), ("public-symbols.json", "symbols"), ("errors.json", "errors"), ("examples.json", "examples")):
-                self.assertTrue(json.loads(payloads[name])[key])
+                catalogs[name] = json.loads(payloads[name])[key]
+                self.assertTrue(catalogs[name])
+            for name in ("public-symbols.json", "errors.json"):
+                for row in catalogs[name]:
+                    source = row["source"]
+                    line = (ROOT / source["file"]).read_text(encoding="utf-8").splitlines()[
+                        source["region"]["start_line"] - 1
+                    ]
+                    self.assertIn(row["name"], line)
+            symbols = {row["name"] for row in catalogs["public-symbols.json"]}
+            self.assertTrue({
+                "gatewayURL", "ready", "fetch", "fetchFor", "quota", "diagnostics",
+                "refresh", "prepareComponents", "replaceComponent", "componentDiagnostics",
+                "revokeComponent", "revokeCurrentInstallation", "revokeCurrentInstallationFamily",
+                "dispose", "establishDirectAttestation", "installNativeModuleForTesting",
+                "NativeLatchwayModule", "configure", "configureComponent", "startRequest",
+                "readResponseChunk", "closeResponse", "rootComponentDiagnostics", "revoke",
+                "revokeFamily", "revokeFamilyWithComponents", "cancel",
+            } <= symbols)
+            self.assertTrue({
+                "DefaultLatchwayClient", "DefaultLatchwayComponentClient", "RuntimeConfiguration",
+                "RuntimeComponentConfiguration", "NativeLease", "Spec", "acquire",
+                "acquireComponent",
+            }.isdisjoint(symbols))
+            self.assertTrue({row["source"]["file"] for row in catalogs["public-symbols.json"]} <= {
+                "src/index.ts", "src/types.ts", "src/version.ts", "src/testing.ts",
+                "src/native/NativeLatchway.ts",
+            })
             framework = payloads["frameworks/react-native-consumers.ts"].decode("utf-8")
             for marker in (
                 "export interface FrameworkFeatureBindings",

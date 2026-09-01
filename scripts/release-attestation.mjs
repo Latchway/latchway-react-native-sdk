@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { TextDecoder } from "node:util";
 
 export const RELEASE_PREDICATE_TYPE = "https://in-toto.io/attestation/release/v0.2";
@@ -119,6 +120,38 @@ export function parseStrictJSONBytes(bytes, label, maximumBytes) {
   });
 }
 
+export function readBoundedFileSync(path, label, maximumBytes) {
+  if (typeof label !== "string" || label.length === 0
+      || !Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    throw new Error("Bounded file reader received an invalid limit.");
+  }
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || !Number.isSafeInteger(metadata.size)
+        || metadata.size < 1 || metadata.size > maximumBytes) {
+      throw new Error(`${label} has an invalid file byte length.`);
+    }
+    const bytes = Buffer.alloc(metadata.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const count = readSync(descriptor, bytes, offset, bytes.byteLength - offset, offset);
+      if (count === 0) throw new Error(`${label} changed while it was read.`);
+      offset += count;
+    }
+    if (readSync(descriptor, Buffer.alloc(1), 0, 1, offset) !== 0) {
+      throw new Error(`${label} changed while it was read.`);
+    }
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function readBoundedStrictJSONFileSync(path, label, maximumBytes) {
+  return parseStrictJSONBytes(readBoundedFileSync(path, label, maximumBytes), label, maximumBytes);
+}
+
 function scanJSON(text, label) {
   let index = 0;
   const whitespace = new Set([" ", "\t", "\r", "\n"]);
@@ -210,7 +243,7 @@ function scanJSON(text, label) {
   if (index !== text.length) fail();
 }
 
-function decodeBase64Strict(encoded, label) {
+export function decodeBase64Strict(encoded, label) {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
     throw new Error(`${label} has a malformed DSSE payload encoding.`);
   }

@@ -15,10 +15,12 @@ builds real React Native 0.82 hosts.
    files, public compatibility constants, and vendored fixtures to the same
    final contract. Update each exact source commit in
    `release-compatibility.json` only after its repository is green.
-3. Publish the exact JavaScript package, the iOS pod/tag, and all Android Maven
-   artifacts/tag. Their immutable GitHub releases, per-asset attestations,
-   public registry bytes, registry signatures, and source commits must all match
-   the lock; git tag or package metadata alone is not sufficient.
+3. Publish the exact four-package JavaScript set (`@latchway/client`,
+   `@latchway/openai`, `@latchway/vercel-ai`, and `@latchway/langchain`), the
+   iOS pod/tag, and all Android Maven artifacts/tag. Their immutable GitHub
+   releases, per-asset attestations, public registry bytes, registry signatures,
+   and source commits must all match the lock; git tag or package metadata alone
+   is not sufficient.
 4. Run the manual `Published dependency consumer` workflow. It removes all
    local path/repository overrides and builds the clean npm consumer plus the
    official iOS and Android example hosts.
@@ -121,13 +123,21 @@ immutable version only after rechecking its exact bytes, signatures, and source
 provenance. The attested adoption record binds the original provenance-producing
 run and attempt, the current successful run and attempt, and the exact retained
 registry evidence manifest. The published-dependency gate applies the same
-standard to the locked JavaScript, iOS, and Android releases: it verifies every
-strictly parsed automatic release/asset attestation, annotated source tag,
-source-bound workflow attestation, and live
-registry byte; it also reruns npm signature audit and independently verifies
-Maven signatures against the attested public key with a fail-closed GnuPG status
-allowlist that rejects revoked, expired, unknown, or weak signatures. An interrupted exact promotion
-can therefore be rerun safely.
+standard to the locked JavaScript, iOS, and Android releases. React Native links
+only `@latchway/client`, but the JavaScript release is indivisible: the gate
+requires its exact 31 fixed assets, all four package archives, the version 2
+reviewed package-set and registry-manifest schemas, the version 2 publish-input
+schema, the version 3 publication schema, and at least one package-suffixed
+adoption record for each package. It independently checks the client entry,
+four-package order, per-package retained-output names and hashes, byte identity
+from each GitHub archive through npm, trusted-publisher provenance, and live
+signature audit for every package. It also verifies every strictly parsed
+automatic release/asset attestation, annotated source tag, source-bound workflow
+attestation, and each live registry byte. It independently verifies Maven
+signatures against the attested
+public key with a fail-closed GnuPG status allowlist that rejects revoked,
+expired, unknown, or weak signatures. An interrupted exact promotion can
+therefore be rerun safely.
 
 Do not manually create or retag a failed release or overwrite a published npm version.
 Fix the release inputs, choose a new semantic version, and rerun the complete

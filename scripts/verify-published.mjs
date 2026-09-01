@@ -6,6 +6,8 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+import { decodeBase64Strict, parseStrictJSONBytes } from "./release-attestation.mjs";
+
 import {
   PROVENANCE_TYPE,
   PUBLISH_TYPE,
@@ -14,6 +16,7 @@ import {
   assertSafeRetainedOutput,
   buildAdoptionRecord,
   buildRegistryManifest,
+  normalizePublishPerformedForConsumerAttempt,
   requireCurrentPublicationOrigin,
   sha256,
   verifyProvenanceStatement,
@@ -31,8 +34,12 @@ const archiveArgument = process.argv.slice(2).find((argument) => argument !== "-
 if (archiveArgument === undefined) throw new Error("usage: node scripts/verify-published.mjs /path/to/package.tgz");
 const localArchive = resolve(archiveArgument);
 const evidenceDirectory = dirname(localArchive);
-const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
-const packageEvidence = JSON.parse(await readFile(join(evidenceDirectory, "package-evidence.json"), "utf8"));
+const manifest = parseStrictJSONBytes(
+  await readFile(join(ROOT, "package.json")), "React Native package manifest", 2 * 1024 * 1024,
+);
+const packageEvidence = parseStrictJSONBytes(
+  await readFile(join(evidenceDirectory, "package-evidence.json")), "React Native package evidence", 2 * 1024 * 1024,
+);
 const localBytes = await readFile(localArchive);
 const localSHA1 = createHash("sha1").update(localBytes).digest("hex");
 if (basename(localArchive) !== packageEvidence.tarball || sha256(localBytes) !== packageEvidence.sha256) {
@@ -52,7 +59,12 @@ const expectedRef = requiredEnvironment("GITHUB_REF", /^refs\/heads\/main$/u);
 const expectedEvent = requiredEnvironment("GITHUB_EVENT_NAME", /^repository_dispatch$/u);
 const currentRunID = Number(requiredEnvironment("GITHUB_RUN_ID", /^[1-9]\d*$/u));
 const currentRunAttempt = Number(requiredEnvironment("GITHUB_RUN_ATTEMPT", /^[1-9]\d*$/u));
-const publishPerformed = requiredEnvironment("PUBLISH_PERFORMED", /^(?:true|false)$/u) === "true";
+const producerRunID = Number(requiredEnvironment("PUBLISH_PRODUCER_RUN_ID", /^[1-9]\d*$/u));
+const producerRunAttempt = Number(requiredEnvironment("PUBLISH_PRODUCER_RUN_ATTEMPT", /^[1-9]\d*$/u));
+const publishPerformed = normalizePublishPerformedForConsumerAttempt(
+  requiredEnvironment("PUBLISH_PERFORMED", /^(?:true|false)$/u) === "true",
+  { producerRunID, producerRunAttempt, currentRunID, currentRunAttempt },
+);
 if (workflowCommit !== expectedCommit || expectedReleaseTag !== `v${manifest.version}` || expectedRef !== SOURCE_REF) {
   throw new Error("The publication workflow does not match the promoted source coordinate.");
 }
@@ -252,19 +264,21 @@ function decodeStatement(attestation) {
       || !/^[A-Za-z0-9+/]+={0,2}$/u.test(envelope.payload)) {
     throw new Error("The npm Sigstore DSSE envelope is malformed.");
   }
-  const bytes = Buffer.from(envelope.payload, "base64");
+  const bytes = decodeBase64Strict(envelope.payload, "npm attestation statement");
   if (bytes.byteLength === 0 || bytes.byteLength > 256 * 1024) {
     throw new Error("The npm attestation statement has an invalid size.");
   }
-  try { return JSON.parse(bytes.toString("utf8")); } catch {
-    throw new Error("The npm attestation statement is not valid JSON.");
-  }
+  return parseStrictJSONBytes(bytes, "npm attestation statement", 256 * 1024);
 }
 
 function verifyWorkflowCertificate(attestation, repositoryURL) {
-  const certificateBytes = attestation?.bundle?.verificationMaterial?.certificate?.rawBytes;
-  if (typeof certificateBytes !== "string") throw new Error("The provenance bundle is missing its signing certificate.");
-  const certificate = new X509Certificate(Buffer.from(certificateBytes, "base64"));
+  const encoded = attestation?.bundle?.verificationMaterial?.certificate?.rawBytes;
+  if (typeof encoded !== "string") throw new Error("The provenance bundle is missing its signing certificate.");
+  const certificateBytes = decodeBase64Strict(encoded, "npm provenance certificate");
+  if (certificateBytes.byteLength > 64 * 1024) {
+    throw new Error("The npm provenance certificate exceeds its size limit.");
+  }
+  const certificate = new X509Certificate(certificateBytes);
   if (certificate.subjectAltName !== `URI:${repositoryURL}/${WORKFLOW_PATH}@${SOURCE_REF}`) {
     throw new Error("The provenance signing certificate has an unexpected workflow identity.");
   }
@@ -281,7 +295,9 @@ async function auditRegistrySignatures() {
     }, null, 2)}\n`);
     runNpmCaptured(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact"],
       consumer, 4 * 1024 * 1024, "npm install", npmrc);
-    const lock = JSON.parse(await readFile(join(consumer, "package-lock.json"), "utf8"));
+    const lock = parseStrictJSONBytes(
+      await readFile(join(consumer, "package-lock.json")), "npm consumer lock", 4 * 1024 * 1024,
+    );
     if (lock.packages?.[`node_modules/${manifest.name}`]?.integrity !== packageEvidence.integrity) {
       throw new Error("The registry consumer lock does not contain the exact published integrity.");
     }
@@ -295,10 +311,12 @@ async function auditRegistrySignatures() {
 function runNpmCaptured(arguments_, cwd, maximumBytes, operation, userconfig) {
   const excluded = new Set(["NODE_AUTH_TOKEN", "NPM_TOKEN", "npm_config__auth", "npm_config_auth",
     "npm_config__authToken", "NPM_CONFIG__AUTH", "NPM_CONFIG_AUTH"]);
-  const environment = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => !excluded.has(name)),
-  );
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => {
+    const normalized = name.toLowerCase();
+    return !excluded.has(name) && !(normalized.startsWith("npm_config_") && normalized.includes("auth"));
+  }));
   environment.NPM_CONFIG_USERCONFIG = userconfig ?? join(tmpdir(), "latchway-empty-release.npmrc");
+  environment.NPM_CONFIG_GLOBALCONFIG = `${environment.NPM_CONFIG_USERCONFIG}.global`;
   environment.NPM_CONFIG_CACHE = join(tmpdir(), `latchway-npm-read-cache-${process.pid}`);
   const result = spawnSync(process.execPath, [trustedNpmCLI, ...arguments_], {
     cwd, env: environment, encoding: "buffer", maxBuffer: maximumBytes, stdio: ["ignore", "pipe", "pipe"],
