@@ -31,6 +31,27 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.sha }}
         run: scripts/scan-dependencies.sh "$SOURCE_COMMIT"
+      - name: Resolve the exact locked JavaScript SDK revision
+        id: javascript
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(jq --exit-status --raw-output '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' release-compatibility.json)
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+      - name: Fetch only the public exact locked JavaScript SDK revision without credentials
+        env:
+          JAVASCRIPT_COMMIT: ${{ steps.javascript.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GH_TOKEN:-}"
+          test ! -e ../latchway-js
+          git init ../latchway-js
+          git -C ../latchway-js remote add origin https://github.com/Latchway/latchway-js.git
+          GIT_TERMINAL_PROMPT=0 git -C ../latchway-js fetch --depth=1 --no-tags origin "$JAVASCRIPT_COMMIT"
+          git -C ../latchway-js checkout --detach FETCH_HEAD
+          test "$(git -C ../latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
       - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -39,6 +60,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+      - name: Build the exact locked JavaScript SDK source
+        env:
+          JAVASCRIPT_COMMIT: ${{ steps.javascript.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ../latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
+          pnpm --dir ../latchway-js install --frozen-lockfile --ignore-scripts
+          pnpm --dir ../latchway-js build
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
       - name: Install the exact package graph
         run: pnpm install --frozen-lockfile
       - name: Verify candidate-owned metadata and native boundaries
@@ -117,6 +149,27 @@ jobs:
           GIT_TERMINAL_PROMPT=0 git -C _core fetch --depth=1 --no-tags origin "$CORE_COMMIT"
           git -C _core checkout --detach FETCH_HEAD
           test "$(git -C _core rev-parse --verify HEAD)" = "$CORE_COMMIT"
+      - name: Resolve the exact locked JavaScript SDK revision
+        id: javascript
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(jq --exit-status --raw-output '.javascript.source_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' release-compatibility.json)
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+      - name: Fetch only the public exact locked JavaScript SDK revision without credentials
+        env:
+          JAVASCRIPT_COMMIT: ${{ steps.javascript.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "${GH_TOKEN:-}"
+          test ! -e ../latchway-js
+          git init ../latchway-js
+          git -C ../latchway-js remote add origin https://github.com/Latchway/latchway-js.git
+          GIT_TERMINAL_PROMPT=0 git -C ../latchway-js fetch --depth=1 --no-tags origin "$JAVASCRIPT_COMMIT"
+          git -C ../latchway-js checkout --detach FETCH_HEAD
+          test "$(git -C ../latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
       - name: Resolve the exact locked Android SDK revision
         id: android
         shell: bash
@@ -150,6 +203,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+      - name: Build the exact locked JavaScript SDK source
+        env:
+          JAVASCRIPT_COMMIT: ${{ steps.javascript.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ../latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
+          pnpm --dir ../latchway-js install --frozen-lockfile --ignore-scripts
+          pnpm --dir ../latchway-js build
+          test -z "$(git -C ../latchway-js status --porcelain=v1 --untracked-files=all)"
       - name: Install the exact React Native package graph
         run: pnpm install --frozen-lockfile
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0

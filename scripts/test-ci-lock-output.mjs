@@ -31,6 +31,33 @@ test("Android workflows install packages from the immutable compatibility lock",
   }
 });
 
+test("ordinary pull-request CI materializes the exact locked JavaScript sibling", async () => {
+  const workflow = await readFile(new URL(".github/workflows/ci.yml", root), "utf8");
+  const pinnedJob = workflow.indexOf("\n  pinned-core-conformance:\n");
+  assert.notEqual(pinnedJob, -1);
+  const jobs = [workflow.slice(0, pinnedJob), workflow.slice(pinnedJob)];
+  for (const job of jobs) {
+    for (const marker of [
+      ".javascript.source_commit",
+      "Resolve the exact locked JavaScript SDK revision",
+      "Fetch only the public exact locked JavaScript SDK revision without credentials",
+      "Build the exact locked JavaScript SDK source",
+      "test -z \"${GH_TOKEN:-}\"",
+      "GIT_TERMINAL_PROMPT=0 git -C ../latchway-js fetch --depth=1 --no-tags origin \"$JAVASCRIPT_COMMIT\"",
+      "test \"$(git -C ../latchway-js rev-parse --verify HEAD)\" = \"$JAVASCRIPT_COMMIT\"",
+      "pnpm --dir ../latchway-js install --frozen-lockfile --ignore-scripts",
+      "pnpm --dir ../latchway-js build",
+    ]) {
+      assert.ok(job.includes(marker), marker);
+    }
+    assert.ok(
+      job.indexOf("Build the exact locked JavaScript SDK source") <
+        job.indexOf("Install the exact", job.indexOf("Build the exact locked JavaScript SDK source")),
+      "the locked JavaScript build must precede the React Native package install",
+    );
+  }
+});
+
 test("standalone source verification freezes every contract-bundle source", async () => {
   const verifier = await readFile(new URL("scripts/verify-compatibility.mjs", root), "utf8");
   for (const path of [
