@@ -8,28 +8,44 @@ builds real React Native 0.82 hosts.
 
 ## Cross-repository order
 
-1. Finalize and release the core contract bundle and server image. Record the
-   immutable core tag, commit, bundle hash, image digest, and compatibility
-   range.
-2. Synchronize the JavaScript, iOS, Android, and React Native `contract.lock`
-   files, public compatibility constants, and vendored fixtures to the same
-   final contract. Update each exact source commit in
-   `release-compatibility.json` only after its repository is green.
-3. Publish the exact four-package JavaScript set (`@latchway/client`,
+1. Create a core **contract checkpoint** that marks the manifest released,
+   records the fresh `released_at` value, and rebuilds the deterministic
+   contract archive. Commit that checkpoint, but do not publish the core tag or
+   image yet.
+2. Create successor JavaScript, iOS, and Android commits whose `contract.lock`
+   files name `v1.0.0`, the exact contract-checkpoint commit, and its new bundle
+   hash. Synchronize their public constants, vendored fixtures, and final
+   `## [1.0.0]` changelog headings. Create the React Native successor last so
+   `release-compatibility.json` pins those three exact green successor commits.
+3. Build every SDK documentation bundle from its clean successor commit. Import
+   those exact bundles into a final core candidate and synchronize the
+   documentation mirror. The final core candidate must retain an `api/` tree
+   byte-identical to the contract checkpoint; its later documentation and
+   release metadata do not change the contract archive.
+4. Run the candidate, cross-repository, security, provider, device, cloud, and
+   operations evidence workflows against that exact five-repository tuple.
+   Promote the final core commit only after every non-publication release domain
+   passes. Core promotion publishes the image and release, then dispatches the
+   exact SDK successor coordinates through the `repository_dispatch` event.
+5. Publish the exact four-package JavaScript set (`@latchway/client`,
    `@latchway/openai`, `@latchway/vercel-ai`, and `@latchway/langchain`), the
    iOS pod/tag, and all Android Maven artifacts/tag. Their immutable GitHub
    releases, per-asset attestations, public registry bytes, registry signatures,
    and source commits must all match the lock; git tag or package metadata alone
    is not sufficient.
-4. Run the manual `Published dependency consumer` workflow. It removes all
+6. Run the manual `Published dependency consumer` workflow. It removes all
    local path/repository overrides and builds the clean npm consumer plus the
    official iOS and Android example hosts.
-5. Set `core_release` in `contract.lock`, update every public SDK version and
-   the changelog. The accepted core promotion then sends the
-   `latchway_release_promoted` `repository_dispatch` payload for the exact
-   reviewed commit. `.github/workflows/release.yml` verifies the attested
-   promotion report before it creates, or verifies, the annotated
-   `v<package-version>` tag. Operators must not create or push that tag manually.
+7. Rerun the exact React Native promotion after the published-dependency receipt
+   exists. `.github/workflows/release.yml` verifies both the attested core
+   promotion and public dependency evidence before it creates, or verifies, the
+   annotated `v<package-version>` tag and publishes npm. Operators must not
+   create or push that tag manually.
+
+The frozen unreleased source tuple is not itself publishable: its locks still
+say `core_release: unreleased`, its changelogs still identify a candidate, and
+the protocol manifest is still draft. The coordinated successor sequence above
+is a required release transition, not a post-publication cleanup.
 
 `pnpm release:preflight -- v<package-version>` intentionally fails for a dirty
 tree, lightweight/wrong-commit tag, mismatched version, unpublished core lock,

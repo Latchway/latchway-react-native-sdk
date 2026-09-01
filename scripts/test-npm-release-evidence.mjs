@@ -726,6 +726,14 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
     workflow.indexOf("\n  trusted-npm-cli:\n"),
     workflow.indexOf("\n  github-draft:\n"),
   );
+  const githubDraftJob = workflow.slice(
+    workflow.indexOf("\n  github-draft:\n"),
+    workflow.indexOf("\n  npm-publish:\n"),
+  );
+  assert.ok(
+    githubDraftJob.includes('. == ("docs-bundle-" + $version + ".tar.gz")'),
+    "draft reconciliation omits the documentation bundle",
+  );
   const npmPublishJob = workflow.slice(
     workflow.indexOf("\n  npm-publish:\n"),
     workflow.indexOf("\n  publish:\n"),

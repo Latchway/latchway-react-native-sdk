@@ -1179,6 +1179,7 @@ jobs:
             all(.assets[].name;
               . == ("latchway-react-native-" + $version + ".tgz") or
               . == ("latchway-react-native-" + $version + ".tgz.sha256") or
+              . == ("docs-bundle-" + $version + ".tar.gz") or
               . == "package-evidence.json" or . == "build-reproducibility.json" or
               . == "published-dependency-evidence.json" or . == "npm-registry-version.json" or
               . == "npm-registry-view.json" or . == "npm-attestations.json" or

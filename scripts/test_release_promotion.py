@@ -629,6 +629,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(registry, final_step)
         self.assertNotIn("--clobber", workflow)
         self.assertNotIn("python3 scripts/reconcile-github-release.py", workflow)
+        draft_block = workflow.split("\n  github-draft:\n", 1)[1].split(
+            "\n  npm-publish:\n", 1
+        )[0]
+        self.assertIn(
+            '. == ("docs-bundle-" + $version + ".tar.gz")', draft_block
+        )
         for job_name in ("github-draft", "github-release"):
             block = workflow.split(f"\n  {job_name}:\n", 1)[1]
             if job_name == "github-draft":
