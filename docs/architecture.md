@@ -101,7 +101,7 @@ feature instead of multiplexing incompatible endpoints through one identifier.
 
 A module-global root lease map is keyed by native-module identity plus gateway/application/environment scope. A separate component lease map adds the component definition and never aliases the root map. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.
 
-Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against draft contract 1.0.0 and current wire protocol 2 before any operation.
+Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against released contract 1.0.0 and current wire protocol 2 before any operation.
 
 ## TurboModule boundary
 

@@ -267,11 +267,11 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
+The final version 1 source candidate consumes released contract checkpoint `1.0.0`,
 current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `116ebe4ed31a6a86ec97dc5351e289e12b06a38e`, and
+window), core commit `b75401e70277c69c97c4ad232dfe9cd6aa323879`, and
 bundle SHA-256
-`a8ef48786f16c1a7c6acb5be4eb62269bf3f5fda55bb5dbbe2842c4c52cad8ad`.
+`14cd2d8ddc8c4b85b8ab002359b373772d599a4eaaa8e95b9b0b793c684215c6`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and

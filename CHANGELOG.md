@@ -7,6 +7,8 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-01
+
 ### Changed
 
 - Added the root React Native installation-family component lifecycle:
@@ -43,7 +45,7 @@ Versioning once package publication begins.
 - Advanced the exact JavaScript source pin to the reviewed final source commit
   whose protected release evidence requires both Firebase App Check and
   Cloudflare Turnstile.
-- Synchronized the candidate to draft contract 1.0.0, current wire protocol 2,
+- Synchronized the release to contract 1.0.0, current wire protocol 2,
   and the canonical installation-family and component-attestation binding v2
   fixtures while preserving wire 1 in the core compatibility window.
 - Added an extension-process component client for iOS Action and SSO
@@ -51,9 +53,9 @@ Versioning once package publication begins.
   identity callback and reports composite `delegated_direct_attested` trust;
   Android reports direct component attestation as unsupported.
 
-## Planned 1.0.0 candidate baseline (unreleased)
+### Candidate baseline
 
-### Changed
+#### Changed
 
 - Native consumers now pin the reviewed JavaScript, iOS, Android, Kotlin,
   React Native, and core source commits through a machine-verified release

@@ -42,10 +42,11 @@ builds real React Native 0.82 hosts.
    annotated `v<package-version>` tag and publishes npm. Operators must not
    create or push that tag manually.
 
-The frozen unreleased source tuple is not itself publishable: its locks still
-say `core_release: unreleased`, its changelogs still identify a candidate, and
-the protocol manifest is still draft. The coordinated successor sequence above
-is a required release transition, not a post-publication cleanup.
+The released-lock successor tuple now satisfies the source transition in steps
+1 through 3. It is still not independently publishable: the protected evidence,
+promotion, public dependency, and registry gates in steps 4 through 7 remain
+mandatory. The coordinated successor sequence is a required release
+transition, not a post-publication cleanup.
 
 `pnpm release:preflight -- v<package-version>` intentionally fails for a dirty
 tree, lightweight/wrong-commit tag, mismatched version, unpublished core lock,

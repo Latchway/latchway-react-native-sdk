@@ -1045,7 +1045,7 @@ describe("React Native Latchway native-owned fetch", () => {
       await readFile(new URL("installation-family-v2.json", fixtureRoot), "utf8"),
     ) as InstallationFamilyFixture;
     expect(protocol.contract_version).toBe("1.0.0");
-    expect(protocol.contract_status).toBe("draft");
+    expect(protocol.contract_status).toBe("released");
     expect(protocol.wire_protocol.current).toBe(2);
     expect(protocol.wire_protocol.supported).toEqual([1, 2]);
     expect(protocol.bundle.required_entries).toContain("component-attestation-binding.schema.json");
