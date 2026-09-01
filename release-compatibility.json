@@ -40,7 +40,7 @@
     "pod": "Latchway/AppAttest",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "eda47b586e1dde9d90730663701a73332ff2fb45",
+    "source_commit": "af87b4454e4b6a159b9da7bd50550865c74684a2",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -51,7 +51,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "129f9a79f27b73d41e108f3fe42507ae1795e053",
+    "source_commit": "9d83a635fc0e5f1a79582c73f0fb61acc9e24471",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "sdk_platform_version": "37.0",
