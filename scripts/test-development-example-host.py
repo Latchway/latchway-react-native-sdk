@@ -470,9 +470,9 @@ class DevelopmentExampleHostTests(unittest.TestCase):
 
     def test_signed_bundle_path_validation_rejects_symlink_aliases(self) -> None:
         with tempfile.TemporaryDirectory(
-            prefix="latchway-signed-bundle-path-", dir="/private/tmp"
+            prefix="latchway-signed-bundle-path-"
         ) as directory:
-            root = pathlib.Path(directory)
+            root = pathlib.Path(directory).resolve()
             app = root / "LatchwayExample.app"
             app.mkdir()
             SIGNATURE_MODULE.safe_bundle(app, ".app")
@@ -502,7 +502,7 @@ class DevelopmentExampleHostTests(unittest.TestCase):
 
         for mutation in ("extra", "missing", "symlink", "executable-text"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
-                prefix="latchway-code-inventory-", dir="/private/tmp"
+                prefix="latchway-code-inventory-"
             ) as directory:
                 root = pathlib.Path(directory)
                 app = root / "Example.app"
@@ -523,7 +523,7 @@ class DevelopmentExampleHostTests(unittest.TestCase):
                     SIGNATURE_MODULE.require_exact_macho_inventory(app, expected)
 
         with tempfile.TemporaryDirectory(
-            prefix="latchway-code-inventory-valid-", dir="/private/tmp"
+            prefix="latchway-code-inventory-valid-"
         ) as directory:
             app = pathlib.Path(directory) / "Example.app"
             app.mkdir()
