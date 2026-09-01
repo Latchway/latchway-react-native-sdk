@@ -54,10 +54,16 @@ file.
 
 ## npm and GitHub configuration
 
-Configure `@latchway/react-native` on npm with this GitHub repository and the
-exact `release.yml` workflow as a trusted publisher. The workflow runs on a
-GitHub-hosted runner with `id-token: write`, npm 11.6.2, and provenance-enabled
-publication. A separate source-free `permissions: {}` job downloads the exact
+The inert `@latchway/react-native@0.0.0-bootstrap.0` package record must exist
+under the `bootstrap` dist-tag before stable promotion. Configure that package's
+npm trusted publisher with organization `Latchway`, repository
+`latchway-react-native-sdk`, workflow filename `release.yml`, environment
+`npm`, and allowed action `npm publish`. The matching GitHub `npm` environment
+must be protected, and `Latchway/latchway-react-native-sdk` must be public at
+publication time because the required npm provenance is not generated for a
+private source repository. The workflow runs on a GitHub-hosted runner with
+`id-token: write`, npm 11.6.2, and provenance-enabled publication. A separate
+source-free `permissions: {}` job downloads the exact
 npm 11.6.2 registry tarball with lifecycle scripts disabled and authenticates a
 one-file artifact closure: 2,663,834 bytes, 2,133 regular entries, 11,785,613
 unpacked bytes, SHA-256
@@ -75,6 +81,13 @@ requires GitHub's exact immutable-release settings response to report
 GitHub CLI to support JSON release and asset attestation verification. Bootstrap the npm package
 record through a separately reviewed one-time procedure if the registry requires
 it; the release workflow never accepts `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
+
+Before release, install an active repository ruleset for `refs/tags/v*` that
+allows tag creation only through the GitHub Actions integration used by
+`.github/workflows/release.yml` and denies tag updates, deletion, and
+non-fast-forward changes. Operators and administrators must not create, move,
+or delete the release tag manually. This server-side rule remains an external
+release prerequisite.
 
 When any locked sibling repository is private, configure the repository or
 organization Actions secret `LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`. It must
