@@ -33,14 +33,17 @@ builds real React Native 0.82 hosts.
    releases, per-asset attestations, public registry bytes, registry signatures,
    and source commits must all match the lock; git tag or package metadata alone
    is not sufficient.
-6. Run the manual `Published dependency consumer` workflow. It removes all
-   local path/repository overrides and builds the clean npm consumer plus the
-   official iOS and Android example hosts.
-7. Rerun the exact React Native promotion after the published-dependency receipt
-   exists. `.github/workflows/release.yml` verifies both the attested core
-   promotion and public dependency evidence before it creates, or verifies, the
-   annotated `v<package-version>` tag and publishes npm. Operators must not
-   create or push that tag manually.
+6. Let the promotion-dispatched `.github/workflows/release.yml` wait for the
+   immutable JavaScript, iOS, and Android releases. It authenticates their
+   public bytes and attestations, removes local path/repository overrides, and
+   builds the clean npm consumer plus the official iOS and Android example
+   hosts before publication. The manual `Published dependency consumer`
+   workflow is an optional independent diagnostic; its output is not a release
+   workflow input and does not require promotion to be rerun.
+7. After those internal dependency and consumer gates pass, the same release
+   run creates, or verifies, the annotated `v<package-version>` tag, publishes
+   npm through the trusted publisher, and finalizes the immutable GitHub
+   release. Operators must not create or push that tag manually.
 
 The released-lock successor tuple now satisfies the source transition in steps
 1 through 3. It is still not independently publishable: the protected evidence,
