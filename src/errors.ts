@@ -115,6 +115,17 @@ export function fromNativeError(value: unknown): Error {
   const status = safeStatus(record.status ?? userInfo.status);
   const retryableValues = presentValues(record, userInfo, ["retryable"]);
   const retryable = record.retryable === true || userInfo.retryable === true;
+  const documentationURLValues = presentValues(
+    record,
+    userInfo,
+    ["documentationURL", "documentation_url"],
+  );
+  const canonicalNativeDocumentationURL = rawCode !== undefined && isNativeErrorCode(rawCode)
+    ? `https://docs.latchway.dev/errors/${rawCode.replaceAll("_", "-")}`
+    : undefined;
+  const documentationURLIsValid = documentationURLValues.length > 0 &&
+    canonicalNativeDocumentationURL !== undefined &&
+    documentationURLValues.every((candidate) => candidate === canonicalNativeDocumentationURL);
   const operationValues = presentValues(record, userInfo, ["operationID", "operation_id"]);
   const operationID = operationValues.length > 0 &&
     operationValues.every((candidate) => candidate === operationValues[0]) &&
@@ -127,7 +138,10 @@ export function fromNativeError(value: unknown): Error {
     requestIDValues.length > 0 && requestIDValues.every((candidate) => candidate === requestID) &&
     statusValues.length > 0 && statusValues.every((candidate) => candidate === 503) &&
     retryableValues.length > 0 && retryableValues.every((candidate) => candidate === true);
-  if ((mapped === "operation_indeterminate" && !validIndeterminateMetadata) ||
+  const hasServerMetadata = requestIDValues.length > 0 || statusValues.length > 0;
+  if ((documentationURLValues.length > 0 && !documentationURLIsValid) ||
+      (hasServerMetadata && !documentationURLIsValid) ||
+      (mapped === "operation_indeterminate" && !validIndeterminateMetadata) ||
       (mapped !== "operation_indeterminate" && operationValues.length > 0)) {
     return new LatchwayError(
       "protocol_response_invalid",
@@ -200,6 +214,10 @@ function presentValues(
 
 function isCanonicalOperationID(value: unknown): value is string {
   return typeof value === "string" && /^arq_[0-7][0-9A-HJKMNPQRSTVWXYZ]{25}$/u.test(value);
+}
+
+function isNativeErrorCode(value: string): boolean {
+  return /^[a-z][a-z0-9_]{0,62}$/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

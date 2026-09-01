@@ -49,10 +49,15 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   readonly cancelCalls: string[] = [];
   readonly closeCalls: string[] = [];
   readonly configureInputs: Readonly<Record<string, unknown>>[] = [];
+  readonly nativeSessionEvents: string[] = [];
   refreshCalls = 0;
+  automaticRefreshCalls = 0;
   disposeCalls = 0;
   private nextResponse = 1;
   private readonly active = new Map<string, ActiveResponse>();
+  private frameworkID = "";
+  private frameworkVersion = "";
+  private sessionExpired = false;
 
   constructor(private responder: NativeFrameworkResponder = defaultFrameworkReply) {}
 
@@ -60,8 +65,18 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
     this.responder = responder;
   }
 
+  expireNativeSession(): void {
+    this.sessionExpired = true;
+  }
+
   async configure(_clientID: string, configurationJSON: string): Promise<string> {
     const configuration = JSON.parse(configurationJSON) as Readonly<Record<string, unknown>>;
+    if (typeof configuration.frameworkID !== "string" ||
+        typeof configuration.frameworkVersion !== "string") {
+      throw new Error("Native framework metadata is missing from the React Native configuration.");
+    }
+    this.frameworkID = configuration.frameworkID;
+    this.frameworkVersion = configuration.frameworkVersion;
     this.configureInputs.push(configuration);
     return JSON.stringify({
       platform: "react_native_ios",
@@ -81,12 +96,21 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
     _identityToken: string,
     requestJSON: string,
   ): Promise<string> {
+    if (this.sessionExpired) {
+      this.nativeSessionEvents.push("automatic-pre-dispatch-refresh");
+      this.automaticRefreshCalls += 1;
+      this.sessionExpired = false;
+    }
+    this.nativeSessionEvents.push("data-plane-dispatch");
     const input = JSON.parse(requestJSON) as NativeRequestInput;
+    const headers = new Headers(input.headers);
+    headers.set("X-Latchway-Framework", this.frameworkID);
+    headers.set("X-Latchway-Framework-Version", this.frameworkVersion);
     const captured: CapturedNativeRequest = {
       url: new URL(input.url),
       method: input.method,
       feature: input.feature,
-      headers: new Headers(input.headers),
+      headers,
       body: decodeBody(input.bodyBase64),
       operationID,
       encoded: requestJSON,
@@ -132,7 +156,9 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   }
 
   async refresh(_clientID: string, _operationID: string, _identityToken: string): Promise<void> {
+    this.nativeSessionEvents.push("explicit-refresh");
     this.refreshCalls += 1;
+    this.sessionExpired = false;
   }
 
   async quota(
@@ -327,8 +353,10 @@ export function latchwayProblem(
     session_expired: { status: 401, title: "Session expired", retryable: true },
     upstream_unavailable: { status: 503, title: "Upstream unavailable", retryable: true },
   }[code];
+  const documentationURL = `https://docs.latchway.dev/errors/${code.replaceAll("_", "-")}`;
   return jsonReply({
-    type: `https://latchway.dev/problems/${code}`,
+    type: documentationURL,
+    documentation_url: documentationURL,
     title: policy.title,
     status: policy.status,
     detail: `Conformance ${code.replaceAll("_", " ")}.`,

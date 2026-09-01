@@ -695,6 +695,7 @@ describe("React Native Latchway native-owned fetch", () => {
         operationID: OPERATION_ID,
         status: 503,
         retryable: true,
+        documentationURL: "https://docs.latchway.dev/errors/operation-indeterminate",
       },
     });
     install(native);
@@ -707,6 +708,25 @@ describe("React Native Latchway native-owned fetch", () => {
       retryable: true,
       message: "Sensitive native error detail was redacted.",
     });
+  });
+
+  it("fails closed on missing or mismatched native server documentation URLs", () => {
+    const canonical = {
+      code: "session_expired",
+      requestID: REQUEST_ID,
+      status: 401,
+      retryable: true,
+      documentationURL: "https://docs.latchway.dev/errors/session-expired",
+      message: "The session expired.",
+    };
+    expect(fromNativeError(canonical)).toMatchObject({ code: "session_expired" });
+    expect(fromNativeError({ ...canonical, documentationURL: undefined })).toMatchObject({
+      code: "protocol_response_invalid",
+    });
+    expect(fromNativeError({
+      ...canonical,
+      documentationURL: "https://malicious.invalid/session-expired",
+    })).toMatchObject({ code: "protocol_response_invalid" });
   });
 
   it("preserves every v1 family, component, framework, and transport native error code", () => {
@@ -919,12 +939,14 @@ describe("React Native Latchway native-owned fetch", () => {
     }]);
   });
 
-  it("revokes the complete installation family through the native boundary", async () => {
+  it("uses native durable component discovery for no-argument family sign-out", async () => {
     const native = new FakeNativeModule();
     install(native);
     const client = create();
+    await client.prepareComponents([APP_INTENT_COMPONENT]);
     await client.revokeCurrentInstallationFamily();
     expect(native.revokeFamilyCalls).toBe(1);
+    expect(native.revokeFamilyComponentInputs).toHaveLength(0);
     expect(native.lastIdentityToken).toBe("app-owned-identity-token");
   });
 
@@ -944,7 +966,8 @@ describe("React Native Latchway native-owned fetch", () => {
 
   it("exports canonical HTTP problem conversion", async () => {
     const error = await errorFromResponse(new Response(JSON.stringify({
-      type: "https://latchway.dev/problems/operation_indeterminate",
+      type: "https://docs.latchway.dev/errors/operation-indeterminate",
+      documentation_url: "https://docs.latchway.dev/errors/operation-indeterminate",
       title: "Operation outcome indeterminate",
       status: 503,
       detail: "The administrative operation outcome must be reconciled.",

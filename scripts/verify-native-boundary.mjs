@@ -41,6 +41,10 @@ const rootComponentDiagnostics = spec.match(/rootComponentDiagnostics\([\s\S]*?\
 if (rootComponentDiagnostics.includes("identityToken")) {
   throw new Error("Root-side component diagnostics must inspect local native state without identity input.");
 }
+const noArgumentFamilyRevocation = spec.match(/revokeFamily\([\s\S]*?\): Promise<void>/u)?.[0] ?? "";
+if (!noArgumentFamilyRevocation.includes("identityToken") || noArgumentFamilyRevocation.includes("componentsJSON")) {
+  throw new Error("No-argument family sign-out must delegate component discovery to the native durable registry.");
+}
 
 const packageJSON = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const compatibility = JSON.parse(
@@ -56,6 +60,14 @@ const android = await readFile(
 );
 if (!ios.includes(".reactNativeIOS")) throw new Error("iOS bridge does not select react_native_ios runtime identity.");
 if (!android.includes("REACT_NATIVE_ANDROID")) throw new Error("Android bridge does not select react_native_android runtime identity.");
+for (const [label, source, markers] of [
+  ["iOS", ios, ["framework: .reactNativeFetch(version: self.frameworkVersion)", "value.frameworkID == reactNativeFrameworkID"]],
+  ["Android", android, ["configuration.frameworkID == LATCHWAY_REACT_NATIVE_FRAMEWORK_ID", "configuration.frameworkVersion == LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION"]],
+]) {
+  for (const marker of markers) {
+    if (!source.includes(marker)) throw new Error(`${label} bridge omits canonical React Native framework metadata: ${marker}`);
+  }
+}
 for (const marker of [
   "rootKeychainAccessGroup: configuration.apple.rootKeychainAccessGroup",
   "legacySharedKeychainAccessGroups: configuration.apple.legacySharedKeychainAccessGroups",
@@ -75,7 +87,7 @@ if (!android.includes('"rootKeychainAccessGroup", "legacySharedKeychainAccessGro
   throw new Error("Android strict decoding does not accept the cross-platform Apple Keychain fields.");
 }
 for (const marker of [
-  "client.transport(feature: input.feature).bytes(for: preparedRequest)",
+  "framework: .reactNativeFetch(version: self.frameworkVersion)",
   "LatchwayAsyncBytes.AsyncIterator",
   "stream.bytes.makeAsyncIterator()",
   "stream.finish()",
@@ -91,6 +103,9 @@ for (const [label, source, marker] of [
   ["Android", android, "revokeCurrentInstallationFamily()"],
 ]) {
   if (!source.includes(marker)) throw new Error(`${label} bridge omits installation-family revocation.`);
+}
+if (!ios.includes("withIdentityToken(identityToken) { try await $0.revokeCurrentInstallationFamily() }")) {
+  throw new Error("iOS no-argument family sign-out does not invoke the native SDK's durable component registry path.");
 }
 for (const marker of [
   "LatchwayExtensionClient(",

@@ -105,10 +105,14 @@ The root JavaScript API owns the descriptor lifecycle:
 - root-side `componentDiagnostics` reads redacted local state without acquiring
   application identity;
 - `revokeComponent` retires one descriptor; and
-- `revokeCurrentInstallationFamily(descriptors)` retires the root plus the
-  complete supplied descriptor set during sign-out.
+- no-argument `revokeCurrentInstallationFamily()` retires the root plus every
+  component in the native iOS SDK's durable root-private descriptor registry;
+  the optional descriptor list additionally covers pre-registry legacy state.
 
 Descriptors are normalized and snapshotted before asynchronous identity work.
+The native SDK registers only their public Keychain coordinates before it can
+create component-local state. Successful cleanup removes a coordinate, while a
+failed Keychain erasure keeps it durable for retry after a later app launch.
 Preparation, replacement, and returned diagnostics are checked against that
 same snapshot, and serialized multi-component input larger than 65,536 bytes is
 rejected in JavaScript before crossing the native bridge. Component keys,

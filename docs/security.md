@@ -6,8 +6,8 @@
 - Configure a gateway origin, never an upstream provider endpoint.
 - Never add provider keys, service-account credentials, App Attest evidence, or Play Integrity tokens to options or request headers.
 - Use `client.fetch` or `client.fetchFor(feature)`. No credential-bearing `Request` or authorization envelope is available to JavaScript.
-- Display only `LatchwayError.code`, status, request ID, canonical operation ID, retryability, and the already-sanitized message. Preserve an `operation_indeterminate` operation ID for reconciliation rather than automatic replay.
-- Call `revokeCurrentInstallation()` for explicit removal of the current installation. Call `revokeCurrentInstallationFamily()` when sign-out must revoke every component in the wire-v2 family and retire the root native key. `dispose()` alone deliberately preserves secure installation state.
+- Display only `LatchwayError.code`, `documentationURL`, status, request ID, canonical operation ID, retryability, and the already-sanitized message. Documentation links use `https://docs.latchway.dev/errors/<hyphenated-code>`; native server metadata fails closed unless its URL matches the code exactly. Preserve an `operation_indeterminate` operation ID for reconciliation rather than automatic replay.
+- Call `revokeCurrentInstallation()` for explicit removal of the current installation. Call no-argument `revokeCurrentInstallationFamily()` when sign-out must revoke every component in the wire-v2 family and retire the root native key. The iOS SDK discovers previously prepared components through a bounded, validated, non-secret descriptor registry in the root-private Keychain group; failed local erasures remain registered for retry. `dispose()` alone deliberately preserves secure installation state.
 
 ## Key policy
 

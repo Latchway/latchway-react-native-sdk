@@ -339,6 +339,7 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
             code: failure.status ?? 0,
             userInfo: compact([
                 "code": failure.code,
+                "documentationURL": failure.documentationURL,
                 "requestID": failure.requestID as Any,
                 "operationID": failure.operationID as Any,
                 "status": failure.status as Any,
@@ -456,6 +457,7 @@ private final class NativeClientContext: @unchecked Sendable {
     private let operationLock = NativeOperationLock()
     private let client: LatchwayClient
     private let baseURL: URL
+    private let frameworkVersion: String
     private let responses = NativeResponseRegistry()
     private let sharedKeychainAccessGroups: Set<String>
 
@@ -465,6 +467,7 @@ private final class NativeClientContext: @unchecked Sendable {
             allowInsecureLoopback: configuration.allowInsecureLoopback
         )
         self.baseURL = baseURL
+        frameworkVersion = configuration.frameworkVersion
         sharedKeychainAccessGroups = Set(configuration.apple.legacySharedKeychainAccessGroups)
         let attestation: (any LatchwayAttestationProvider)?
         if configuration.apple.appAttestEnabled {
@@ -519,7 +522,10 @@ private final class NativeClientContext: @unchecked Sendable {
         }
         let preparedRequest = request
         return try await withIdentityToken(identityToken) { client in
-            let stream = try await client.transport(feature: input.feature).bytes(for: preparedRequest)
+            let stream = try await client.transport(
+                feature: input.feature,
+                framework: .reactNativeFetch(version: self.frameworkVersion)
+            ).bytes(for: preparedRequest)
             do {
                 try Task.checkCancellation()
                 let response = stream.response
@@ -673,6 +679,8 @@ private final class NativeClientContext: @unchecked Sendable {
     }
 
     func revokeCurrentInstallationFamily(identityToken: String) async throws {
+        // The native SDK discovers every prepared descriptor from its
+        // root-private durable registry; JavaScript does not need to replay it.
         try await withIdentityToken(identityToken) { try await $0.revokeCurrentInstallationFamily() }
     }
 
@@ -912,6 +920,8 @@ private struct NativeConfiguration: Decodable {
     let identityProvider: String
     let appVersion: String
     let sdkVersion: String
+    let frameworkID: String
+    let frameworkVersion: String
     let contractVersion: String
     let protocolVersion: Int
     let allowInsecureLoopback: Bool
@@ -931,6 +941,8 @@ private struct NativeConfiguration: Decodable {
         let value = try decodeStrict(Self.self, encoded: encoded)
         guard value.contractVersion == LatchwayVersion.contract,
               value.protocolVersion == LatchwayVersion.protocolVersion,
+              value.frameworkID == reactNativeFrameworkID,
+              value.frameworkVersion == reactNativeFrameworkVersion,
               value.apple.softwareKeyFallbackPolicy == "allow"
                 || value.apple.softwareKeyFallbackPolicy == "disallow"
         else { throw LatchwayError.invalidConfiguration("contract version is incompatible") }
@@ -1282,8 +1294,11 @@ private let maximumHeaderBytes = 128 * 1024
 private let maximumHeaderValueBytes = 8 * 1024
 private let nativeConfigurationKeys = Set([
     "baseURL", "applicationID", "environment", "identityProvider", "appVersion", "sdkVersion",
-    "contractVersion", "protocolVersion", "allowInsecureLoopback", "apple", "android",
+    "frameworkID", "frameworkVersion", "contractVersion", "protocolVersion",
+    "allowInsecureLoopback", "apple", "android",
 ])
+private let reactNativeFrameworkID = "react-native-fetch"
+private let reactNativeFrameworkVersion = "0.82.0"
 private let nativeAppleConfigurationRequiredKeys = Set([
     "appAttestEnabled", "rootKeychainAccessGroup", "legacySharedKeychainAccessGroups",
     "softwareKeyFallbackPolicy",
@@ -1343,6 +1358,7 @@ private let safeResponseHeaders = Set([
 
 private struct NativeFailure {
     let code: String
+    let documentationURL: String
     let message: String
     let requestID: String?
     let operationID: String?
@@ -1444,6 +1460,7 @@ private struct NativeFailure {
             code = "internal_error"; message = "The Latchway native operation failed."
             requestID = nil; operationID = nil; status = nil; retryable = false
         }
+        documentationURL = "https://docs.latchway.dev/errors/\(code.replacingOccurrences(of: "_", with: "-"))"
     }
 }
 

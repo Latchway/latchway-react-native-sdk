@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "manifest_sha256": "32cd1df9365e04cc684fa63ac0798feec37f44ef1a95898f91935108bb58ef9a",
+  "repository": "latchway-react-native-sdk",
+  "integrations": [
+    {
+      "id": "react-native-fetch",
+      "support": "experimental",
+      "pass": {
+        "FW-AUTH-001": ["test/framework-conformance.test.ts#FW-AUTH-001"],
+        "FW-REQ-001": ["test/framework-conformance.test.ts#FW-REQ-001"],
+        "FW-REQ-002": ["test/framework-conformance.test.ts#FW-REQ-002"],
+        "FW-REQ-003": ["test/framework-conformance.test.ts#FW-REQ-003"],
+        "FW-REQ-004": ["test/framework-conformance.test.ts#FW-REQ-004"],
+        "FW-REQ-005": ["test/framework-conformance.test.ts#FW-REQ-005"],
+        "FW-REQ-006": ["test/framework-conformance.test.ts#FW-REQ-006"],
+        "FW-REQ-007": ["test/framework-conformance.test.ts#FW-REQ-007"],
+        "FW-BEH-001": ["test/framework-conformance.test.ts#FW-BEH-001"],
+        "FW-BEH-002": ["test/framework-conformance.test.ts#FW-BEH-002"],
+        "FW-BEH-003": ["test/framework-conformance.test.ts#FW-BEH-003"],
+        "FW-BEH-004": ["test/framework-conformance.test.ts#FW-BEH-004"],
+        "FW-BEH-005": ["test/framework-conformance.test.ts#FW-BEH-005"],
+        "FW-BEH-006": ["test/framework-conformance.test.ts#FW-BEH-006", ".github/workflows/framework-compatibility.yml#native_refresh_ios", ".github/workflows/framework-compatibility.yml#native_refresh_android"],
+        "FW-SEC-001": ["test/framework-conformance.test.ts#FW-SEC-001"],
+        "FW-SEC-002": ["test/framework-conformance.test.ts#FW-SEC-002"],
+        "FW-SEC-003": ["test/framework-conformance.test.ts#FW-SEC-003"],
+        "FW-SEC-004": ["test/framework-conformance.test.ts#FW-SEC-004"],
+        "FW-OAI-001": ["test/framework-conformance.test.ts#FW-BEH-001", "test/framework-conformance.test.ts#FW-BEH-002"],
+        "FW-OAI-002": ["test/framework-conformance.test.ts#FW-REQ-004"]
+      },
+      "not_applicable": [
+        {
+          "case_ids": ["FW-VAI-001", "FW-VAI-002", "FW-VAI-003", "FW-VAI-004"],
+          "reason": "Vercel AI middleware and telemetry are owned by the separate vercel-ai-sdk registry integration, not react-native-fetch."
+        },
+        {
+          "case_ids": ["FW-LC-001", "FW-LC-002", "FW-LC-003"],
+          "reason": "LangChain batch policy is owned by the separate langchain-js registry integration, not react-native-fetch."
+        }
+      ]
+    }
+  ]
+}

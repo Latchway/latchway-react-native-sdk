@@ -5,7 +5,13 @@ import type {
   ReactNativeDirectAttestationComponent,
   ReactNativeIOSComponent,
 } from "./types.js";
-import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import {
+  CONTRACT_VERSION,
+  PROTOCOL_VERSION,
+  REACT_NATIVE_FRAMEWORK_ID,
+  REACT_NATIVE_FRAMEWORK_VERSION,
+  SDK_VERSION,
+} from "./version.js";
 
 export interface RuntimeConfiguration {
   baseURL: URL;
@@ -72,6 +78,8 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     identityProvider,
     appVersion,
     sdkVersion: SDK_VERSION,
+    frameworkID: REACT_NATIVE_FRAMEWORK_ID,
+    frameworkVersion: REACT_NATIVE_FRAMEWORK_VERSION,
     contractVersion: CONTRACT_VERSION,
     protocolVersion: PROTOCOL_VERSION,
     allowInsecureLoopback: options.allowInsecureLoopback === true,

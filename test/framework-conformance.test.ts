@@ -47,11 +47,13 @@ const implementedCaseIDs = new Set<FrameworkCaseID>([
   "FW-REQ-004",
   "FW-REQ-005",
   "FW-REQ-006",
+  "FW-REQ-007",
   "FW-BEH-001",
   "FW-BEH-002",
   "FW-BEH-003",
   "FW-BEH-004",
   "FW-BEH-005",
+  "FW-BEH-006",
   "FW-SEC-001",
   "FW-SEC-002",
   "FW-SEC-003",
@@ -104,6 +106,12 @@ describe("React Native framework conformance", () => {
     const gateway = new NativeFrameworkGateway();
     const client = install(gateway);
     await client.ready;
+    const response = await client.fetchFor(FEATURE)(`${GATEWAY}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "latchway", input: "framework metadata" }),
+    });
+    await response.text();
 
     expect(fixture.registry).toMatchObject({
       id: "react-native-fetch",
@@ -129,7 +137,16 @@ describe("React Native framework conformance", () => {
     });
     expect(rootPackage.devDependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
     expect(examplePackage.dependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
-    expect(gateway.configureInputs[0]).toMatchObject({ sdkVersion: "1.0.0" });
+    expect(gateway.configureInputs[0]).toMatchObject({
+      sdkVersion: "1.0.0",
+      frameworkID: fixture.registry.id,
+      frameworkVersion: fixture.registry.react_native.latest,
+    });
+    expect(gateway.requests[0]?.feature).toBe(FEATURE);
+    expect(gateway.requests[0]?.headers.get("X-Latchway-Framework")).toBe(fixture.registry.id);
+    expect(gateway.requests[0]?.headers.get("X-Latchway-Framework-Version")).toBe(
+      fixture.registry.react_native.latest,
+    );
     expect(client.gatewayURL).toBe(GATEWAY);
   });
 
@@ -236,6 +253,32 @@ describe("React Native framework conformance", () => {
     expect(gateway.cancelCalls).toHaveLength(1);
   });
 
+  it(frameworkCaseTitle("FW-REQ-007"), async () => {
+    const gateway = new NativeFrameworkGateway(() => ({
+      ...responsesReply(),
+      chunks: [],
+      pendingRead: true,
+    }));
+    const client = install(gateway);
+    const openai = new OpenAI({
+      apiKey: MANAGED_PLACEHOLDER,
+      baseURL: `${client.gatewayURL}/v1`,
+      dangerouslyAllowBrowser: true,
+      fetch: client.fetchFor(FEATURE),
+      maxRetries: 0,
+      timeout: 25,
+    });
+
+    const error = await captureError(openai.responses.create({
+      model: "latchway",
+      input: "timeout",
+    }));
+
+    expect(String(error)).toMatch(/timed out|abort/i);
+    expect(gateway.requests).toHaveLength(1);
+    expect(gateway.cancelCalls).toHaveLength(1);
+  });
+
   it(frameworkCaseTitle("FW-BEH-001"), async () => {
     const gateway = new NativeFrameworkGateway();
     const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
@@ -338,6 +381,31 @@ describe("React Native framework conformance", () => {
     expect(response.choices[0]?.message.content).toBe("hello from Latchway");
     expect(gateway.requests).toHaveLength(2);
     expect(new Set(gateway.requests.map(({ operationID }) => operationID)).size).toBe(2);
+  });
+
+  it(frameworkCaseTitle("FW-BEH-006"), async () => {
+    const gateway = new NativeFrameworkGateway();
+    gateway.expireNativeSession();
+    const getIdentityToken = vi.fn(async () => IDENTITY_TOKEN);
+    const consumers = createFrameworkConsumers(
+      install(gateway, getIdentityToken),
+      FRAMEWORK_FEATURES,
+    );
+
+    const response = await consumers.openaiResponses.responses.create({
+      model: "latchway",
+      input: "recover before dispatch",
+    });
+
+    expect(response.output_text).toBe("hello from Latchway");
+    expect(gateway.automaticRefreshCalls).toBe(1);
+    expect(gateway.refreshCalls).toBe(0);
+    expect(gateway.nativeSessionEvents).toEqual([
+      "automatic-pre-dispatch-refresh",
+      "data-plane-dispatch",
+    ]);
+    expect(gateway.requests).toHaveLength(1);
+    expect(getIdentityToken).toHaveBeenCalledTimes(1);
   });
 
   it(reactNativeFrameworkCaseTitle("RN-FW-REFRESH-001"), async () => {

@@ -1089,8 +1089,11 @@ async function inspectBounded(response: Response, maximumBytes: number): Promise
       const code = typeof value.code === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(value.code)
         ? value.code
         : undefined;
+      const documentationURL = code === undefined
+        ? undefined
+        : `https://docs.latchway.dev/errors/${code.replaceAll("_", "-")}`;
       if (code !== undefined && value.status === response.status &&
-          value.type === `https://latchway.dev/problems/${code}` &&
+          value.type === documentationURL && value.documentation_url === documentationURL &&
           typeof value.title === "string" && value.title.length > 0 &&
           typeof value.detail === "string" && value.detail.length > 0 &&
           typeof value.retryable === "boolean") {

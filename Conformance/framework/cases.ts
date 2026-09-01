@@ -25,11 +25,13 @@ export const FRAMEWORK_CASES = [
   frameworkCase("FW-REQ-004", "preserves safe caller headers and request metadata"),
   frameworkCase("FW-REQ-005", "delivers streaming bytes and final usage"),
   frameworkCase("FW-REQ-006", "propagates cancellation to the authenticated request"),
+  frameworkCase("FW-REQ-007", "propagates framework timeouts to the authenticated request"),
   frameworkCase("FW-BEH-001", "preserves tool definitions"),
   frameworkCase("FW-BEH-002", "preserves and parses structured output"),
   frameworkCase("FW-BEH-003", "maps quota denial with the Latchway request ID"),
   frameworkCase("FW-BEH-004", "preserves provider errors and correlation metadata"),
   frameworkCase("FW-BEH-005", "creates a fresh authenticated dispatch for framework retries"),
+  frameworkCase("FW-BEH-006", "refreshes an expired native session before data-plane replay"),
   frameworkCase("FW-SEC-001", "strips provider placeholder credentials before dispatch"),
   frameworkCase("FW-SEC-002", "rejects a mismatched origin and undeclared path before session work"),
   frameworkCase("FW-SEC-003", "does not expose credentials in framework errors"),
@@ -55,11 +57,13 @@ export type FrameworkCaseID =
   | "FW-REQ-004"
   | "FW-REQ-005"
   | "FW-REQ-006"
+  | "FW-REQ-007"
   | "FW-BEH-001"
   | "FW-BEH-002"
   | "FW-BEH-003"
   | "FW-BEH-004"
   | "FW-BEH-005"
+  | "FW-BEH-006"
   | "FW-SEC-001"
   | "FW-SEC-002"
   | "FW-SEC-003"

@@ -133,7 +133,10 @@ const replaced = await latchway.replaceComponent(appIntent);
 const localState = await latchway.componentDiagnostics(appIntent);
 await latchway.revokeComponent(appIntent);
 
-// On sign-out, pass the same complete descriptor set used for preparation.
+// On sign-out, native code retires every durably registered component.
+await latchway.revokeCurrentInstallationFamily();
+
+// The descriptor overload remains available for pre-registry legacy state.
 await latchway.revokeCurrentInstallationFamily([appIntent]);
 ```
 
@@ -144,9 +147,13 @@ Preparation, replacement, component revocation, and family retirement acquire
 the root identity only transiently inside native code. Root-side
 `componentDiagnostics` reads redacted local state without acquiring identity.
 Inputs are normalized before asynchronous work, and all component credentials,
-keys, grants, and sessions remain native. Family retirement cannot discover
-component access groups safely, so omitting a prepared descriptor leaves its
-server-revoked local material for the application to retire explicitly.
+keys, grants, and sessions remain native. Before component-local state can be
+created, the iOS SDK records its validated, non-secret Keychain coordinate in
+the root application's private Keychain group. No-argument family retirement
+uses that durable registry across launches, removes entries only after both the
+component credential and key are erased, and retains failed entries for retry.
+The optional descriptor overload can additionally retire legacy component
+state that predates the registry.
 
 An independently executing iOS action or SSO extension whose containing app
 has already provisioned its component descriptor can inspect its isolated,
@@ -221,7 +228,7 @@ The fetch surface is intentionally bounded. It dispatches only to the configured
 
 The compatible subset guarantees request method, headers, body, `AbortSignal`, response status/headers, and a pull-driven `ReadableStream`. It does not provide browser cookie or cache modes, service-worker behavior, redirect following, streaming request uploads, response trailers, or native `Response.url`/`redirected` metadata. Frameworks must expose a custom-fetch hook and use one of the allowed data-plane paths; browser-only framework features remain unsupported in React Native. A provider SDK's required placeholder authorization header is discarded, never forwarded. Consult the released framework compatibility registry before claiming support for a specific OpenAI, Vercel AI, or LangChain version.
 
-`errorFromResponse` is re-exported for explicit conversion of a returned problem response. An `operation_indeterminate` error includes a required canonical `operationID`; preserve it with the request ID and reconcile the operation before deciding whether to retry.
+`errorFromResponse` is re-exported for explicit conversion of a returned problem response. Every resulting `LatchwayError.documentationURL` uses `https://docs.latchway.dev/errors/<hyphenated-code>`, and a server-originated native failure is accepted only when its documentation URL matches its code exactly. An `operation_indeterminate` error includes a required canonical `operationID`; preserve it with the request ID and reconcile the operation before deciding whether to retry.
 
 ## Security boundary
 
@@ -262,9 +269,9 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 The final version 1 source candidate consumes draft contract checkpoint `1.0.0`,
 current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `b07a4762f08e6b68d5829cda500bae9d79e5f16c`, and
+window), core commit `a59a2c1c807aec50093ae6346492a05148c72899`, and
 bundle SHA-256
-`397a3920aaa2ed0438a96156cd8a51f0fa85ac2e3fb9266b4fe79618812a3d9a`.
+`3a88fb69b911724da849229f34f735608e829bcfb0658087313c8d31441e9927`.
 Core plus all four SDK locks and fixtures are synchronized. This is source
 compatibility evidence, not a claim that the npm package or native dependencies
 have been published. All gates read `release-compatibility.json` and

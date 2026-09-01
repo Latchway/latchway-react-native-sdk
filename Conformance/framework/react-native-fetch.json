@@ -34,7 +34,8 @@
     "structured_output": "conditional",
     "embeddings": true,
     "opaque_routes": true,
-    "cancellation": true
+    "cancellation": true,
+    "automatic_session_refresh": true
   },
   "limitations": [
     "@anthropic-ai/sdk 0.120.0 is not a React Native consumer: Metro resolves its credential-chain node:fs imports even with a static placeholder key. Anthropic Messages uses @ai-sdk/anthropic instead."
@@ -47,11 +48,13 @@
     "FW-REQ-004",
     "FW-REQ-005",
     "FW-REQ-006",
+    "FW-REQ-007",
     "FW-BEH-001",
     "FW-BEH-002",
     "FW-BEH-003",
     "FW-BEH-004",
     "FW-BEH-005",
+    "FW-BEH-006",
     "FW-SEC-001",
     "FW-SEC-002",
     "FW-SEC-003",

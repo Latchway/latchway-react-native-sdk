@@ -230,7 +230,8 @@ export interface LatchwayClient {
   revokeCurrentInstallation(): Promise<void>;
   /**
    * Revokes the complete Installation Family and retires the root plus every
-   * supplied component. Pass the same complete descriptor set used to prepare.
+   * native-registered component, including registrations from earlier app
+   * launches. `retiring` remains available for pre-registry legacy state.
    */
   revokeCurrentInstallationFamily(retiring?: readonly ReactNativeIOSComponent[]): Promise<void>;
   /** Releases this JavaScript instance. Secure installation state remains until revocation. */

@@ -267,6 +267,11 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             self.project.count("copy-development-firebase-ios-config.sh"),
             1,
         )
+        self.assertEqual(
+            self.project.count('TARGETED_DEVICE_FAMILY = "1,2";'),
+            4,
+            "both app and App Intents Debug/Release targets must support iPhone and iPad",
+        )
 
     def test_copy_script_is_separate_and_fail_closed(self) -> None:
         for marker in (

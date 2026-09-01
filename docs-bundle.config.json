@@ -31,7 +31,7 @@
     {"file": "src/errors.ts", "start_line": 6, "end_line": 73, "pattern": "(?m)^\\s{2}(?P<name>[a-z][a-z0-9_]+): true,"}
   ],
   "examples": [
-    {"name": "React Native physical-device application", "kind": "physical_device", "source": {"file": "example/src/App.tsx", "start_line": 1, "end_line": 1271}},
+    {"name": "React Native physical-device application", "kind": "physical_device", "source": {"file": "example/src/App.tsx", "start_line": 1, "end_line": 1274}},
     {"name": "OpenAI, Vercel AI, LangChain, and Anthropic consumers", "kind": "framework", "source": {"file": "example/src/framework-consumers.ts", "start_line": 1, "end_line": 153}},
     {"name": "iOS App Intent extension", "kind": "component", "source": {"file": "example/ios/AppIntents/AppIntents.swift", "start_line": 1, "end_line": 264}},
     {"name": "Android host application", "kind": "physical_device", "source": {"file": "example/android/app/src/main/java/com/latchwayexample/MainApplication.kt", "start_line": 1, "end_line": 22}}

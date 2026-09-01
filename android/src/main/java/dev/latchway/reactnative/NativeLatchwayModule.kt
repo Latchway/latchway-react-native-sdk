@@ -15,6 +15,8 @@ import dev.latchway.core.LatchwayErrorCode
 import dev.latchway.core.LatchwayException
 import dev.latchway.okhttp.LatchwayClient
 import dev.latchway.okhttp.LatchwayConfiguration
+import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_ID
+import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
 import dev.latchway.playintegrity.PlayIntegrityAttestationProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -59,7 +61,9 @@ public class NativeLatchwayModule(
             require(!clients.containsKey(clientID)) { "client identifier is already configured" }
             val configuration = NativeConfiguration.parse(configurationJSON)
             require(configuration.contractVersion == LATCHWAY_CONTRACT_VERSION &&
-                configuration.protocolVersion == LATCHWAY_PROTOCOL_VERSION
+                configuration.protocolVersion == LATCHWAY_PROTOCOL_VERSION &&
+                configuration.frameworkID == LATCHWAY_REACT_NATIVE_FRAMEWORK_ID &&
+                configuration.frameworkVersion == LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
             ) { "contract version is incompatible" }
             val projectNumber = configuration.playIntegrityCloudProjectNumber
                 ?: throw IllegalArgumentException("Play Integrity cloud project number is required on Android")
@@ -556,6 +560,8 @@ private data class NativeConfiguration(
     val environment: String,
     val identityProvider: String,
     val sdkVersion: String,
+    val frameworkID: String,
+    val frameworkVersion: String,
     val contractVersion: String,
     val protocolVersion: Int,
     val allowInsecureLoopback: Boolean,
@@ -584,6 +590,8 @@ private data class NativeConfiguration(
                 environment = value.getString("environment"),
                 identityProvider = value.getString("identityProvider"),
                 sdkVersion = value.getString("sdkVersion"),
+                frameworkID = value.getString("frameworkID"),
+                frameworkVersion = value.getString("frameworkVersion"),
                 contractVersion = value.getString("contractVersion"),
                 protocolVersion = value.getInt("protocolVersion"),
                 allowInsecureLoopback = value.optBoolean("allowInsecureLoopback", false),
@@ -771,7 +779,8 @@ private const val MAXIMUM_HEADER_VALUE_BYTES: Int = 8 * 1024
 
 private val NATIVE_CONFIGURATION_KEYS = setOf(
     "baseURL", "applicationID", "environment", "identityProvider", "appVersion", "sdkVersion",
-    "contractVersion", "protocolVersion", "allowInsecureLoopback", "apple", "android",
+    "frameworkID", "frameworkVersion", "contractVersion", "protocolVersion",
+    "allowInsecureLoopback", "apple", "android",
 )
 private val NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS = setOf("keyPolicy")
 private val NATIVE_ANDROID_CONFIGURATION_KEYS = NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS +
@@ -858,6 +867,7 @@ private fun Promise.rejectSafe(failure: Throwable) {
     }
     val userInfo = Arguments.createMap().apply {
         putString("code", code)
+        putString("documentationURL", "https://docs.latchway.dev/errors/${code.replace('_', '-')}")
         requestID?.let { putString("requestID", it) }
         operationID?.let { putString("operationID", it) }
         status?.let { putInt("status", it) }
