@@ -44,7 +44,7 @@ for name in "${required[@]}"; do
     exit 2
   }
 done
-for tool in codesign env git install python3 shasum xcodebuild xcrun; do
+for tool in codesign env git install lipo openssl python3 security shasum xcodebuild xcrun; do
   command -v "$tool" >/dev/null || {
     echo "required development tool is unavailable: $tool" >&2
     exit 2
@@ -350,31 +350,6 @@ actual_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist"
   exit 1
 }
 
-codesign --verify --deep --strict "$app"
-root_entitlements="$temporary/root-entitlements.plist"
-codesign -d --entitlements :- "$app" >"$root_entitlements" 2>/dev/null
-python3 - "$root_entitlements" "$LATCHWAY_IOS_TEAM_ID" \
-  "$LATCHWAY_IOS_APP_ID_PREFIX.$LATCHWAY_BUNDLE_ID" \
-  "$private_keychain_access_group" "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP" <<'PY'
-import pathlib
-import plistlib
-import sys
-
-value = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
-if value.get("com.apple.developer.team-identifier") != sys.argv[2]:
-    raise SystemExit("signed development root Team ID mismatch")
-if value.get("application-identifier") != sys.argv[3]:
-    raise SystemExit("signed development root application identifier mismatch")
-if value.get("com.apple.developer.devicecheck.appattest-environment") != "development":
-    raise SystemExit("signed development root does not use App Attest development")
-if value.get("com.apple.developer.devicecheck.app-attest-opt-in") != ["CDhash"]:
-    raise SystemExit("signed development root does not have the exact App Attest CDhash opt-in")
-if value.get("keychain-access-groups") != [sys.argv[4], sys.argv[5]]:
-    raise SystemExit("signed development root Keychain access groups are not private-first/shared-second")
-if value.get("get-task-allow") is not True:
-    raise SystemExit("signed development root is not development-signed")
-PY
-
 appintents=""
 for candidate in "$app/Extensions/AppIntents.appex" "$app/PlugIns/AppIntents.appex"; do
   if [[ -d "$candidate" && ! -L "$candidate" ]]; then
@@ -389,7 +364,6 @@ done
   echo "signed development App Intents extension is unsafe or absent" >&2
   exit 1
 }
-codesign --verify --strict "$appintents"
 actual_appintents_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$appintents/Info.plist")"
 [[ "$actual_appintents_bundle" == "$LATCHWAY_IOS_APPINTENTS_BUNDLE_ID" ]] || {
   echo "signed development App Intents bundle identifier mismatch" >&2
@@ -417,29 +391,16 @@ expected = {
 if any(value.get(key) != item for key, item in expected.items()):
     raise SystemExit("built development App Intent configuration mismatch")
 PY
-appintents_entitlements="$temporary/appintents-entitlements.plist"
-codesign -d --entitlements :- "$appintents" >"$appintents_entitlements" 2>/dev/null
-python3 - "$appintents_entitlements" "$LATCHWAY_IOS_TEAM_ID" \
-  "$LATCHWAY_IOS_APP_ID_PREFIX.$LATCHWAY_IOS_APPINTENTS_BUNDLE_ID" \
-  "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP" <<'PY'
-import pathlib
-import plistlib
-import sys
-
-value = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
-if value.get("com.apple.developer.team-identifier") != sys.argv[2]:
-    raise SystemExit("signed development App Intents Team ID mismatch")
-if value.get("application-identifier") != sys.argv[3]:
-    raise SystemExit("signed development App Intents application identifier mismatch")
-if value.get("keychain-access-groups") != [sys.argv[4]]:
-    raise SystemExit("signed development App Intents target is not shared-only")
-for key in (
-    "com.apple.developer.devicecheck.appattest-environment",
-    "com.apple.developer.devicecheck.app-attest-opt-in",
-):
-    if key in value:
-        raise SystemExit("signed development App Intents target must not carry App Attest")
-PY
+python3 "$repository_root/scripts/verify_development_ios_signed_bundle.py" \
+  --app "$app" \
+  --extension "$appintents" \
+  --bundle-id "$LATCHWAY_BUNDLE_ID" \
+  --extension-bundle-id "$LATCHWAY_IOS_APPINTENTS_BUNDLE_ID" \
+  --team-id "$LATCHWAY_IOS_TEAM_ID" \
+  --app-id-prefix "$LATCHWAY_IOS_APP_ID_PREFIX" \
+  --device-udid "$LATCHWAY_IOS_XCODE_DESTINATION_ID" \
+  --private-keychain-group "$private_keychain_access_group" \
+  --shared-keychain-group "$LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUP"
 
 # Preserve the application container when updating this Debug verifier. iOS
 # resets Local Network consent on uninstall even though the embedded bundle does

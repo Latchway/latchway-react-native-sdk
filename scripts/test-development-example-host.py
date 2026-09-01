@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
+import importlib.util
 import os
 import pathlib
 import plistlib
@@ -12,6 +14,14 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 COPY_SCRIPT = ROOT / "scripts/copy-development-firebase-ios-config.sh"
 RUNNER = ROOT / "scripts/run-development-react-native-ios.sh"
+SIGNATURE_VERIFIER = ROOT / "scripts/verify_development_ios_signed_bundle.py"
+
+SIGNATURE_SPEC = importlib.util.spec_from_file_location(
+    "verify_development_ios_signed_bundle", SIGNATURE_VERIFIER
+)
+assert SIGNATURE_SPEC is not None and SIGNATURE_SPEC.loader is not None
+SIGNATURE_MODULE = importlib.util.module_from_spec(SIGNATURE_SPEC)
+SIGNATURE_SPEC.loader.exec_module(SIGNATURE_MODULE)
 
 
 class DevelopmentExampleHostTests(unittest.TestCase):
@@ -353,13 +363,10 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "devicectl device process launch",
             "--terminate-existing",
             "-configuration Debug",
-            "codesign --verify --deep --strict",
+            "verify_development_ios_signed_bundle.py",
             "FORCE_BUNDLING=1",
             'javascript_bundle="$app/main.jsbundle"',
             '"$javascript_bundle_bytes" -ge 1024',
-            'appattest-environment") != "development"',
-            'app-attest-opt-in") != ["CDhash"]',
-            "get-task-allow",
             "env -i",
             "LATCHWAY_IOS_XCODE_DESTINATION_ID",
             "validate-development-react-native-ios-env.py",
@@ -434,6 +441,223 @@ class DevelopmentExampleHostTests(unittest.TestCase):
             "LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256",
         ):
             self.assertNotIn(forbidden, build_environment)
+
+    def test_codesign_trust_only_and_tamper_diagnostics_fail_closed(self) -> None:
+        bundle = pathlib.Path("/private/tmp/LatchwayExample.app")
+        trust_only = (
+            f"{bundle}: CSSMERR_TP_NOT_TRUSTED\n"
+            "In architecture: arm64\n"
+        ).encode("utf-8")
+        self.assertEqual(
+            SIGNATURE_MODULE.require_codesign_verification(0, b"", b""),
+            "verified",
+        )
+
+        rejected = (
+            trust_only,
+            trust_only + b"a sealed resource is missing or invalid\n",
+            f"{bundle}: a sealed resource is missing or invalid\n".encode("utf-8"),
+            f"{bundle}: code object is not signed at all\n".encode("utf-8"),
+        )
+        for diagnostic in rejected:
+            with self.subTest(diagnostic=diagnostic):
+                with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                    SIGNATURE_MODULE.require_codesign_verification(1, b"", diagnostic)
+        with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+            SIGNATURE_MODULE.require_codesign_verification(0, b"unexpected", b"")
+        with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+            SIGNATURE_MODULE.require_codesign_verification(0, b"", b"unexpected")
+
+    def test_signed_bundle_path_validation_rejects_symlink_aliases(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="latchway-signed-bundle-path-", dir="/private/tmp"
+        ) as directory:
+            root = pathlib.Path(directory)
+            app = root / "LatchwayExample.app"
+            app.mkdir()
+            SIGNATURE_MODULE.safe_bundle(app, ".app")
+
+            direct_alias = root / "DirectAlias.app"
+            direct_alias.symlink_to(app, target_is_directory=True)
+            with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                SIGNATURE_MODULE.safe_bundle(direct_alias, ".app")
+
+            real_parent = root / "real"
+            real_parent.mkdir()
+            nested_app = real_parent / "Nested.app"
+            nested_app.mkdir()
+            parent_alias = root / "alias"
+            parent_alias.symlink_to(real_parent, target_is_directory=True)
+            with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                SIGNATURE_MODULE.safe_bundle(parent_alias / "Nested.app", ".app")
+
+    def test_debug_macho_inventory_rejects_extra_missing_and_symlink_code(self) -> None:
+        expected = {"Root", "Nested/Code"}
+
+        def populate(app: pathlib.Path, paths: set[str]) -> None:
+            for relative in paths:
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\xcf\xfa\xed\xfe" + b"fixture")
+
+        for mutation in ("extra", "missing", "symlink", "executable-text"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                prefix="latchway-code-inventory-", dir="/private/tmp"
+            ) as directory:
+                root = pathlib.Path(directory)
+                app = root / "Example.app"
+                app.mkdir()
+                populate(app, expected if mutation != "missing" else {"Root"})
+                if mutation == "extra":
+                    populate(app, {"Unexpected"})
+                elif mutation == "symlink":
+                    (app / "Nested/Code").unlink()
+                    target = root / "external-code"
+                    target.write_bytes(b"\xcf\xfa\xed\xfe" + b"fixture")
+                    (app / "Nested/Code").symlink_to(target)
+                elif mutation == "executable-text":
+                    script = app / "unexpected-script"
+                    script.write_text("not Mach-O", encoding="utf-8")
+                    script.chmod(0o755)
+                with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                    SIGNATURE_MODULE.require_exact_macho_inventory(app, expected)
+
+        with tempfile.TemporaryDirectory(
+            prefix="latchway-code-inventory-valid-", dir="/private/tmp"
+        ) as directory:
+            app = pathlib.Path(directory) / "Example.app"
+            app.mkdir()
+            populate(app, expected)
+            self.assertEqual(
+                set(SIGNATURE_MODULE.require_exact_macho_inventory(app, expected)),
+                expected,
+            )
+
+    def test_profile_allows_app_id_prefix_distinct_from_team_id(self) -> None:
+        now = dt.datetime.now(dt.timezone.utc)
+        team_id = "ABCDEFGHIJ"
+        app_id_prefix = "KLMNOPQRST"
+        application_identifier = f"{app_id_prefix}.dev.latchway.AppIntents"
+        keychain_group = f"{app_id_prefix}.dev.latchway.keychain"
+        leaf = b"fixture-leaf"
+        profile = {
+            "CreationDate": now - dt.timedelta(days=1),
+            "ExpirationDate": now + dt.timedelta(days=1),
+            "TeamIdentifier": [team_id],
+            "ApplicationIdentifierPrefix": [app_id_prefix],
+            "Platform": ["iOS"],
+            "ProvisionedDevices": ["00008120-000175D621040032"],
+            "DeveloperCertificates": [leaf],
+            "Entitlements": {
+                "application-identifier": application_identifier,
+                "com.apple.developer.team-identifier": team_id,
+                "get-task-allow": True,
+                "keychain-access-groups": [keychain_group],
+            },
+        }
+        SIGNATURE_MODULE.verify_profile(
+            profile,
+            team_id=team_id,
+            app_id_prefix=app_id_prefix,
+            device_udid="00008120-000175D621040032",
+            application_identifier=application_identifier,
+            keychain_groups=[keychain_group],
+            app_attest=False,
+            leaf=leaf,
+        )
+        profile["CreationDate"] = now + dt.timedelta(seconds=1)
+        with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+            SIGNATURE_MODULE.verify_profile(
+                profile,
+                team_id=team_id,
+                app_id_prefix=app_id_prefix,
+                device_udid="00008120-000175D621040032",
+                application_identifier=application_identifier,
+                keychain_groups=[keychain_group],
+                app_attest=False,
+                leaf=leaf,
+            )
+
+    def test_profile_cms_certificate_set_parsers_are_exact(self) -> None:
+        listing = ("\n".join(SIGNATURE_MODULE.PROFILE_CERTIFICATE_LISTING) + "\n").encode()
+        SIGNATURE_MODULE.require_exact_profile_certificate_listing(listing)
+        with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+            SIGNATURE_MODULE.require_exact_profile_certificate_listing(
+                listing.replace(b"Apple Root CA", b"Untrusted Root", 1)
+            )
+
+        certificate = b"-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n"
+        self.assertEqual(
+            SIGNATURE_MODULE.split_pem_certificates(certificate * 3, exact_count=3),
+            [certificate, certificate, certificate],
+        )
+        for malformed in (certificate * 2, certificate * 3 + b"unexpected"):
+            with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                SIGNATURE_MODULE.split_pem_certificates(malformed, exact_count=3)
+
+    def test_supported_codesign_entitlement_representation_is_strict(self) -> None:
+        payload = b"""[Dict]
+\t[Key] application-identifier
+\t[Value]
+\t\t[String] PFK5S2E4H5.dev.latchway
+\t[Key] get-task-allow
+\t[Value]
+\t\t[Bool] true
+\t[Key] keychain-access-groups
+\t[Value]
+\t\t[Array]
+\t\t\t[String] PFK5S2E4H5.dev.latchway
+\t\t\t[String] PFK5S2E4H5.dev.latchway.keychain
+"""
+        self.assertEqual(
+            SIGNATURE_MODULE.parse_abstract_entitlements(payload),
+            {
+                "application-identifier": "PFK5S2E4H5.dev.latchway",
+                "get-task-allow": True,
+                "keychain-access-groups": [
+                    "PFK5S2E4H5.dev.latchway",
+                    "PFK5S2E4H5.dev.latchway.keychain",
+                ],
+            },
+        )
+        for malformed in (
+            payload + b"\t[Key] get-task-allow\n\t[Value]\n\t\t[Bool] false\n",
+            payload.replace(b"[Bool] true", b"[Integer] 1"),
+            b"<?xml version=\"1.0\"?><plist/>",
+        ):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(SIGNATURE_MODULE.VerificationError):
+                    SIGNATURE_MODULE.parse_abstract_entitlements(malformed)
+
+    def test_runner_verifies_signed_bundle_before_any_device_install(self) -> None:
+        invocation = self.runner.index("verify_development_ios_signed_bundle.py")
+        install = self.runner.index("devicectl device install app")
+        self.assertLess(invocation, install)
+        verifier = SIGNATURE_VERIFIER.read_text(encoding="utf-8")
+        for marker in (
+            '["codesign", "-d", "--entitlements", "-", str(bundle)]',
+            '"verify-cert"',
+            '"codeSign"',
+            '"-N"',
+            '"-L"',
+            '"codesign", "-d", "-r-"',
+            '"cms",',
+            '"-verify",',
+            '"Apple iPhone OS Provisioning Profile Signing"',
+            '"1.2.840.113635.100.6.58:"',
+            'verify_debug_macho_inventory(',
+            '"Frameworks/hermesvm.framework/hermesvm"',
+            'creation > now',
+            'app_id_prefix=arguments.app_id_prefix',
+            'device_udid not in profile.get("ProvisionedDevices", [])',
+            "root and App Intents targets used different signing certificates",
+            'entitlements.get("com.apple.developer.devicecheck.appattest-environment") != "development"',
+            'entitlements.get("com.apple.developer.devicecheck.app-attest-opt-in") != ["CDhash"]',
+            'entitlements.get("get-task-allow") is not True',
+        ):
+            self.assertIn(marker, verifier)
+        self.assertNotIn("CSSMERR_TP_NOT_TRUSTED", verifier)
+        self.assertNotIn('"security", "cms"', verifier)
 
     def test_post_wait_runner_exit_always_uses_one_exact_run_abort_finalizer(self) -> None:
         for marker in (
