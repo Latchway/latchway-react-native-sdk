@@ -170,14 +170,29 @@ Android native and React Native output evidence use the shared v1 contract. The
 pinned iOS SDK uses the component-aware v2 contract; this repository carries an
 exact reviewed snapshot at
 `Conformance/linked-ios-physical-device-evidence.schema.json` together with its
-validator at `scripts/linked-ios-device-evidence.py`. This prevents genuine v2
-iOS evidence from being treated as v1 while preserving the v1 React Native
-output consumed by the current cross-repository release adapter.
-The imported native report may contain delegated Action-extension execution
-proof, but the React Native example does not reproduce or claim that operation:
-its App Intents target has no React Native runtime or component-request bridge
-and fails closed when invoked. The React Native iOS run proves the root App
-Attest path plus the exact linked-native evidence binding.
+validator at `scripts/linked-ios-device-evidence.py`. The finalizer test pins the
+raw reviewed bytes (validator SHA-256
+`8d12b2beb887cebb10f1fcc634cd9ebad839e3b40372a03f5f558ad5f41bc0d4`, schema
+SHA-256 `b0f399ff16ff21e80ac1528af143e3834d0ef80e8a8dbeb9c7d4a2e354ead8c6`),
+so an unreviewed snapshot change fails CI. This prevents genuine v2 iOS evidence
+from being treated as v1 while preserving the v1 React Native output consumed
+by the current cross-repository release adapter.
+
+The linked iOS report must contain the exact 13-test component-observation v2
+set. Widget, Share, and Action must each record a distinct successful delegated
+request; sibling server credentials must be rejected; an Action attempt to read
+a Widget or Share private key must record `SecItemCopyMatching` returning
+`errSecMissingEntitlement` without key material; and two overlapping refreshes
+must independently return the same rotated credentials and session. The fresh
+GitHub-hosted signer rechecks those concrete fields before attesting the React
+Native evidence bundle. The finalizer still imports only the five allowlisted
+native security proofs into the outer report.
+
+The React Native example does not reproduce or claim the linked SDK's
+Widget/Share/Action operations: its App Intents target has no React Native
+runtime or component-request bridge and fails closed when invoked. The React
+Native iOS run proves the root App Attest path plus the exact, hash-bound native
+Installation Family evidence.
 
 For iOS, the producer archives a non-debug, production-signed New Architecture
 `.app` from the exact candidate commit. It requires a protected `Podfile.lock`,

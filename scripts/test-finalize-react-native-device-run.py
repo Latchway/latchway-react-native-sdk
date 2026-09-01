@@ -10,11 +10,31 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCHEMA = json.loads((ROOT / "Conformance" / "physical-device-evidence.schema.json").read_text())
+IOS_COMPONENT_TESTS_V2 = {
+    "component_candidate_identities",
+    "widget_delegated_request",
+    "share_delegated_request",
+    "action_delegated_request",
+    "component_key_isolation",
+    "component_session_isolation",
+    "component_sibling_denied",
+    "component_keychain_sibling_denied",
+    "component_refresh_race",
+    "component_no_host_process",
+    "component_background_execution",
+    "component_host_termination",
+    "component_no_user_presence",
+}
+IOS_REVIEWED_SNAPSHOT_SHA256 = {
+    "validator": "8d12b2beb887cebb10f1fcc634cd9ebad839e3b40372a03f5f558ad5f41bc0d4",
+    "schema": "b0f399ff16ff21e80ac1528af143e3834d0ef80e8a8dbeb9c7d4a2e354ead8c6",
+}
 
 
 def load(name: str, path: pathlib.Path):
@@ -56,10 +76,28 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
         {"id": name, "status": "passed", "duration_ms": 1}
         for name in sorted(finalizer.ios_native_evidence.IOS_COMPONENT_TESTS)
     ]
+    for role in ("widget", "share", "action"):
+        next(
+            item for item in tests if item["id"] == f"{role}_delegated_request"
+        ).update(
+            http_status=200,
+            request_id=f"request-{role}-1234",
+        )
     next(item for item in tests if item["id"] == "component_sibling_denied").update(
         http_status=401,
         error_code="component_key_invalid",
         request_id="request-sibling-1234",
+    )
+    next(
+        item for item in tests if item["id"] == "component_keychain_sibling_denied"
+    ).update(
+        os_status=-34018,
+        os_status_name="errSecMissingEntitlement",
+    )
+    next(item for item in tests if item["id"] == "component_refresh_race").update(
+        concurrent_request_count=2,
+        credential_before_sha256="8" * 64,
+        credential_after_sha256="a" * 64,
     )
     return {
         "schema_version": finalizer.ios_native_evidence.IOS_COMPONENT_OBSERVATION_VERSION,
@@ -69,6 +107,26 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
         "completed_at": run["completed_at"],
         "runtime": {
             "identities": identities,
+            "widget_delegated_execution": {
+                "role": "widget",
+                "definition_id": expected["widget_definition_id"],
+                "component_id_sha256": "d" * 64,
+                "dpop_key_id_sha256": "1" * 64,
+                "session_id_sha256": "5" * 64,
+                "trust_source": "delegated_from_attested_root",
+                "http_status": 200,
+                "request_id": "request-widget-1234",
+            },
+            "share_delegated_execution": {
+                "role": "share",
+                "definition_id": expected["share_definition_id"],
+                "component_id_sha256": "e" * 64,
+                "dpop_key_id_sha256": "2" * 64,
+                "session_id_sha256": "6" * 64,
+                "trust_source": "delegated_from_attested_root",
+                "http_status": 200,
+                "request_id": "request-share-1234",
+            },
             "delegated_execution": {
                 "role": "action",
                 "definition_id": expected["action_definition_id"],
@@ -86,6 +144,42 @@ def ios_component_observation(native_profile: dict, run: dict) -> dict:
                 "http_status": 401,
                 "error_code": "component_key_invalid",
                 "request_id": "request-sibling-1234",
+            },
+            "keychain_sibling_denial": {
+                "requesting_role": "action",
+                "target_role": "share",
+                "target_key_id_sha256": "2" * 64,
+                "operation": "SecItemCopyMatching",
+                "os_status": -34018,
+                "os_status_name": "errSecMissingEntitlement",
+                "key_material_returned": False,
+            },
+            "component_refresh_race": {
+                "role": "action",
+                "component_id_sha256": "f" * 64,
+                "dpop_key_id_sha256": "3" * 64,
+                "session_id_before_sha256": "8" * 64,
+                "old_credential_sha256": "8" * 64,
+                "requests_started_concurrently": True,
+                "overlap_observed": True,
+                "requests": [
+                    {
+                        "request_id": "request-refresh-race-a",
+                        "http_status": 200,
+                        "access_credential_sha256": "9" * 64,
+                        "refresh_credential_sha256": "a" * 64,
+                        "session_id_sha256": "7" * 64,
+                    },
+                    {
+                        "request_id": "request-refresh-race-b",
+                        "http_status": 200,
+                        "access_credential_sha256": "9" * 64,
+                        "refresh_credential_sha256": "a" * 64,
+                        "session_id_sha256": "7" * 64,
+                    },
+                ],
+                "session_id_after_sha256": "7" * 64,
+                "results_identical": True,
             },
             "lifecycle": {
                 "host_process_running_during_action_request": False,
@@ -159,10 +253,13 @@ def raw_case(platform: str):
         # outer profile. The linked native SDK report has its own authoritative
         # profile and therefore must not inherit this wrapper-only coordinate.
         native_profile.pop("application_files_manifest_sha256", None)
-        native_profile.pop("application_bundle_tree_sha256", None)
+        native_profile["application_bundle_tree_sha256"] = "e" * 64
         native_profile["schema_version"] = finalizer.ios_native_evidence.PROFILE_VERSION
         native_profile["toolchain"]["collector_version"] = "2"
         native_profile["expected_pins"].update({
+            "latchway_application_id": "app_00000000000000000000000000",
+            "latchway_environment": "production",
+            "identity_provider": "firebase",
             "host_bundle_identifier": native_profile["expected_pins"]["application_identifier"],
             "widget_bundle_identifier": "dev.latchway.reactnative.widget",
             "share_bundle_identifier": "dev.latchway.reactnative.share",
@@ -285,6 +382,125 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
                     self.assertEqual(output_by_id[identifier], native_by_id[identifier])
                     self.assertNotIn(identifier, {item["id"] for item in raw["tests"]})
 
+    def test_linked_ios_contract_is_the_reviewed_v2_snapshot(self) -> None:
+        validator_path = ROOT / "scripts" / "linked-ios-device-evidence.py"
+        schema_path = ROOT / "Conformance" / "linked-ios-physical-device-evidence.schema.json"
+        self.assertEqual(
+            hashlib.sha256(validator_path.read_bytes()).hexdigest(),
+            IOS_REVIEWED_SNAPSHOT_SHA256["validator"],
+        )
+        self.assertEqual(
+            hashlib.sha256(schema_path.read_bytes()).hexdigest(),
+            IOS_REVIEWED_SNAPSHOT_SHA256["schema"],
+        )
+        sibling_ios = ROOT.parent / "latchway-ios-sdk"
+        sibling_validator = sibling_ios / "scripts" / "device-evidence.py"
+        sibling_schema = sibling_ios / "Conformance" / "physical-device-evidence.schema.json"
+        if sibling_validator.is_file() and sibling_schema.is_file():
+            self.assertEqual(validator_path.read_bytes(), sibling_validator.read_bytes())
+            self.assertEqual(schema_path.read_bytes(), sibling_schema.read_bytes())
+        self.assertEqual(
+            finalizer.ios_native_evidence.IOS_COMPONENT_OBSERVATION_VERSION,
+            "latchway.ios-component-observation.v2",
+        )
+        self.assertEqual(
+            finalizer.ios_native_evidence.IOS_COMPONENT_TESTS,
+            IOS_COMPONENT_TESTS_V2,
+        )
+        linked_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(linked_schema["properties"]["component_runtime"]["required"]),
+            {
+                "identities",
+                "widget_delegated_execution",
+                "share_delegated_execution",
+                "delegated_execution",
+                "sibling_denial",
+                "keychain_sibling_denial",
+                "component_refresh_race",
+                "lifecycle",
+            },
+        )
+
+    def test_linked_ios_component_v2_proofs_fail_closed(self) -> None:
+        mutations = {
+            "widget request": lambda evidence: evidence["component_runtime"][
+                "widget_delegated_execution"
+            ].__setitem__("http_status", 401),
+            "share request": lambda evidence: evidence["component_runtime"].pop(
+                "share_delegated_execution"
+            ),
+            "action request": lambda evidence: evidence["component_runtime"][
+                "delegated_execution"
+            ].__setitem__("request_id", "request-widget-1234"),
+            "Keychain denial": lambda evidence: evidence["component_runtime"][
+                "keychain_sibling_denial"
+            ].__setitem__("os_status", 0),
+            "refresh race": lambda evidence: evidence["component_runtime"][
+                "component_refresh_race"
+            ]["requests"][1].__setitem__("request_id", "request-refresh-race-a"),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(proof=label):
+                _, _, _, native_profile, native_evidence, _ = raw_case(
+                    "react_native_ios_app_attest"
+                )
+                mutate(native_evidence)
+                with self.assertRaisesRegex(ValueError, "linked native evidence is invalid"):
+                    finalizer.validate_linked_native_report(
+                        native_evidence,
+                        native_profile,
+                        "ios_app_attest",
+                        self.schema,
+                    )
+
+    def test_fresh_signer_jq_accepts_only_concrete_linked_ios_v2_proofs(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "physical-device-evidence.yml"
+        ).read_text(encoding="utf-8")
+        prefix = (
+            "          jq --exit-status '\n"
+            "            [\n"
+            '              "action_delegated_request",'
+        )
+        suffix = '\n          \' "$root/linked-ios-native-evidence.json" >/dev/null'
+        start = workflow.index(prefix) + len("          jq --exit-status '\n")
+        end = workflow.index(suffix, start)
+        program = textwrap.dedent(workflow[start:end])
+        _, _, _, _, native_evidence, _ = raw_case("react_native_ios_app_attest")
+
+        def jq(report: dict) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["jq", "--exit-status", program],
+                input=json.dumps(report),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        accepted = jq(native_evidence)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        tampered = copy.deepcopy(native_evidence)
+        tampered["component_runtime"]["keychain_sibling_denial"]["os_status"] = 0
+        self.assertNotEqual(jq(tampered).returncode, 0)
+
+    def test_linked_ios_legacy_component_observation_fails_closed(self) -> None:
+        _, _, _, native_profile, native_evidence, _ = raw_case(
+            "react_native_ios_app_attest"
+        )
+        component = ios_component_observation(native_profile, native_evidence["run"])
+        component["schema_version"] = "latchway.ios-component-observation.v1"
+        self.assertIn(
+            "component observation.schema_version: unsupported value",
+            finalizer.ios_native_evidence.validate_component_observation(
+                component,
+                platform="ios_app_attest",
+                run_id=native_evidence["run"]["id"],
+                run_started=native_evidence["run"]["started_at"],
+                run_completed=native_evidence["run"]["completed_at"],
+            ),
+        )
+
     def test_raw_mapping_requires_root_component_authorization_response(self) -> None:
         for platform in (
             "react_native_ios_app_attest",
@@ -316,18 +532,31 @@ class FinalizeReactNativeRunTest(unittest.TestCase):
                     )
 
     def test_shared_and_linked_validators_keep_platform_specific_mapping_contracts(self) -> None:
-        for current_validator in (validator, finalizer.ios_native_evidence):
-            with self.subTest(validator=current_validator.__name__):
-                self.assertEqual(
-                    current_validator.canonical_error_mapping_response(
-                        "react_native_ios_app_attest",
-                    ),
-                    (403, "component_feature_not_granted"),
-                )
-                self.assertEqual(
-                    current_validator.canonical_error_mapping_response("ios_app_attest"),
-                    (404, "feature_not_found"),
-                )
+        self.assertEqual(
+            validator.canonical_error_mapping_response("react_native_ios_app_attest"),
+            (403, "component_feature_not_granted"),
+        )
+        self.assertEqual(
+            validator.canonical_error_mapping_response("ios_app_attest"),
+            (404, "feature_not_found"),
+        )
+        _, raw, _, _, native_evidence, _ = raw_case("react_native_ios_app_attest")
+        raw_mapping = next(
+            item for item in raw["tests"] if item["id"] == "canonical_error_mapping"
+        )
+        native_mapping = next(
+            item
+            for item in native_evidence["tests"]
+            if item["id"] == "canonical_error_mapping"
+        )
+        self.assertEqual(
+            (raw_mapping["http_status"], raw_mapping["error_code"]),
+            (403, "component_feature_not_granted"),
+        )
+        self.assertEqual(
+            (native_mapping["http_status"], native_mapping["error_code"]),
+            (404, "feature_not_found"),
+        )
 
     def test_embedded_pin_substitution_is_rejected(self) -> None:
         profile, raw, collection, native_profile, native_evidence, client_policy = raw_case("react_native_ios_app_attest")

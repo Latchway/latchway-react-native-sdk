@@ -901,6 +901,107 @@ jobs:
             .application_files_manifest_sha256 == $files and
             .application_bundle_tree_sha256 == $tree
           ' "$root/react-native-ios-profile.json" >/dev/null
+          jq --exit-status '
+            .schema_version == "latchway.physical-device-profile.v2" and
+            .platform == "ios_app_attest" and
+            .repository == "Latchway/latchway-ios-sdk" and
+            (.application_bundle_tree_sha256 | test("^[0-9a-f]{64}$"))
+          ' "$root/linked-ios-native-profile.json" >/dev/null
+          jq --exit-status '
+            [
+              "action_delegated_request",
+              "component_background_execution",
+              "component_candidate_identities",
+              "component_host_termination",
+              "component_key_isolation",
+              "component_keychain_sibling_denied",
+              "component_no_host_process",
+              "component_no_user_presence",
+              "component_refresh_race",
+              "component_session_isolation",
+              "component_sibling_denied",
+              "share_delegated_request",
+              "widget_delegated_request"
+            ] as $component_ids |
+            (
+              .tests
+              | map(select(.id as $id | $component_ids | index($id)))
+              | sort_by(.id)
+            ) as $component_tests |
+            (.tests | map({key:.id,value:.}) | from_entries) as $tests |
+            .component_runtime as $runtime |
+            .schema_version == "latchway.physical-device-evidence.v2" and
+            .release_eligible == true and
+            .platform == "ios_app_attest" and
+            .source.repository == "Latchway/latchway-ios-sdk" and
+            ($component_tests | map(.id)) == $component_ids and
+            ($component_tests | all(.[]; .status == "passed")) and
+            ($runtime | keys) == [
+              "component_refresh_race",
+              "delegated_execution",
+              "identities",
+              "keychain_sibling_denial",
+              "lifecycle",
+              "share_delegated_execution",
+              "sibling_denial",
+              "widget_delegated_execution"
+            ] and
+            ($runtime.identities | length) == 4 and
+            $runtime.widget_delegated_execution.role == "widget" and
+            ($runtime.widget_delegated_execution.http_status >= 200 and
+              $runtime.widget_delegated_execution.http_status <= 299) and
+            $tests.widget_delegated_request.http_status ==
+              $runtime.widget_delegated_execution.http_status and
+            $tests.widget_delegated_request.request_id ==
+              $runtime.widget_delegated_execution.request_id and
+            $runtime.share_delegated_execution.role == "share" and
+            ($runtime.share_delegated_execution.http_status >= 200 and
+              $runtime.share_delegated_execution.http_status <= 299) and
+            $tests.share_delegated_request.http_status ==
+              $runtime.share_delegated_execution.http_status and
+            $tests.share_delegated_request.request_id ==
+              $runtime.share_delegated_execution.request_id and
+            $runtime.delegated_execution.role == "action" and
+            ($runtime.delegated_execution.http_status >= 200 and
+              $runtime.delegated_execution.http_status <= 299) and
+            $tests.action_delegated_request.http_status ==
+              $runtime.delegated_execution.http_status and
+            $tests.action_delegated_request.request_id ==
+              $runtime.delegated_execution.request_id and
+            ([
+              $runtime.widget_delegated_execution.request_id,
+              $runtime.share_delegated_execution.request_id,
+              $runtime.delegated_execution.request_id
+            ] | unique | length) == 3 and
+            $runtime.keychain_sibling_denial.operation == "SecItemCopyMatching" and
+            $runtime.keychain_sibling_denial.os_status == -34018 and
+            $runtime.keychain_sibling_denial.os_status_name ==
+              "errSecMissingEntitlement" and
+            $runtime.keychain_sibling_denial.key_material_returned == false and
+            $tests.component_keychain_sibling_denied.os_status ==
+              $runtime.keychain_sibling_denial.os_status and
+            $tests.component_keychain_sibling_denied.os_status_name ==
+              $runtime.keychain_sibling_denial.os_status_name and
+            $runtime.component_refresh_race.requests_started_concurrently == true and
+            $runtime.component_refresh_race.overlap_observed == true and
+            $runtime.component_refresh_race.results_identical == true and
+            ($runtime.component_refresh_race.requests | length) == 2 and
+            $runtime.component_refresh_race.requests[0].request_id !=
+              $runtime.component_refresh_race.requests[1].request_id and
+            $runtime.component_refresh_race.requests[0].access_credential_sha256 ==
+              $runtime.component_refresh_race.requests[1].access_credential_sha256 and
+            $runtime.component_refresh_race.requests[0].refresh_credential_sha256 ==
+              $runtime.component_refresh_race.requests[1].refresh_credential_sha256 and
+            $runtime.component_refresh_race.requests[0].session_id_sha256 ==
+              $runtime.component_refresh_race.requests[1].session_id_sha256 and
+            $runtime.component_refresh_race.old_credential_sha256 !=
+              $runtime.component_refresh_race.requests[0].refresh_credential_sha256 and
+            $tests.component_refresh_race.concurrent_request_count == 2 and
+            $tests.component_refresh_race.credential_before_sha256 ==
+              $runtime.component_refresh_race.old_credential_sha256 and
+            $tests.component_refresh_race.credential_after_sha256 ==
+              $runtime.component_refresh_race.requests[0].refresh_credential_sha256
+          ' "$root/linked-ios-native-evidence.json" >/dev/null
           jq --exit-status --arg commit "$SOURCE_COMMIT" --arg run "$EXPECTED_RUN_ID" \
             --arg files "$APP_FILES_MANIFEST_SHA256" --arg tree "$APP_BUNDLE_TREE_SHA256" '
             .schema_version == "latchway.physical-device-evidence.v1" and

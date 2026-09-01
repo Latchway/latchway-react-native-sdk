@@ -143,6 +143,37 @@ class PhysicalEvidenceWorkflowTests(unittest.TestCase):
         self.assertIn("application_files_manifest_sha256 == $files", self.ios_attest)
         self.assertIn("application_bundle_tree_sha256 == $tree", self.ios_attest)
 
+    def test_fresh_ios_signer_rechecks_linked_v2_component_proofs(self) -> None:
+        for marker in (
+            '"latchway.physical-device-profile.v2"',
+            '"latchway.physical-device-evidence.v2"',
+            '"Latchway/latchway-ios-sdk"',
+            '"widget_delegated_request"',
+            '"share_delegated_request"',
+            '"action_delegated_request"',
+            '"component_keychain_sibling_denied"',
+            '"component_refresh_race"',
+            '$runtime.widget_delegated_execution.http_status',
+            '$runtime.share_delegated_execution.http_status',
+            '$runtime.delegated_execution.http_status',
+            '$runtime.keychain_sibling_denial.os_status == -34018',
+            '$runtime.keychain_sibling_denial.key_material_returned == false',
+            '$runtime.component_refresh_race.requests_started_concurrently == true',
+            '$runtime.component_refresh_race.overlap_observed == true',
+            '$tests.component_refresh_race.concurrent_request_count == 2',
+            '"$root/linked-ios-native-profile.json"',
+            '"$root/linked-ios-native-evidence.json"',
+        ):
+            self.assertIn(marker, self.ios_attest)
+        self.assertIn(
+            '$runtime.component_refresh_race.requests[0].request_id !=',
+            self.ios_attest,
+        )
+        self.assertIn(
+            '$runtime.component_refresh_race.requests[0].refresh_credential_sha256 ==',
+            self.ios_attest,
+        )
+
     def test_grant_digest_one_use_contract_is_signed_and_observed_on_both_platforms(self) -> None:
         canonical_grant_keys = (
             '(.grant | keys) == ["application_id","audience","expires_at_unix",'
