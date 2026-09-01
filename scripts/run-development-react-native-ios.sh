@@ -200,7 +200,9 @@ workspace="$repository_root/example/ios/LatchwayExample.xcworkspace"
   exit 2
 }
 
-temporary="$(mktemp -d "${TMPDIR:-/tmp}/latchway-rn-ios-development.XXXXXX")"
+temporary_parent="${TMPDIR:-/tmp}"
+temporary_parent="$(cd "$temporary_parent" && pwd -P)"
+temporary="$(mktemp -d "$temporary_parent/latchway-rn-ios-development.XXXXXX")"
 waiting_observed=false
 terminal_cleanup_observed=false
 abort_cleanup_in_progress=false

@@ -432,6 +432,15 @@ class DevelopmentExampleHostTests(unittest.TestCase):
         self.assertNotIn("--environment", self.runner)
         self.assertNotIn("echo $latchway_development_grant", self.runner)
         self.assertNotIn("printf '%s\\n' \"$latchway_development_grant\"", self.runner)
+        self.assertIn('temporary_parent="${TMPDIR:-/tmp}"', self.runner)
+        self.assertIn(
+            'temporary_parent="$(cd "$temporary_parent" && pwd -P)"',
+            self.runner,
+        )
+        self.assertIn(
+            'temporary="$(mktemp -d "$temporary_parent/latchway-rn-ios-development.XXXXXX")"',
+            self.runner,
+        )
         self.assertIn(
             'DEVICECTL_CHILD_LATCHWAY_DEVELOPMENT_DEVICE_GRANT_SHA256="$latchway_development_grant_sha256"',
             self.runner,

@@ -51,7 +51,7 @@ Versioning once package publication begins.
   identity callback and reports composite `delegated_direct_attested` trust;
   Android reports direct component attestation as unsupported.
 
-## [1.0.0]
+## Planned 1.0.0 candidate baseline (unreleased)
 
 ### Changed
 
