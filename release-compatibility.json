@@ -5,8 +5,8 @@
     "version": "1.0.0",
     "wire_protocol": 2,
     "repository": "https://github.com/Latchway/latchway.git",
-    "core_commit": "a59a2c1c807aec50093ae6346492a05148c72899",
-    "bundle_sha256": "3a88fb69b911724da849229f34f735608e829bcfb0658087313c8d31441e9927",
+    "core_commit": "ff146bce3fb265341a0d9aa9bb00fda3818139e9",
+    "bundle_sha256": "39c111fe9d0137dfd839d1d08a07165ef92282c60535e3840d32e94d6f26e058",
     "fixtures": {
       "attestation-binding-v1.json": "aaadef1172dffc3e600029e03259ff636a969cd4f925544fdccfb2c704b03659",
       "component-attestation-binding-v2.json": "8411308998cdffccf286892b94a6c759cbcf63b92e4727144d3a755dcd7c13d4",
@@ -34,13 +34,13 @@
     "package": "@latchway/client",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "f9439bdeb56d93218cd63008f7c0f2b2d14821bf"
+    "source_commit": "182ff23d8365ae37f3e85dfc84485cc762295f67"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "8acd72a7fbbff019ffeb1c7be0264f671c636168",
+    "source_commit": "31a37ab7435cb01bb0a47262e4ab92e4f016a669",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -51,7 +51,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "349f2effe8f9abe2f07b59fafc47b1bf70b1a1c7",
+    "source_commit": "b16b2ac668f994c3a5aed60803b22c853a95e305",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "sdk_platform_version": "37.0",
