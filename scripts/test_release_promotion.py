@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -36,6 +37,157 @@ REPOSITORY_TAG = f"v{REPOSITORY_VERSION}"
 CORE_TAG = "v1.0.0"
 OCI_DIGEST = "ghcr.io/latchway/latchway@sha256:" + "a" * 64
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+
+PROTECTED_RELEASE_POLICY_IDS = {
+    "locked-sources": "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
+    "published-dependencies": "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
+    "authorize-release": "latchway-release-controls-v1:latchway-react-native-sdk:release-administration",
+    "github-draft": "latchway-release-controls-v1:latchway-react-native-sdk:github-release",
+    "npm-publish": "latchway-release-controls-v1:latchway-react-native-sdk:npm",
+    "publish": "latchway-release-controls-v1:latchway-react-native-sdk:npm",
+    "github-release-policy": "latchway-release-controls-v1:latchway-react-native-sdk:release-administration",
+    "github-release": "latchway-release-controls-v1:latchway-react-native-sdk:github-release",
+}
+PROTECTED_RELEASE_SECRET_ALLOWLISTS = {
+    "locked-sources": set(),
+    "published-dependencies": set(),
+    "authorize-release": {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"},
+    "github-draft": set(),
+    "npm-publish": set(),
+    "publish": set(),
+    "github-release-policy": {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"},
+    "github-release": set(),
+}
+EXPRESSION = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
+STATIC_SECRET = re.compile(
+    r"\bsecrets\s*(?:\.\s*(?P<dot>[A-Za-z_][A-Za-z0-9_]*)|"
+    r"\[\s*(?P<quote>['\"])(?P<bracket>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?P=quote)\s*\])"
+)
+
+
+def workflow_job(workflow: str, name: str) -> str:
+    anchor = f"\n  {name}:\n"
+    start = workflow.find(anchor)
+    if start < 0:
+        raise AssertionError(f"workflow job {name} is missing")
+    end_match = re.search(r"(?m)^  [a-z0-9][a-z0-9_-]*:\n", workflow[start + len(anchor) :])
+    end = len(workflow) if end_match is None else start + len(anchor) + end_match.start()
+    return workflow[start:end]
+
+
+def first_workflow_step(job: str) -> str:
+    steps = job.find("\n    steps:\n")
+    if steps < 0:
+        raise AssertionError("workflow job has no steps")
+    start = job.find("\n      - ", steps)
+    if start < 0:
+        raise AssertionError("workflow job has no first step")
+    end = job.find("\n      - ", start + 1)
+    return job[start : len(job) if end < 0 else end]
+
+
+def require_first_policy_sentinel(job: str, policy_id: str) -> None:
+    first = first_workflow_step(job)
+    expected_variable = (
+        "LATCHWAY_RELEASE_CONTROL_POLICY_ID: "
+        "${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}"
+    )
+    if "Fail closed unless" not in first or expected_variable not in first:
+        raise AssertionError("protected job does not start with the policy sentinel")
+    if f'"{policy_id}"' not in first:
+        raise AssertionError("protected job sentinel has the wrong environment identity")
+    if 'test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \\' not in first:
+        raise AssertionError("protected job sentinel is not an exact equality check")
+    for forbidden in (
+        "uses:", "secrets.", "secrets[", "github.token", "ACTIONS_ID_TOKEN",
+        "GH_TOKEN", "RELEASE_TOKEN", "curl ", "gh ",
+    ):
+        if forbidden in first:
+            raise AssertionError(f"protected job sentinel has preflight authority: {forbidden}")
+
+
+def secret_references(job: str) -> set[str]:
+    references: set[str] = set()
+    for expression in EXPRESSION.finditer(job):
+        body = expression.group("body")
+        if re.search(r"\bsecrets\b", body) is None:
+            continue
+        matches = list(STATIC_SECRET.finditer(body))
+        scrubbed = STATIC_SECRET.sub("", body)
+        if not matches or re.search(r"\bsecrets\b", scrubbed) is not None:
+            raise AssertionError("dynamic or unparsed secret reference")
+        for match in matches:
+            references.add(match.group("dot") or match.group("bracket"))
+    return references
+
+
+def bash_function(job: str, name: str) -> str:
+    functions = bash_functions(job, name)
+    if not functions:
+        raise AssertionError(f"workflow function {name} is missing")
+    return functions[0]
+
+
+def bash_functions(job: str, name: str) -> list[str]:
+    anchor = f"          {name}() {{"
+    functions: list[str] = []
+    cursor = 0
+    while (raw_start := job.find(anchor, cursor)) >= 0:
+        start = raw_start + 10
+        end = job.find("\n          }", start)
+        if end < 0:
+            raise AssertionError(f"workflow function {name} is incomplete")
+        functions.append(
+            job[start : end + len("\n          }")].replace("\n          ", "\n")
+        )
+        cursor = end + len("\n          }")
+    return functions
+
+
+def run_policy_lease_validator(
+    function: str,
+    function_name: str,
+    phase: str,
+    lease: dict[str, object],
+    *,
+    digest_override: str | None = None,
+    json_override: str | None = None,
+    now_override: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    lease_json = json_override or json.dumps(
+        lease, sort_keys=True, separators=(",", ":")
+    )
+    digest = digest_override or hashlib.sha256(lease_json.encode("utf-8")).hexdigest()
+    environment = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "GITHUB_REPOSITORY": "Latchway/latchway-react-native-sdk",
+        "GITHUB_RUN_ID": "41",
+        "GITHUB_RUN_ATTEMPT": "2",
+        "RELEASE_COMMIT": "a" * 40,
+        "RELEASE_TAG": "v1.0.0",
+        "RELEASE_VERSION": "1.0.0",
+        "AUTHORIZATION_LEASE_JSON": lease_json,
+        "AUTHORIZATION_LEASE_SHA256": digest,
+        "FINAL_POLICY_LEASE_JSON": lease_json,
+        "FINAL_POLICY_LEASE_SHA256": digest,
+    }
+    if now_override is not None:
+        original = function
+        function = function.replace(
+            "now=$(date -u +%s)", 'now="${LATCHWAY_TEST_NOW:?}"'
+        )
+        if function == original:
+            raise AssertionError("lease validator does not read the current epoch")
+        environment["LATCHWAY_TEST_NOW"] = str(now_override)
+    return subprocess.run(
+        ["/bin/bash", "-c", f"set -Eeuo pipefail\n{function}\n{function_name} {phase}\n"],
+        check=False,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 class PromotionVerifierTests(unittest.TestCase):
@@ -381,29 +533,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("\ngit tag ", documentation)
         self.assertNotIn("\ngit push", documentation)
 
-    def test_private_sibling_checkouts_use_read_only_secret_with_public_fallback(self) -> None:
+    def test_sibling_reads_are_public_only_and_never_fall_back_to_a_secret(self) -> None:
         if REPOSITORY_ID != "react_native":
             self.skipTest("React Native-only sibling checkout policy")
-        token = (
-            "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN "
-            "|| github.token }}"
-        )
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         sibling_checkouts = release.count("repository: Latchway/")
         self.assertGreater(sibling_checkouts, 0)
-        self.assertEqual(release.count(token), sibling_checkouts)
+        self.assertEqual(release.count("token: ${{ github.token }}"), sibling_checkouts)
+        self.assertNotIn("secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", release)
 
         locked_sources = (
             ROOT / ".github/workflows/locked-sources.yml"
         ).read_text(encoding="utf-8")
         self.assertNotIn("repository: Latchway/", locked_sources)
-        self.assertEqual(
-            locked_sources.count(
-                "${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}"
-            ),
-            1,
-        )
+        self.assertNotIn("secrets.", locked_sources)
         self.assertEqual(locked_sources.count("environment: private-sibling-read"), 1)
+        require_first_policy_sentinel(
+            workflow_job(locked_sources, "authenticate-inputs"),
+            PROTECTED_RELEASE_POLICY_IDS["locked-sources"],
+        )
         self.assertIn("bundle_locked_repository Latchway/latchway-js", locked_sources)
         self.assertIn("bundle_locked_repository Latchway/latchway-android", locked_sources)
         self.assertIn("bundle_locked_repository Latchway/latchway-ios-sdk", locked_sources)
@@ -411,20 +559,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
             'bundle_locked_repository Latchway/latchway "$CORE_COMMIT"',
             locked_sources,
         )
-        self.assertIn(
-            'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then',
-            locked_sources,
-        )
+        self.assertNotIn('if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]', locked_sources)
         self.assertIn(
             "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\"",
             locked_sources,
         )
         self.assertEqual(locked_sources.count("fetch --no-tags"), 1)
         documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
-        self.assertIn("`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`", documentation)
-        self.assertIn("Contents read permission and no\nwrite permission", documentation)
+        self.assertIn("repositories to be public\nbefore promotion", documentation)
+        self.assertIn("contains no\nsecret", documentation)
         self.assertIn("credential-helper-disabled anonymous HTTPS", documentation)
-        self.assertIn("fails closed without an\nanonymous retry", documentation)
+        self.assertIn("Never define\n`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`", documentation)
+        self.assertIn(
+            "`private-sibling-read`\nenvironment as a credential-free protected approval boundary",
+            documentation,
+        )
 
     def test_pull_request_workflow_cannot_receive_private_sibling_credentials(self) -> None:
         if REPOSITORY_ID != "react_native":
@@ -466,7 +615,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("working-directory:", authenticated)
         self.assertNotIn("node scripts/", authenticated)
         self.assertIn("environment: private-sibling-read", authenticated)
-        self.assertIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", authenticated)
+        self.assertNotIn("secrets.", authenticated)
+        self.assertEqual(authenticated.count("${{ github.token }}"), 2)
+        require_first_policy_sentinel(
+            workflow_job(workflow, "authenticate-inputs"),
+            PROTECTED_RELEASE_POLICY_IDS["locked-sources"],
+        )
         self.assertIn(
             "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA",
             authenticated,
@@ -513,7 +667,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("--proto-redir '=https'", workflow)
         self.assertIn("--max-filesize 2097152", workflow)
-        self.assertIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token", workflow)
+        self.assertNotIn("secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", workflow)
+        self.assertIn("token: ${{ github.token }}", workflow)
         self.assertIn("latchway-core-release-auth", workflow)
         self.assertIn("trap 'rm -f -- \"$auth_config\"' EXIT", workflow)
         self.assertIn("--config \"$auth_config\"", workflow)
@@ -550,6 +705,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "react_native": '"$LATCHWAY_NPM_CLI" publish "$archive"',
         }
         self.assertLess(tag, workflow.index(publication_markers[REPOSITORY_ID]))
+        if REPOSITORY_ID == "react_native":
+            dependency_job = workflow_job(workflow, "published-dependencies")
+            locked_sources_job = workflow_job(workflow, "locked-sources")
+            consumer_job = workflow_job(workflow, "verify")
+            self.assertIn("needs: verify-promotion", dependency_job)
+            self.assertIn("needs: verify-promotion", locked_sources_job)
+            self.assertIn(
+                "needs: [promote, locked-sources, published-dependencies]",
+                consumer_job,
+            )
+            documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "starts three parallel branches: one creates\n"
+                "   or verifies the protected annotated",
+                documentation,
+            )
+            self.assertIn(
+                "the irreversible tag exists before those gates execute",
+                documentation,
+            )
         self.assertIn("persist-credentials: false", workflow)
         if REPOSITORY_ID == "javascript":
             self.assertIn("needs: [promote, verify]", workflow)
@@ -578,7 +753,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("scripts/", authorization)
         self.assertNotIn("python3 ", authorization)
         self.assertNotIn("node ", authorization)
-        self.assertIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", authorization)
+        self.assertNotIn("secrets.", authorization)
+        self.assertNotIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", authorization)
+        self.assertEqual(authorization.count("${{ github.token }}"), 2)
         self.assertIn("gh attestation verify", authorization)
 
         self.assertIn("actions/checkout", verification)
@@ -624,14 +801,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("actions/checkout", authenticated)
         self.assertNotIn("scripts/", authenticated)
         self.assertNotIn("node ", authenticated)
-        self.assertIn("LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN", authenticated)
+        self.assertNotIn("secrets.", authenticated)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", authenticated)
         verification = workflow.split("\n  verify:\n", 1)[1].split("\n  android:\n", 1)[0]
         self.assertNotIn("secrets.", verification)
         self.assertNotIn("GH_TOKEN: ${{", verification)
 
     def test_github_release_retry_never_overwrites_assets(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        draft = workflow.index("Preflight immutable release and create draft with fixed API calls")
+        draft = workflow.index("Create or verify GitHub draft with fixed API calls")
         registry = workflow.index('"$LATCHWAY_NPM_CLI" publish "$archive"')
         final_step = workflow.index(
             "Reconcile, publish, and verify immutable release with fixed API calls"
@@ -654,6 +832,542 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertNotIn("scripts/", block)
             self.assertNotIn("python3 ", block)
             self.assertNotIn("node ", block)
+
+    def test_react_native_release_authorities_use_separate_protected_environments(
+        self,
+    ) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only release authority policy")
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        authorization = workflow.split("\n  authorize-release:\n", 1)[1].split(
+            "\n  trusted-npm-cli:\n", 1
+        )[0]
+        draft = workflow.split("\n  github-draft:\n", 1)[1].split(
+            "\n  npm-publish:\n", 1
+        )[0]
+        npm_publication = workflow.split("\n  npm-publish:\n", 1)[1].split(
+            "\n  publish:\n", 1
+        )[0]
+        registry_evidence = workflow.split("\n  publish:\n", 1)[1].split(
+            "\n  github-release-policy:\n", 1
+        )[0]
+        policy = workflow.split("\n  github-release-policy:\n", 1)[1].split(
+            "\n  github-release:\n", 1
+        )[0]
+        release = workflow.split("\n  github-release:\n", 1)[1]
+
+        self.assertIn(
+            "needs: [promote, verify, android, ios, trusted-npm-cli]",
+            authorization,
+        )
+        self.assertIn("environment: release-administration", authorization)
+        self.assertIn("permissions: {}", authorization)
+        self.assertIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", authorization)
+        for forbidden in (
+            "actions/checkout", "scripts/", "github.token", "id-token:",
+            "attestations:", "contents:",
+        ):
+            self.assertNotIn(forbidden, authorization)
+
+        self.assertIn("needs: [promote, authorize-release]", draft)
+        self.assertIn("environment: github-release", draft)
+        self.assertIn("permissions:\n      contents: write", draft)
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", draft)
+        self.assertIn("environment: npm", npm_publication)
+        self.assertIn("environment: npm", registry_evidence)
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", npm_publication)
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", registry_evidence)
+
+        self.assertIn("environment: release-administration", policy)
+        self.assertIn("permissions: {}", policy)
+        self.assertIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", policy)
+        self.assertNotIn("id-token: write", policy)
+        self.assertNotIn("attestations: write", policy)
+        self.assertIn("environment: github-release", release)
+        self.assertIn(
+            "permissions:\n      actions: read\n      attestations: write\n"
+            "      contents: write\n      id-token: write",
+            release,
+        )
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", release)
+
+        self.assertEqual(workflow.count("environment: npm"), 2)
+        self.assertEqual(workflow.count("environment: release-administration"), 2)
+        self.assertEqual(workflow.count("environment: github-release"), 2)
+        self.assertEqual(
+            workflow.count("secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"), 2
+        )
+
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "`private-sibling-read`, `npm`, `release-administration`, and\n"
+            "`github-release`",
+            documentation,
+        )
+        self.assertIn(
+            "Every environment must require at least one reviewer, set\n"
+            "`prevent_self_review: true`, use an exact main-only custom deployment branch",
+            documentation,
+        )
+        self.assertIn(
+            "`npm` environment is limited to trusted npm publication",
+            documentation,
+        )
+        self.assertIn(
+            "`release-administration` environment contains only a fine-grained",
+            documentation,
+        )
+        self.assertIn(
+            "`github-release` environment protects the separate draft and final GitHub",
+            documentation,
+        )
+        self.assertIn(
+            "`LATCHWAY_RELEASE_CONTROL_POLICY_ID`, with no repository- or organization-level\n"
+            "fallback",
+            documentation,
+        )
+        self.assertIn("disable administrator bypass", documentation)
+        self.assertIn(
+            "Never define\n`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN` at environment, repository, or\n"
+            "organization scope",
+            documentation,
+        )
+
+    def test_protected_release_jobs_start_with_unique_sentinels_and_exact_secret_allowlists(
+        self,
+    ) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only protected release policy")
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        for job_name, policy_id in PROTECTED_RELEASE_POLICY_IDS.items():
+            with self.subTest(job=job_name):
+                job = workflow_job(workflow, job_name)
+                require_first_policy_sentinel(job, policy_id)
+                self.assertEqual(
+                    secret_references(job),
+                    PROTECTED_RELEASE_SECRET_ALLOWLISTS[job_name],
+                )
+
+        authorization = workflow_job(workflow, "authorize-release")
+        wrong_value = authorization.replace(
+            PROTECTED_RELEASE_POLICY_IDS["authorize-release"],
+            "latchway-release-controls-v1:latchway-react-native-sdk:npm",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "wrong environment identity"):
+            require_first_policy_sentinel(
+                wrong_value, PROTECTED_RELEASE_POLICY_IDS["authorize-release"]
+            )
+        action_first = authorization.replace(
+            "\n    steps:\n",
+            "\n    steps:\n      - uses: actions/checkout@attacker\n",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "does not start"):
+            require_first_policy_sentinel(
+                action_first, PROTECTED_RELEASE_POLICY_IDS["authorize-release"]
+            )
+
+        bracket_fallback = authorization.replace(
+            "secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN",
+            "secrets['LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN'] || secrets[\"EVIL_TOKEN\"]",
+            1,
+        )
+        self.assertEqual(
+            secret_references(bracket_fallback),
+            {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", "EVIL_TOKEN"},
+        )
+        dynamic = authorization.replace(
+            "secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN",
+            "secrets[inputs.secret_name]",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "dynamic or unparsed"):
+            secret_references(dynamic)
+
+    def test_release_policy_leases_reject_replay_drift_and_stale_authority(self) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only protected release policy")
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        now = int(time.time())
+
+        promote = workflow_job(workflow, "promote")
+        self.assertIn("needs: verify-promotion", promote)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", promote)
+        self.assertEqual(promote.count("gh api --method POST"), 2)
+        self.assertNotIn("secrets.", promote)
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", promote)
+        documentation = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Annotated tag creation is the one release mutation that\n"
+            "uses the authenticated core-promotion report and tag ruleset as its authority;\n"
+            "it deliberately precedes immutable-release authorization",
+            documentation,
+        )
+
+        def lease(phase: str) -> dict[str, object]:
+            return {
+                "expires_at_epoch": now + 595,
+                "issued_at_epoch": now - 5,
+                "kind": "latchway_release_policy_lease",
+                "phase": phase,
+                "policy_id": (
+                    "latchway-release-controls-v1:latchway-react-native-sdk:"
+                    "release-administration"
+                ),
+                "release_commit": "a" * 40,
+                "release_tag": "v1.0.0",
+                "release_version": "1.0.0",
+                "repository": "Latchway/latchway-react-native-sdk",
+                "run_attempt": 2,
+                "run_id": 41,
+                "schema_version": 1,
+                "settings": {"enabled": True, "enforced_by_owner": True},
+            }
+
+        npm_job = workflow_job(workflow, "npm-publish")
+        authorization_function = bash_function(
+            npm_job, "validate_release_policy_lease"
+        )
+        valid_authorization = lease("draft-and-npm")
+        result = run_policy_lease_validator(
+            authorization_function,
+            "validate_release_policy_lease",
+            "draft-and-npm",
+            valid_authorization,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        adversarial: list[tuple[str, dict[str, object]]] = []
+        for name, mutate in (
+            ("wrong phase", lambda value: value.update(phase="final-github-release")),
+            ("wrong repository", lambda value: value.update(repository="attacker/repo")),
+            ("wrong run", lambda value: value.update(run_id=42)),
+            ("wrong attempt", lambda value: value.update(run_attempt=1)),
+            ("string run", lambda value: value.update(run_id="41")),
+            ("string attempt", lambda value: value.update(run_attempt="2")),
+            ("fractional run", lambda value: value.update(run_id=41.5)),
+            ("zero attempt", lambda value: value.update(run_attempt=0)),
+            (
+                "unsafe integer run",
+                lambda value: value.update(run_id=9_007_199_254_740_992),
+            ),
+            ("wrong release", lambda value: value.update(release_commit="f" * 40)),
+            ("extra field", lambda value: value.update(unexpected=True)),
+            (
+                "owner enforcement off",
+                lambda value: value["settings"].update(enforced_by_owner=False),
+            ),
+            (
+                "expired",
+                lambda value: value.update(
+                    issued_at_epoch=now - 700, expires_at_epoch=now - 100
+                ),
+            ),
+            (
+                "overlong",
+                lambda value: value.update(
+                    issued_at_epoch=now - 1, expires_at_epoch=now + 600
+                ),
+            ),
+            (
+                "future",
+                lambda value: value.update(
+                    issued_at_epoch=now + 10, expires_at_epoch=now + 610
+                ),
+            ),
+        ):
+            candidate = deepcopy(valid_authorization)
+            candidate["settings"] = dict(candidate["settings"])
+            mutate(candidate)
+            adversarial.append((name, candidate))
+        for name, candidate in adversarial:
+            with self.subTest(case=name):
+                rejected = run_policy_lease_validator(
+                    authorization_function,
+                    "validate_release_policy_lease",
+                    "draft-and-npm",
+                    candidate,
+                )
+                self.assertNotEqual(rejected.returncode, 0, name)
+
+        exact_expiry = deepcopy(valid_authorization)
+        exact_expiry.update(
+            issued_at_epoch=now - 600,
+            expires_at_epoch=now,
+        )
+        expiry_result = run_policy_lease_validator(
+            authorization_function,
+            "validate_release_policy_lease",
+            "draft-and-npm",
+            exact_expiry,
+            now_override=now,
+        )
+        self.assertNotEqual(expiry_result.returncode, 0)
+
+        bad_hash = run_policy_lease_validator(
+            authorization_function,
+            "validate_release_policy_lease",
+            "draft-and-npm",
+            valid_authorization,
+            digest_override="f" * 64,
+        )
+        self.assertNotEqual(bad_hash.returncode, 0)
+        canonical = json.dumps(
+            valid_authorization, sort_keys=True, separators=(",", ":")
+        )
+        noncanonical = run_policy_lease_validator(
+            authorization_function,
+            "validate_release_policy_lease",
+            "draft-and-npm",
+            valid_authorization,
+            json_override=canonical + " ",
+        )
+        self.assertNotEqual(noncanonical.returncode, 0)
+        duplicate = canonical.replace(
+            '"phase":"draft-and-npm"',
+            '"phase":"draft-and-npm","phase":"draft-and-npm"',
+            1,
+        )
+        duplicate_result = run_policy_lease_validator(
+            authorization_function,
+            "validate_release_policy_lease",
+            "draft-and-npm",
+            valid_authorization,
+            json_override=duplicate,
+        )
+        self.assertNotEqual(duplicate_result.returncode, 0)
+
+        final_job = workflow_job(workflow, "github-release")
+        final_function = bash_function(final_job, "validate_final_policy_lease")
+        valid_final = lease("final-github-release")
+        final_result = run_policy_lease_validator(
+            final_function,
+            "validate_final_policy_lease",
+            "final-github-release",
+            valid_final,
+        )
+        self.assertEqual(final_result.returncode, 0, final_result.stderr)
+        wrong_final_phase = run_policy_lease_validator(
+            final_function,
+            "validate_final_policy_lease",
+            "final-github-release",
+            valid_authorization,
+        )
+        self.assertNotEqual(wrong_final_phase.returncode, 0)
+        self.assertEqual(
+            workflow.count(
+                ".issued_at_epoch <= $now and $now < .expires_at_epoch"
+            ),
+            7,
+        )
+        self.assertNotIn("$now <= .expires_at_epoch", workflow)
+        self.assertEqual(workflow.count("(.run_id | type) == \"number\""), 7)
+        self.assertEqual(
+            workflow.count(".run_id <= 9007199254740991"),
+            7,
+        )
+        self.assertEqual(
+            workflow.count(".run_attempt <= 9007199254740991"),
+            7,
+        )
+        draft_job = workflow_job(workflow, "github-draft")
+        authorization_consumers = [
+            *bash_functions(draft_job, "validate_release_policy_lease"),
+            *bash_functions(npm_job, "validate_release_policy_lease"),
+        ]
+        final_consumers = bash_functions(final_job, "validate_final_policy_lease")
+        self.assertEqual(len(authorization_consumers), 4)
+        self.assertEqual(len(final_consumers), 3)
+        for index, (consumer, function_name, phase, valid_lease) in enumerate(
+            [
+                *(
+                    (
+                        function,
+                        "validate_release_policy_lease",
+                        "draft-and-npm",
+                        valid_authorization,
+                    )
+                    for function in authorization_consumers
+                ),
+                *(
+                    (
+                        function,
+                        "validate_final_policy_lease",
+                        "final-github-release",
+                        valid_final,
+                    )
+                    for function in final_consumers
+                ),
+            ],
+            start=1,
+        ):
+            accepted = run_policy_lease_validator(
+                consumer,
+                function_name,
+                phase,
+                valid_lease,
+                now_override=now,
+            )
+            self.assertEqual(accepted.returncode, 0, f"consumer {index}: {accepted.stderr}")
+            for invalid in (
+                {**valid_lease, "run_id": "41"},
+                {**valid_lease, "run_attempt": 2.5},
+                {**valid_lease, "run_id": 9_007_199_254_740_992},
+                {
+                    **valid_lease,
+                    "issued_at_epoch": now - 600,
+                    "expires_at_epoch": now,
+                },
+            ):
+                rejected = run_policy_lease_validator(
+                    consumer,
+                    function_name,
+                    phase,
+                    invalid,
+                    now_override=now,
+                )
+                self.assertNotEqual(rejected.returncode, 0, f"consumer {index}")
+
+        authorization = workflow_job(workflow, "authorize-release")
+        self.assertIn(
+            "needs: [promote, verify, android, ios, trusted-npm-cli]",
+            authorization,
+        )
+        self.assertIn(
+            "policy_lease_json: ${{ steps.policy.outputs.lease_json }}",
+            authorization,
+        )
+        self.assertIn(
+            "policy_lease_sha256: ${{ steps.policy.outputs.lease_sha256 }}",
+            authorization,
+        )
+        self.assertNotRegex(
+            authorization,
+            r"actions/(?:upload|download)-artifact@",
+        )
+        final_policy = workflow_job(workflow, "github-release-policy")
+        self.assertIn(
+            "policy_lease_json: ${{ steps.policy.outputs.lease_json }}",
+            final_policy,
+        )
+        self.assertIn(
+            "policy_lease_sha256: ${{ steps.policy.outputs.lease_sha256 }}",
+            final_policy,
+        )
+        self.assertNotRegex(
+            final_policy,
+            r"actions/(?:upload|download)-artifact@",
+        )
+        for producer in (authorization, final_policy):
+            self.assertIn('--argjson run_id "$GITHUB_RUN_ID"', producer)
+            self.assertIn('--argjson run_attempt "$GITHUB_RUN_ATTEMPT"', producer)
+            self.assertNotIn('--arg run_id "$GITHUB_RUN_ID"', producer)
+            self.assertNotIn('--arg run_attempt "$GITHUB_RUN_ATTEMPT"', producer)
+        draft = draft_job
+        self.assertIn(
+            "AUTHORIZATION_LEASE_JSON: "
+            "${{ needs.authorize-release.outputs.policy_lease_json }}",
+            draft,
+        )
+        self.assertLess(
+            draft.rfind("validate_release_policy_lease draft-and-npm"),
+            draft.index('gh release create "$RELEASE_TAG"'),
+        )
+        self.assertEqual(
+            draft[draft.rfind("validate_release_policy_lease draft-and-npm") :]
+            .splitlines()[1]
+            .lstrip()
+            .split(" ", 1)[0],
+            "gh",
+        )
+        self.assertRegex(
+            npm_job,
+            r"validate_release_policy_lease draft-and-npm\n"
+            r" {6}- name: Attest reviewed npm package",
+        )
+        npm_mutation = npm_job.index('"$LATCHWAY_NPM_CLI" publish "$archive"')
+        self.assertGreater(
+            npm_job.rfind("validate_release_policy_lease draft-and-npm", 0, npm_mutation),
+            npm_job.index("Publish or adopt exact npm bytes with fixed commands"),
+        )
+        self.assertRegex(
+            final_job,
+            r"validate_final_policy_lease final-github-release\n"
+            r" {6}- name: Attest exact retained registry and release evidence",
+        )
+        final_mutation = final_job.index('gh release edit "$RELEASE_TAG"')
+        self.assertGreater(
+            final_job.rfind(
+                "validate_final_policy_lease final-github-release", 0, final_mutation
+            ),
+            final_job.index("Reconcile, publish, and verify immutable release"),
+        )
+        tag_ref_endpoint = (
+            'gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"'
+        )
+        self.assertEqual(final_job.count(tag_ref_endpoint), 2)
+        post_finalization_tag = final_job.index(
+            '"$RUNNER_TEMP/post-finalization-tag-ref.json"'
+        )
+        self.assertGreater(
+            post_finalization_tag,
+            final_job.rfind("gh release verify-asset"),
+        )
+        self.assertIn(
+            'gh api "repos/$GITHUB_REPOSITORY/git/tags/$final_tag_object"',
+            final_job[post_finalization_tag:],
+        )
+        self.assertIn(
+            ".sha == $object and .tag == $tag and .object.type == \"commit\" and",
+            final_job[post_finalization_tag:],
+        )
+        self.assertIn(
+            ".object.sha == $commit",
+            final_job[post_finalization_tag:],
+        )
+        self.assertIn("**Re-run all\njobs**", documentation)
+        self.assertIn("Never use **Re-run failed jobs**", documentation)
+        self.assertIn("tag already exists", documentation)
+        self.assertIn("validity interval is half-open", documentation)
+
+    def test_ci_runs_checksum_pinned_actionlint_over_every_workflow(self) -> None:
+        if REPOSITORY_ID != "react_native":
+            self.skipTest("React Native-only workflow lint policy")
+        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        pull_request = workflow_job(ci, "pull-request")
+        installer = (ROOT / "scripts/install-actionlint.mjs").read_text(
+            encoding="utf-8"
+        )
+        mise = (ROOT / "mise.toml").read_text(encoding="utf-8")
+
+        self.assertIn("runs-on: ubuntu-24.04", pull_request)
+        setup_node = pull_request.index("actions/setup-node@")
+        install_actionlint = pull_request.index("node scripts/install-actionlint.mjs")
+        lint_workflows = pull_request.index(
+            "actionlint -shellcheck= -pyflakes= -oneline .github/workflows/*.yml"
+        )
+        self.assertLess(setup_node, install_actionlint)
+        self.assertLess(install_actionlint, lint_workflows)
+        self.assertIn(
+            'test "$(actionlint -version | sed -n \'1p\')" = "1.7.12"',
+            pull_request,
+        )
+        self.assertIn('actionlint = "1.7.12"', mise)
+        self.assertIn('const VERSION = "1.7.12";', installer)
+        self.assertIn(
+            'const EXPECTED_SHA256 = '
+            '"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8";',
+            installer,
+        )
+        self.assertIn("MAXIMUM_ARCHIVE_BYTES = 8 * 1024 * 1024", installer)
+        self.assertIn("response.url.startsWith(\"https://\")", installer)
+        self.assertIn(
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/",
+            installer,
+        )
+        self.assertIn('execFileSync("tar", ["-xzf", archivePath', installer)
+        self.assertNotRegex(installer, r"npm\s+(?:exec|install)|\bnpx\b")
 
 
 

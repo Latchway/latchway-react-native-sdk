@@ -33,17 +33,25 @@ builds real React Native 0.82 hosts.
    releases, per-asset attestations, public registry bytes, registry signatures,
    and source commits must all match the lock; git tag or package metadata alone
    is not sufficient.
-6. Let the promotion-dispatched `.github/workflows/release.yml` wait for the
-   immutable JavaScript, iOS, and Android releases. It authenticates their
-   public bytes and attestations, removes local path/repository overrides, and
-   builds the clean npm consumer plus the official iOS and Android example
-   hosts before publication. The manual `Published dependency consumer`
-   workflow is an optional independent diagnostic; its output is not a release
-   workflow input and does not require promotion to be rerun.
+6. After the promotion envelope is authenticated, the promotion-dispatched
+   `.github/workflows/release.yml` starts three parallel branches: one creates
+   or verifies the protected annotated `v<package-version>` tag at the exact
+   promoted commit, one authenticates locked source, and one waits for and
+   authenticates the immutable JavaScript, iOS, and Android releases. The
+   downstream dependency-validation and consumer jobs wait for all three, so
+   the irreversible tag exists before those gates execute. They then remove
+   local path/repository overrides and build the clean npm consumer plus the
+   official iOS and Android example hosts. The manual
+   `Published dependency consumer` workflow is an optional independent
+   diagnostic; its output is not a release workflow input and does not require
+   promotion to be rerun.
 7. After those internal dependency and consumer gates pass, the same release
-   run creates, or verifies, the annotated `v<package-version>` tag, publishes
-   npm through the trusted publisher, and finalizes the immutable GitHub
-   release. Operators must not create or push that tag manually.
+   run publishes npm through the trusted publisher and finalizes the immutable
+   GitHub release. Operators must not create or push the tag manually. Because
+   the protected tag already exists, a later dependency, consumer, npm, or
+   GitHub-release failure can strand that semantic version; never move or reuse
+   it. Correct the inputs and restart the cross-repository sequence with a new
+   version.
 
 The released-lock successor tuple now satisfies the source transition in steps
 1 through 3. It is still not independently publishable: the protected evidence,
@@ -62,8 +70,45 @@ The inert `@latchway/react-native@0.0.0-bootstrap.0` package record must exist
 under the `bootstrap` dist-tag before stable promotion. Configure that package's
 npm trusted publisher with organization `Latchway`, repository
 `latchway-react-native-sdk`, workflow filename `release.yml`, environment
-`npm`, and allowed action `npm publish`. The matching GitHub `npm` environment
-must be protected, and `Latchway/latchway-react-native-sdk` must be public at
+`npm`, and allowed action `npm publish`. Configure four protected GitHub
+environments: `private-sibling-read`, `npm`, `release-administration`, and
+`github-release`. Every environment must require at least one reviewer, set
+`prevent_self_review: true`, use an exact main-only custom deployment branch
+rule with no tag policy, and disable administrator bypass wherever the repository
+plan exposes that control. A human or administrator is never a release-control
+bypass actor; the active `refs/tags/v*` ruleset may allow only the GitHub Actions
+integration used by this workflow to create the tag.
+
+Each environment must define exactly one environment variable named
+`LATCHWAY_RELEASE_CONTROL_POLICY_ID`, with no repository- or organization-level
+fallback:
+
+- `private-sibling-read`:
+  `latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read`
+- `npm`: `latchway-release-controls-v1:latchway-react-native-sdk:npm`
+- `release-administration`:
+  `latchway-release-controls-v1:latchway-react-native-sdk:release-administration`
+- `github-release`:
+  `latchway-release-controls-v1:latchway-react-native-sdk:github-release`
+
+Delete any repository or organization variable with that name. The first step
+of every protected release job checks the environment-specific value before an
+action, checkout, download, credential, job token, OIDC request, or mutation can
+run; a missing environment that GitHub auto-creates therefore fails closed. The
+`npm` environment is limited to trusted npm publication and retained
+registry evidence; it contains no reusable credential. The
+`release-administration` environment contains only a fine-grained
+`LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN` with read-only repository Administration
+permission, stored only as an environment secret. Its jobs use
+`permissions: {}`, never check out candidate source,
+and receive neither OIDC nor GitHub content-write authority. The
+`github-release` environment protects the separate draft and final GitHub
+release mutation jobs; those jobs receive neither the administration token nor
+npm credentials, and that environment contains no secret. Do not define any of
+these protected names as a repository or organization secret: environment
+review must never fall back to a broader secret scope. The built-in
+`github.token` used for public reads is not a substitute for a protected secret.
+`Latchway/latchway-react-native-sdk` must be public at
 publication time because the required npm provenance is not generated for a
 private source repository. The workflow runs on a GitHub-hosted runner with
 `id-token: write`, npm 11.6.2, and provenance-enabled publication. A separate
@@ -77,11 +122,10 @@ integrity
 The OIDC job rechecks that predeclared name-only closure, byte size, SHA-256,
 SHA-512, integrity, member paths and types, and unpacked size before extraction
 or execution. It invokes the verified CLI directly and never runs `npm install`,
-`npm exec`, or `npx` while holding OIDC or attestation permissions. The protected `npm` environment must also contain a
-fine-grained `LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN` with read-only repository
-Administration permission. Before any draft or asset mutation, the workflow
-requires GitHub's exact immutable-release settings response to report
-`enabled: true` and a Boolean `enforced_by_owner`, and requires the installed
+`npm exec`, or `npx` while holding OIDC or attestation permissions. Before any
+draft or asset mutation, a source-free `release-administration` job requires
+GitHub's exact immutable-release settings response to report
+`enabled: true` and `enforced_by_owner: true`, and requires the installed
 GitHub CLI to support JSON release and asset attestation verification. Bootstrap the npm package
 record through a separately reviewed one-time procedure if the registry requires
 it; the release workflow never accepts `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
@@ -91,21 +135,28 @@ allows tag creation only through the GitHub Actions integration used by
 `.github/workflows/release.yml` and denies tag updates, deletion, and
 non-fast-forward changes. Operators and administrators must not create, move,
 or delete the release tag manually. This server-side rule remains an external
-release prerequisite.
+release prerequisite. Annotated tag creation is the one release mutation that
+uses the authenticated core-promotion report and tag ruleset as its authority;
+it deliberately precedes immutable-release authorization and never uses the
+administration credential.
 
-When any locked sibling repository is private, configure the repository or
-organization Actions secret `LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`. It must
-be a fine-grained token selected only for `Latchway/latchway`,
-`Latchway/latchway-js`, `Latchway/latchway-ios-sdk`, and
-`Latchway/latchway-android`, with repository Contents read permission and no
-write permission. Cross-repository checkout steps use it only for the pinned
-sibling fetch and set `persist-credentials: false`; the promotion job also uses
-it for the exact core release-asset download and attestation verification. If
-the sibling repositories remain private, the published-dependency gate uses the
-same read-only token to verify their immutable releases and assets. The manual
-`Published dependency consumer` workflow confines that token to a protected
-`authenticate-inputs` job that never checks out or executes the React Native
-candidate. Fixed commands fetch and strictly validate the compatibility and
+The v1 release requires the core and all sibling SDK repositories to be public
+before promotion. Keep the historically named `private-sibling-read`
+environment as a credential-free protected approval boundary: it contains no
+secret and must use the reviewer, self-review prevention, main-only branch,
+sentinel, and no-bypass controls above. Never define
+`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN` at environment, repository, or
+organization scope. The release and promotion-envelope jobs use only their
+built-in `github.token` for public GitHub API and checkout reads. The locked
+source workflow instead uses a credential-helper-disabled anonymous HTTPS fetch
+for each exact public commit and rejects every credential prompt. A private
+sibling therefore fails closed; it is not supported by the v1 public release
+workflow and must not be enabled by adding a broader-scoped fallback secret.
+
+The manual `Published dependency consumer` workflow uses only the job's built-in
+`github.token` for public reads inside a protected `authenticate-inputs` job that
+never checks out or executes the React Native candidate. Fixed commands validate
+the compatibility and
 contract locks at the exact workflow commit, authenticate the locked JavaScript
 source into a Git bundle, capture the immutable tag, release, asset, and build
 attestation evidence, and seal everything into one size-bounded, SHA-256-bound
@@ -113,55 +164,73 @@ artifact. The Android and iOS jobs compare the sealed locks byte for byte with
 their exact candidate checkout, validate the complete artifact manifest, clone
 only the authenticated bundle, and use
 `LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS` for offline GitHub evidence. They
-receive no sibling token, `GH_TOKEN`, `GITHUB_TOKEN`, `NODE_AUTH_TOKEN`, or OIDC
-request URL. The main-branch/workflow-dispatch `Locked source conformance`
-workflow applies the same split to source builds. Its protected
-`authenticate-inputs` job has no candidate checkout: a fixed GitHub API request
-reads only `release-compatibility.json` and `contract.lock` at the exact workflow
-commit, then a separately scoped step fetches the four locked commits and creates
-their bundles. When all four sibling repositories are public, that step uses one
-credential-helper-disabled anonymous HTTPS fetch for each exact commit and rejects
-every credential prompt. When the optional sibling token is nonempty, it uses only
-the authenticated path; an invalid or insufficient token fails closed without an
-anonymous retry. Private sibling repositories therefore require the read-only
-`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`, while public siblings do not. A
-credential-free step seals those bundles and locks as an exact six-payload-file,
-size-bounded, SHA-256-bound closure plus its manifest. Fresh JavaScript, Android,
-and iOS jobs have no protected environment, secret, registry authentication, or
-OIDC permission. Before any
-candidate-owned `ci-lock-output.mjs` or build tooling runs, each job asserts that
-the sibling token, `GH_TOKEN`, `GITHUB_TOKEN`, `NODE_AUTH_TOKEN`, and OIDC request
-variables are empty, compares both locks byte for byte with the exact candidate,
-validates the complete archive manifest, and imports all four bundles offline.
-Pull-request `ci.yml` contains no secret reference. Configure and protect the
-`private-sibling-read` environment before enabling these evidence jobs. The
-locked-source handoff never falls back after an authenticated fetch fails; other
-protected reads may continue to fall back to the job token when every sibling
-repository is public.
+receive no `GH_TOKEN`, `GITHUB_TOKEN`, `NODE_AUTH_TOKEN`, or OIDC request URL.
 
-After the protected preflight, the workflow resolves the remote annotated tag
-object to the promoted commit immediately before it creates or resumes the
-fixed-asset GitHub draft before npm publication, but does not publish
-that release until every asset is attached. A separate no-checkout, no-OIDC job
-rechecks the immutable-release setting with the protected administration
-credential. The final OIDC job receives no administration credential and
+The main-branch/workflow-dispatch `Locked source conformance` workflow applies
+the same split to source builds. Its protected `authenticate-inputs` job has no
+candidate checkout: a fixed GitHub API request reads only
+`release-compatibility.json` and `contract.lock` at the exact workflow commit,
+then a separately scoped, credential-free step fetches the four locked public
+commits and creates their bundles. Another credential-free step seals those
+bundles and locks as an exact six-payload-file, size-bounded, SHA-256-bound
+closure plus its manifest. Fresh JavaScript, Android, and iOS jobs have no
+protected environment, secret, registry authentication, or OIDC permission.
+Before candidate-owned `ci-lock-output.mjs` or build tooling runs, each job
+asserts that credential and OIDC variables are empty, compares both locks byte
+for byte with the exact candidate, validates the complete archive manifest, and
+imports all four bundles offline. Pull-request `ci.yml` contains no secret
+reference.
+
+The first source-free `release-administration` preflight waits for the full
+verification, Android, iOS, and authenticated npm-CLI prerequisites. It emits a
+canonical JSON lease plus its SHA-256, bound to the exact repository, release
+coordinates, workflow run and attempt, `draft-and-npm` phase, and the exact
+owner-enforced immutable-release settings. Run and attempt identifiers are
+positive, bounded JSON integers no larger than 9,007,199,254,740,991; strings,
+fractions, zero, and larger values are rejected. The lease lifetime is at most
+600 seconds and its validity interval is half-open:
+`issued_at_epoch <= now < expires_at_epoch`, so the exact expiration second is
+unauthorized. It travels only as canonical JSON and SHA-256 scalar job outputs,
+never as a downloadable
+archive or artifact whose nested filesystem closure could be expanded. Both the
+draft and npm publication jobs reject a noncanonical or oversized JSON closure,
+hash mismatch, wrong run or attempt, wrong phase, repository or release
+substitution, extra field, non-owner-enforced setting, future issue time, or
+expired or overlong lease. They recheck the lease immediately before draft
+creation, npm provenance attestation, and the first npm publish.
+
+After that preflight, the separately reviewed `github-release` job resolves the
+remote annotated tag object to the promoted commit immediately before it creates
+or resumes the fixed-asset GitHub draft before npm publication, but does not
+publish that release until every asset is attached. A second no-checkout,
+no-OIDC `release-administration` job rechecks the immutable-release setting and
+emits a separate `final-github-release` JSON and SHA-256 lease. The final
+`github-release` OIDC job receives no administration credential, validates that
+lease before tooling, and rechecks it immediately before its public provenance
+attestation and every GitHub asset upload or release-finalization mutation. It
 validates the exact local asset closure before attesting it. It checks an existing npm version by
 exact tarball bytes and SHA-512 for safe retry, then retains the bounded raw npm
 registry, `npm view --json --include-attestations`, Sigstore, and
 `npm audit signatures` outputs as hash-bound release assets. Existing GitHub
 assets are downloaded and compared byte for byte, only missing draft assets are
 attached, and a mismatched or incomplete final release stops the run. After
-finalization, it resolves the remote tag again. Bounded retries of
-`gh release verify` and `gh release verify-asset` are parsed with duplicate-key
-rejection: the signed source commit and exact asset-name/SHA-256 closure must
-match every fixed or adoption-history asset.
+finalization and every release/asset attestation verification, it fetches the
+remote tag ref and annotated tag object again and requires the exact tag name
+and promoted commit binding. Bounded retries of `gh release verify` and
+`gh release verify-asset` are parsed with duplicate-key rejection: the signed
+source commit and exact asset-name/SHA-256 closure must match every fixed or
+adoption-history asset.
 
-If an npm publish succeeds but a later step fails, a rerun may adopt that
-immutable version only after rechecking its exact bytes, signatures, and source
-provenance. The attested adoption record binds the original provenance-producing
-run and attempt, the current successful run and attempt, and the exact retained
-registry evidence manifest. The published-dependency gate applies the same
-standard to the locked JavaScript, iOS, and Android releases. React Native links
+If an npm publish succeeds but a later step fails, only GitHub's **Re-run all
+jobs** operation or a fresh promotion dispatch may adopt that immutable version,
+and only after rechecking its exact bytes, signatures, and source provenance.
+Never use **Re-run failed jobs**: successful lease-producing jobs would retain
+the previous `run_attempt`, while their consumers execute under the new attempt
+and correctly reject the stale lease. The attested adoption record binds the
+original provenance-producing run and attempt, the current successful run and
+attempt, and the exact retained registry evidence manifest. The
+published-dependency gate applies the same standard to the locked JavaScript,
+iOS, and Android releases. React Native links
 only `@latchway/client`, but the JavaScript release is indivisible: the gate
 requires its exact 31 fixed assets, all four package archives, the version 2
 reviewed package-set and registry-manifest schemas, the version 2 publish-input
@@ -175,7 +244,7 @@ attestation, and each live registry byte. It independently verifies Maven
 signatures against the attested
 public key with a fail-closed GnuPG status allowlist that rejects revoked,
 expired, unknown, or weak signatures. An interrupted exact promotion can
-therefore be rerun safely.
+therefore be retried only by re-running all jobs or starting a fresh dispatch.
 
 Do not manually create or retag a failed release or overwrite a published npm version.
 Fix the release inputs, choose a new semantic version, and rerun the complete

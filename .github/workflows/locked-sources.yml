@@ -29,6 +29,14 @@ jobs:
     outputs:
       archive_sha256: ${{ steps.seal.outputs.archive_sha256 }}
     steps:
+      - name: Fail closed unless private sibling release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"
       - name: Fetch and strictly validate exact candidate locks
         shell: bash
         env:
@@ -151,8 +159,6 @@ jobs:
 
       - name: Fetch and bundle only the four exact locked sibling objects
         shell: bash
-        env:
-          LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}
         run: |
           set -Eeuo pipefail
           for name in GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL \
@@ -177,18 +183,9 @@ jobs:
             "$sealed/release-compatibility.json")
 
           git_askpass="$RUNNER_TEMP/latchway-locked-sources-askpass.sh"
-          if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then
-            printf '%s\n' '#!/usr/bin/env bash' \
-              'case "$1" in' \
-              '*Username*) printf "%s\\n" x-access-token ;;' \
-              '*Password*) printf "%s\\n" "${LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN:?}" ;;' \
-              '*) exit 1 ;;' \
-              'esac' > "$git_askpass"
-          else
-            # Public-source mode never consults a runner credential store and
-            # fails instead of prompting if any locked repository is private.
-            printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$git_askpass"
-          fi
+          # Public-source mode never consults a runner credential store and
+          # fails instead of prompting if any locked repository is private.
+          printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$git_askpass"
           chmod 700 "$git_askpass"
           trap 'rm -f -- "$git_askpass"' EXIT
 

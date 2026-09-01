@@ -20,7 +20,7 @@ jobs:
   pull-request:
     name: Hermetic pull-request policy and source checks
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out React Native SDK without credentials
@@ -60,6 +60,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+      - name: Install pinned actionlint
+        run: node scripts/install-actionlint.mjs
+      - name: Validate every workflow with pinned actionlint
+        run: |
+          set -euo pipefail
+          test "$(actionlint -version | sed -n '1p')" = "1.7.12"
+          actionlint -shellcheck= -pyflakes= -oneline .github/workflows/*.yml
       - name: Build the exact locked JavaScript SDK source
         env:
           JAVASCRIPT_COMMIT: ${{ steps.javascript.outputs.commit }}

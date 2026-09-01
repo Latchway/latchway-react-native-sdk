@@ -71,23 +71,28 @@ def validate_workflow(source: str) -> None:
     require("actions/checkout@" not in authenticator, "authenticator checked out candidate code")
     require("working-directory:" not in authenticator, "authenticator entered a candidate checkout")
 
-    secret_reference = "${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}"
-    require(source.count(secret_reference) == 1, "sibling secret must have one exact reference")
-    require(secret_reference in authenticator, "sibling secret escaped the authenticator")
+    require("secrets." not in authenticator, "public authenticator must not reference secrets")
     require(
         source.count("${{ github.token }}") == 1
         and "GH_TOKEN: ${{ github.token }}" in authenticator,
         "current-repository token must be confined to the fixed lock API step",
     )
+    first_step = re.search(r"(?m)^      - name: (?P<name>[^\n]+)", authenticator)
+    require(
+        first_step is not None
+        and first_step.group("name").startswith("Fail closed unless")
+        and "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"
+        in named_step_block(authenticator, first_step.group("name")),
+        "protected authenticator must start with the exact policy sentinel",
+    )
 
     bundle_step = named_step_block(
         authenticator, "Fetch and bundle only the four exact locked sibling objects"
     )
-    require(secret_reference in bundle_step, "sibling secret must be scoped to bundle fetching")
+    require("secrets." not in bundle_step, "public sibling bundling must not reference secrets")
     require(
-        'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then'
-        in bundle_step,
-        "optional sibling token path must be selected only when the token is nonempty",
+        'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]' not in bundle_step,
+        "public sibling bundling must not retain an authenticated fallback",
     )
     require(
         "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\""
@@ -270,13 +275,15 @@ class LockedSourcesWorkflowTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(within_secret, "candidate execution")
 
-    def test_rejects_weakened_public_or_private_source_authentication(self) -> None:
-        unconditional_token = self.source.replace(
-            'if [[ -n "$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" ]]; then',
-            "if true; then",
+    def test_rejects_weakened_public_source_authentication(self) -> None:
+        secret_fallback = self.source.replace(
+            "      - name: Fetch and bundle only the four exact locked sibling objects\n",
+            "      - name: Fetch and bundle only the four exact locked sibling objects\n"
+            "        env:\n"
+            "          SIBLING_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN }}\n",
             1,
         )
-        self.assert_mutation_rejected(unconditional_token, "optional sibling token path")
+        self.assert_mutation_rejected(secret_fallback, "must not reference secrets")
 
         prompting_anonymous = self.source.replace(
             "printf '%s\\n' '#!/usr/bin/env bash' 'exit 1' > \"$git_askpass\"",

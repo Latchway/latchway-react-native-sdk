@@ -692,7 +692,7 @@ test("each dependency verifier consumes fresh deterministic locked-source JavaSc
 
 test("release workflow drafts before npm and publishes GitHub only after evidence attestation", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  const draft = workflow.indexOf("Preflight immutable release and create draft with fixed API calls");
+  const draft = workflow.indexOf("Create or verify GitHub draft with fixed API calls");
   const cliCapability = workflow.indexOf("gh release verify --help");
   const npmPublish = workflow.indexOf('"$LATCHWAY_NPM_CLI" publish "$archive"');
   const registryVerify = workflow.indexOf("node scripts/verify-published.mjs");
@@ -726,6 +726,10 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
     workflow.indexOf("\n  trusted-npm-cli:\n"),
     workflow.indexOf("\n  github-draft:\n"),
   );
+  const authorizeReleaseJob = workflow.slice(
+    workflow.indexOf("\n  authorize-release:\n"),
+    workflow.indexOf("\n  trusted-npm-cli:\n"),
+  );
   const githubDraftJob = workflow.slice(
     workflow.indexOf("\n  github-draft:\n"),
     workflow.indexOf("\n  npm-publish:\n"),
@@ -742,6 +746,14 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
     workflow.indexOf("\n  publish:\n"),
     workflow.indexOf("\n  github-release-policy:\n"),
   );
+  assert.match(authorizeReleaseJob,
+    /needs: \[promote, verify, android, ios, trusted-npm-cli\][\s\S]*environment: release-administration\n {4}permissions: \{\}/u);
+  assert.match(authorizeReleaseJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
+  assert.doesNotMatch(authorizeReleaseJob,
+    /actions\/checkout|scripts\/|id-token:|attestations:|contents:|github\.token/u);
+  assert.match(githubDraftJob,
+    /needs: \[promote, authorize-release\][\s\S]*environment: github-release\n {4}permissions:\n {6}contents: write/u);
+  assert.doesNotMatch(githubDraftJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
   assert.match(trustedNpmJob, /permissions: \{\}/u);
   assert.match(trustedNpmJob, /NPM_CONFIG_IGNORE_SCRIPTS: "true"/u);
   assert.match(trustedNpmJob, /sha512sum --check --strict/u);
@@ -749,7 +761,9 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
     /actions\/checkout|secrets\.|github\.token|id-token:|attestations:|npm install|npm exec/u);
   assert.doesNotMatch(trustedNpmJob, /(?:^|\n)\s*npx\s/u);
   assert.match(npmPublishJob,
-    /needs: \[promote, verify, android, ios, trusted-npm-cli, github-draft\]/u);
+    /needs: \[promote, verify, android, ios, trusted-npm-cli, authorize-release, github-draft\]/u);
+  assert.match(npmPublishJob, /environment: npm/u);
+  assert.doesNotMatch(npmPublishJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
   assert.match(npmPublishJob, /Verify exact npm CLI closure before extraction or execution/u);
   assert.doesNotMatch(npmPublishJob, /npm install|npm exec/u);
   assert.doesNotMatch(npmPublishJob, /(?:^|\n)\s*npx\s/u);
@@ -761,6 +775,8 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   );
   assert.match(registryEvidenceJob,
     /needs: \[promote, verify, android, ios, trusted-npm-cli, github-draft, npm-publish\]/u);
+  assert.match(registryEvidenceJob, /environment: npm/u);
+  assert.doesNotMatch(registryEvidenceJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
   assert.match(registryEvidenceJob, /Verify exact npm CLI closure before registry evidence/u);
   assert.match(registryEvidenceJob, /LATCHWAY_NPM_CLI/u);
   assert.doesNotMatch(registryEvidenceJob, /npm install --global|npm exec/u);
@@ -774,8 +790,32 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   );
   const releaseJob = workflow.slice(workflow.indexOf("\n  github-release:\n"));
   assert.match(policyJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
+  assert.match(policyJob, /environment: release-administration\n {4}permissions: \{\}/u);
   assert.doesNotMatch(policyJob, /id-token: write|attestations: write|actions\/checkout|scripts\//u);
   assert.doesNotMatch(releaseJob, /LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
+  assert.match(releaseJob,
+    /environment: github-release\n {4}permissions:\n {6}actions: read\n {6}attestations: write\n {6}contents: write\n {6}id-token: write/u);
+  assert.equal((workflow.match(/environment: npm/gu) ?? []).length, 2);
+  assert.equal((workflow.match(/environment: release-administration/gu) ?? []).length, 2);
+  assert.equal((workflow.match(/environment: github-release/gu) ?? []).length, 2);
+  const releaseDocumentation = await readFile(
+    new URL("../docs/releasing.md", import.meta.url), "utf8",
+  );
+  assert.match(releaseDocumentation,
+    /four protected GitHub\s+environments: `private-sibling-read`, `npm`, `release-administration`, and\s+`github-release`/u);
+  assert.match(releaseDocumentation,
+    /Every environment must require at least one reviewer, set\s+`prevent_self_review: true`, use an exact main-only custom deployment branch/u);
+  assert.match(releaseDocumentation,
+    /`npm` environment[\s\S]*contains no reusable credential/u);
+  assert.match(releaseDocumentation,
+    /The\s+`release-administration` environment contains only a fine-grained\s+`LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN`/u);
+  assert.match(releaseDocumentation,
+    /The\s+`github-release` environment[\s\S]*receive neither the administration token nor\s+npm credentials/u);
+  assert.match(releaseDocumentation,
+    /`LATCHWAY_RELEASE_CONTROL_POLICY_ID`, with no repository- or organization-level\s+fallback/u);
+  assert.match(releaseDocumentation, /disable administrator bypass/u);
+  assert.match(releaseDocumentation,
+    /Do not define any of\s+these protected names as a repository or organization secret/u);
   assert.match(releaseJob, /cmp --silent "\$RUNNER_TEMP\/expected-assets\.txt"/u);
   const reconciler = await readFile(new URL("reconcile-github-release.py", import.meta.url), "utf8");
   for (const control of [
@@ -792,8 +832,230 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   assert.match(workflow.slice(githubPublish), /\.object\.sha == \$commit/u);
 });
 
-test("private sibling reads stay outside pull-request CI and use the bounded token", async () => {
-  const token = "token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}";
+test("protected release authority is sentinel-first, lease-bound, and secret-exact", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const documentation = await readFile(new URL("../docs/releasing.md", import.meta.url), "utf8");
+  const promote = workflowJob(workflow, "promote");
+  assert.match(promote, /needs: verify-promotion/u);
+  assert.match(promote, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
+  assert.equal((promote.match(/gh api --method POST/gu) ?? []).length, 2);
+  assert.doesNotMatch(promote, /\bsecrets\s*(?:\.|\[)|LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN/u);
+  const publishedDependencies = workflowJob(workflow, "published-dependencies");
+  const lockedSources = workflowJob(workflow, "locked-sources");
+  const consumer = workflowJob(workflow, "verify");
+  assert.match(publishedDependencies, /needs: verify-promotion/u);
+  assert.match(lockedSources, /needs: verify-promotion/u);
+  assert.match(consumer,
+    /needs: \[promote, locked-sources, published-dependencies\]/u);
+  assert.match(documentation,
+    /Annotated tag creation is the one release mutation that\s+uses the authenticated core-promotion report and tag ruleset as its authority;\s+it deliberately precedes immutable-release authorization/u);
+  assert.match(documentation,
+    /starts three parallel branches: one creates\s+or verifies the protected annotated/u);
+  assert.match(documentation,
+    /the irreversible tag exists before those gates execute/u);
+  const policies = new Map([
+    ["locked-sources", "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"],
+    ["published-dependencies", "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"],
+    ["authorize-release", "latchway-release-controls-v1:latchway-react-native-sdk:release-administration"],
+    ["github-draft", "latchway-release-controls-v1:latchway-react-native-sdk:github-release"],
+    ["npm-publish", "latchway-release-controls-v1:latchway-react-native-sdk:npm"],
+    ["publish", "latchway-release-controls-v1:latchway-react-native-sdk:npm"],
+    ["github-release-policy", "latchway-release-controls-v1:latchway-react-native-sdk:release-administration"],
+    ["github-release", "latchway-release-controls-v1:latchway-react-native-sdk:github-release"],
+  ]);
+  const secretAllowlists = new Map([
+    ["locked-sources", []],
+    ["published-dependencies", []],
+    ["authorize-release", ["LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"]],
+    ["github-draft", []],
+    ["npm-publish", []],
+    ["publish", []],
+    ["github-release-policy", ["LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"]],
+    ["github-release", []],
+  ]);
+  for (const [name, policy] of policies) {
+    const job = workflowJob(workflow, name);
+    const first = firstWorkflowStep(job);
+    assert.match(first, /- name: Fail closed unless/u, `${name} does not fail closed first`);
+    assert.match(first,
+      /LATCHWAY_RELEASE_CONTROL_POLICY_ID: \$\{\{ vars\.LATCHWAY_RELEASE_CONTROL_POLICY_ID \}\}/u,
+      `${name} does not read its environment sentinel`);
+    assert.ok(first.includes(`"${policy}"`), `${name} has the wrong sentinel identity`);
+    assert.match(first, /test "\$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \\/u);
+    assert.doesNotMatch(first,
+      /uses:|\bsecrets\s*(?:\.|\[)|github\.token|ACTIONS_ID_TOKEN|GH_TOKEN|RELEASE_TOKEN|\bcurl\s|\bgh\s/u,
+      `${name} acquires authority before the sentinel`);
+    assert.deepEqual([...workflowSecretReferences(job)].sort(), secretAllowlists.get(name));
+  }
+
+  const authorization = workflowJob(workflow, "authorize-release");
+  const evilFallback = authorization.replace(
+    "secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN",
+    "secrets['LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN'] || secrets[\"EVIL_TOKEN\"]",
+  );
+  assert.deepEqual([...workflowSecretReferences(evilFallback)].sort(),
+    ["EVIL_TOKEN", "LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"]);
+  assert.throws(() => workflowSecretReferences(authorization.replace(
+    "secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", "secrets[inputs.secret_name]",
+  )), /dynamic or unparsed secret reference/u);
+  const actionFirst = authorization.replace(
+    "\n    steps:\n", "\n    steps:\n      - uses: actions/checkout@attacker\n",
+  );
+  assert.doesNotMatch(firstWorkflowStep(actionFirst), /Fail closed unless/u);
+
+  assert.match(authorization,
+    /needs: \[promote, verify, android, ios, trusted-npm-cli\]/u);
+  assert.match(authorization,
+    /policy_lease_json: \$\{\{ steps\.policy\.outputs\.lease_json \}\}/u);
+  assert.match(authorization,
+    /policy_lease_sha256: \$\{\{ steps\.policy\.outputs\.lease_sha256 \}\}/u);
+  assert.doesNotMatch(authorization, /actions\/(?:upload|download)-artifact@/u);
+  assert.match(authorization,
+    /\.enabled == true and \.enforced_by_owner == true/u);
+  assert.match(authorization, /expires_at_epoch=\$\(\(issued_at_epoch \+ 600\)\)/u);
+  const finalPolicy = workflowJob(workflow, "github-release-policy");
+  assert.match(finalPolicy,
+    /policy_lease_json: \$\{\{ steps\.policy\.outputs\.lease_json \}\}/u);
+  assert.match(finalPolicy,
+    /policy_lease_sha256: \$\{\{ steps\.policy\.outputs\.lease_sha256 \}\}/u);
+  assert.doesNotMatch(finalPolicy, /actions\/(?:upload|download)-artifact@/u);
+  assert.match(finalPolicy, /--arg phase final-github-release/u);
+  assert.match(finalPolicy, /\.enabled == true and \.enforced_by_owner == true/u);
+  assert.match(finalPolicy, /expires_at_epoch=\$\(\(issued_at_epoch \+ 600\)\)/u);
+  for (const producer of [authorization, finalPolicy]) {
+    assert.ok(producer.includes('--argjson run_id "$GITHUB_RUN_ID"'));
+    assert.ok(producer.includes('--argjson run_attempt "$GITHUB_RUN_ATTEMPT"'));
+    assert.ok(!producer.includes('--arg run_id "$GITHUB_RUN_ID"'));
+    assert.ok(!producer.includes('--arg run_attempt "$GITHUB_RUN_ATTEMPT"'));
+  }
+
+  const draft = workflowJob(workflow, "github-draft");
+  assert.match(draft,
+    /AUTHORIZATION_LEASE_JSON: \$\{\{ needs\.authorize-release\.outputs\.policy_lease_json \}\}/u);
+  assert.match(draft,
+    /validate_release_policy_lease draft-and-npm\n {12}gh release create/u);
+  const npm = workflowJob(workflow, "npm-publish");
+  assert.match(npm,
+    /validate_release_policy_lease draft-and-npm\n {6}- name: Attest reviewed npm package/u);
+  assert.match(npm,
+    /validate_release_policy_lease draft-and-npm\n {12}"\$LATCHWAY_NPM_CLI" publish/u);
+  const release = workflowJob(workflow, "github-release");
+  assert.match(release,
+    /validate_final_policy_lease final-github-release\n {6}- name: Attest exact retained registry and release evidence/u);
+  assert.match(release,
+    /validate_final_policy_lease final-github-release\n {12}gh release upload/u);
+  assert.equal((release.match(
+    /validate_final_policy_lease final-github-release\n {14}gh release edit/gu,
+  ) ?? []).length, 2);
+  assert.equal((workflow.match(
+    /\.issued_at_epoch <= \$now and \$now < \.expires_at_epoch/gu,
+  ) ?? []).length, 7);
+  assert.doesNotMatch(workflow, /\$now <= \.expires_at_epoch/u);
+  assert.equal((workflow.match(/\(\.run_id \| type\) == "number"/gu) ?? []).length, 7);
+  assert.equal((workflow.match(/\.run_id <= 9007199254740991/gu) ?? []).length, 7);
+  assert.equal((workflow.match(/\.run_attempt <= 9007199254740991/gu) ?? []).length, 7);
+
+  const now = Math.floor(Date.now() / 1000);
+  const baseLease = {
+    expires_at_epoch: now + 595,
+    issued_at_epoch: now - 5,
+    kind: "latchway_release_policy_lease",
+    phase: "draft-and-npm",
+    policy_id: "latchway-release-controls-v1:latchway-react-native-sdk:release-administration",
+    release_commit: "a".repeat(40),
+    release_tag: "v1.0.0",
+    release_version: "1.0.0",
+    repository: "Latchway/latchway-react-native-sdk",
+    run_attempt: 2,
+    run_id: 41,
+    schema_version: 1,
+    settings: { enabled: true, enforced_by_owner: true },
+  };
+  const validator = bashFunction(npm, "validate_release_policy_lease");
+  assert.doesNotThrow(() => runWorkflowLeaseValidator(
+    validator, "validate_release_policy_lease", "draft-and-npm", baseLease,
+  ));
+  for (const candidate of [
+    { ...baseLease, phase: "final-github-release" },
+    { ...baseLease, repository: "attacker/repo" },
+    { ...baseLease, run_id: 42 },
+    { ...baseLease, run_attempt: 1 },
+    { ...baseLease, run_id: "41" },
+    { ...baseLease, run_attempt: "2" },
+    { ...baseLease, run_id: 41.5 },
+    { ...baseLease, run_attempt: 0 },
+    { ...baseLease, run_id: 9_007_199_254_740_992 },
+    { ...baseLease, unexpected: true },
+    { ...baseLease, settings: { enabled: true, enforced_by_owner: false } },
+    { ...baseLease, issued_at_epoch: now - 700, expires_at_epoch: now - 100 },
+    { ...baseLease, issued_at_epoch: now - 1, expires_at_epoch: now + 600 },
+  ]) assert.throws(() => runWorkflowLeaseValidator(
+    validator, "validate_release_policy_lease", "draft-and-npm", candidate,
+  ));
+  assert.throws(() => runWorkflowLeaseValidator(
+    validator, "validate_release_policy_lease", "draft-and-npm",
+    { ...baseLease, issued_at_epoch: now - 600, expires_at_epoch: now },
+    { now },
+  ));
+  assert.throws(() => runWorkflowLeaseValidator(
+    validator, "validate_release_policy_lease", "draft-and-npm", baseLease,
+    { digest: "f".repeat(64) },
+  ));
+  const canonical = JSON.stringify(sortJSON(baseLease));
+  assert.throws(() => runWorkflowLeaseValidator(
+    validator, "validate_release_policy_lease", "draft-and-npm", baseLease,
+    { json: `${canonical} ` },
+  ));
+
+  const tagRefEndpoint = 'gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"';
+  assert.equal(release.split(tagRefEndpoint).length - 1, 2);
+  const postFinalizationTag = release.indexOf(
+    '"$RUNNER_TEMP/post-finalization-tag-ref.json"',
+  );
+  assert.ok(postFinalizationTag > release.lastIndexOf("gh release verify-asset"));
+  assert.ok(release.slice(postFinalizationTag).includes(
+    'gh api "repos/$GITHUB_REPOSITORY/git/tags/$final_tag_object"',
+  ));
+  assert.ok(release.slice(postFinalizationTag).includes(
+    '.sha == $object and .tag == $tag and .object.type == "commit" and',
+  ));
+  assert.ok(release.slice(postFinalizationTag).includes('.object.sha == $commit'));
+  assert.match(documentation, /\*\*Re-run all\s+jobs\*\*/u);
+  assert.match(documentation, /Never use \*\*Re-run failed jobs\*\*/u);
+  assert.match(documentation, /protected tag already exists/u);
+  assert.match(documentation, /validity interval is half-open/u);
+});
+
+test("CI checksum-pins actionlint and checks every workflow", async () => {
+  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const pullRequest = workflowJob(ci, "pull-request");
+  const installer = await readFile(new URL("install-actionlint.mjs", import.meta.url), "utf8");
+  const mise = await readFile(new URL("../mise.toml", import.meta.url), "utf8");
+
+  assert.match(pullRequest, /runs-on: ubuntu-24\.04/u);
+  const setupNode = pullRequest.indexOf("actions/setup-node@");
+  const installActionlint = pullRequest.indexOf("node scripts/install-actionlint.mjs");
+  const lintWorkflows = pullRequest.indexOf(
+    "actionlint -shellcheck= -pyflakes= -oneline .github/workflows/*.yml",
+  );
+  assert.ok(setupNode >= 0 && setupNode < installActionlint);
+  assert.ok(installActionlint < lintWorkflows);
+  assert.match(pullRequest,
+    /test "\$\(actionlint -version \| sed -n '1p'\)" = "1\.7\.12"/u);
+  assert.match(mise, /actionlint = "1\.7\.12"/u);
+  assert.match(installer, /const VERSION = "1\.7\.12";/u);
+  assert.match(installer,
+    /const EXPECTED_SHA256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8";/u);
+  assert.match(installer, /MAXIMUM_ARCHIVE_BYTES = 8 \* 1024 \* 1024/u);
+  assert.match(installer, /response\.url\.startsWith\("https:\/\/"\)/u);
+  assert.ok(installer.includes(
+    "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/",
+  ));
+  assert.match(installer, /execFileSync\("tar", \["-xzf", archivePath/u);
+  assert.doesNotMatch(installer, /npm\s+(?:exec|install)|\bnpx\b/u);
+});
+
+test("sibling reads are public-only and never fall back to a secret", async () => {
   const pullRequestWorkflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.doesNotMatch(pullRequestWorkflow, /secrets\.|repository:\s+Latchway\//u);
   const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
@@ -801,16 +1063,23 @@ test("private sibling reads stay outside pull-request CI and use the bounded tok
   assert.ok(siblingCheckouts > 0, "release.yml no longer exercises a sibling checkout");
   for (const match of releaseWorkflow.matchAll(/^\s+repository:\s+Latchway\//gmu)) {
     const nextStep = releaseWorkflow.indexOf("\n      - ", match.index + 1);
-    assert.ok(releaseWorkflow.slice(match.index, nextStep === -1 ? undefined : nextStep).includes(token),
-      "release.yml has a sibling checkout without the bounded token fallback");
+    assert.ok(releaseWorkflow.slice(match.index, nextStep === -1 ? undefined : nextStep)
+      .includes("token: ${{ github.token }}"),
+    "release.yml has a sibling checkout without the built-in public-read token");
   }
+  assert.doesNotMatch(releaseWorkflow,
+    /secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN/u);
 
   const lockedSources = await readFile(new URL("../.github/workflows/locked-sources.yml", import.meta.url), "utf8");
   assert.doesNotMatch(lockedSources, /^\s+repository:\s+Latchway\//mu);
-  assert.equal((lockedSources.match(
-    /\$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \}\}/gu,
-  ) ?? []).length, 1);
+  assert.doesNotMatch(lockedSources, /\bsecrets\s*(?:\.|\[)/u);
   assert.equal((lockedSources.match(/environment: private-sibling-read/gu) ?? []).length, 1);
+  const lockedAuthenticator = workflowJob(lockedSources, "authenticate-inputs");
+  assert.ok(firstWorkflowStep(lockedAuthenticator).includes(
+    "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
+  ));
+  assert.doesNotMatch(lockedSources,
+    /if \[\[ -n "\$LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN" \]\]/u);
   for (const marker of [
     'bundle_locked_repository Latchway/latchway-js "$JAVASCRIPT_COMMIT" latchway-js',
     'bundle_locked_repository Latchway/latchway-android "$ANDROID_COMMIT" latchway-android',
@@ -822,10 +1091,13 @@ test("private sibling reads stay outside pull-request CI and use the bounded tok
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../docs/native-installation.md", import.meta.url), "utf8"),
   ]);
-  assert.match(documentation, /`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN`/u);
-  assert.match(documentation, /Contents read permission and no\s+write permission/u);
+  assert.match(documentation, /repositories to be public\s+before promotion/u);
+  assert.match(documentation, /contains no\s+secret/u);
+  assert.match(documentation,
+    /Never define\s+`LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN` at environment, repository, or\s+organization scope/u);
   assert.match(documentation, /credential-helper-disabled anonymous HTTPS/u);
-  assert.match(documentation, /fails closed without an\s+anonymous retry/u);
+  assert.match(documentation,
+    /`private-sibling-read`\s+environment as a credential-free protected approval boundary/u);
   assert.match(documentation, /repository_dispatch/u);
   assert.match(documentation, /tag manually/iu);
   assert.doesNotMatch(documentation, /\n(?:git tag|git push)\s/u);
@@ -844,8 +1116,11 @@ test("published native consumers receive only a sealed credential-free input art
 
   assert.doesNotMatch(authenticated, /actions\/checkout|working-directory:|node scripts\//u);
   assert.match(authenticated, /environment: private-sibling-read/u);
-  assert.match(authenticated,
-    /GH_TOKEN: \$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \|\| github\.token \}\}/u);
+  assert.doesNotMatch(authenticated, /\bsecrets\s*(?:\.|\[)/u);
+  assert.equal((authenticated.match(/\$\{\{ github\.token \}\}/gu) ?? []).length, 2);
+  assert.ok(firstWorkflowStep(workflowJob(workflow, "authenticate-inputs")).includes(
+    "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
+  ));
   assert.match(authenticated,
     /repos\/\$GITHUB_REPOSITORY\/contents\/\$path\?ref=\$GITHUB_SHA/u);
   assert.match(authenticated, /jq --exit-status/u);
@@ -885,8 +1160,8 @@ test("raw GitHub dependency readers use only authenticated offline captures in c
     consumerWorkflow.indexOf("\n  android:\n"),
   );
   const credentialFreeConsumers = consumerWorkflow.slice(consumerWorkflow.indexOf("\n  android:\n"));
-  assert.match(authenticatedConsumerInputs,
-    /GH_TOKEN: \$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \|\| github\.token \}\}/u);
+  assert.doesNotMatch(authenticatedConsumerInputs, /\bsecrets\s*(?:\.|\[)/u);
+  assert.match(authenticatedConsumerInputs, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
   assert.doesNotMatch(credentialFreeConsumers, /secrets\.|GH_TOKEN:\s*\$\{\{/u);
   assert.match(credentialFreeConsumers, /LATCHWAY_AUTHENTICATED_DEPENDENCY_INPUTS/u);
 
@@ -934,10 +1209,9 @@ test("published dependency gate requires immutable attested assets and live regi
   const dependencyGate = releaseWorkflow.slice(
     releaseWorkflow.indexOf("Authenticate published sibling inputs without candidate checkout"),
   );
-  assert.match(
-    dependencyGate,
-    /GH_TOKEN: \$\{\{ secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN \|\| github\.token \}\}/u,
-  );
+  assert.doesNotMatch(dependencyGate,
+    /secrets\.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN/u);
+  assert.match(dependencyGate, /GH_TOKEN: \$\{\{ github\.token \}\}/u);
   const credentialFreeVerification = releaseWorkflow.slice(
     releaseWorkflow.indexOf("\n  verify:\n"),
     releaseWorkflow.indexOf("\n  android:\n"),
@@ -1439,6 +1713,74 @@ function workflowJob(workflow, name) {
   const remainder = workflow.slice(start + anchor.length);
   const next = /\n {2}[a-z0-9][a-z0-9_-]*:\n/u.exec(remainder);
   return next === null ? remainder : remainder.slice(0, next.index);
+}
+
+function firstWorkflowStep(job) {
+  const steps = job.indexOf("\n    steps:\n");
+  assert.ok(steps >= 0, "workflow job has no steps");
+  const start = job.indexOf("\n      - ", steps);
+  assert.ok(start >= 0, "workflow job has no first step");
+  const end = job.indexOf("\n      - ", start + 1);
+  return job.slice(start, end < 0 ? undefined : end);
+}
+
+function workflowSecretReferences(job) {
+  const references = new Set();
+  for (const expression of job.matchAll(/\$\{\{([\s\S]*?)\}\}/gu)) {
+    const body = expression[1];
+    if (!/\bsecrets\b/u.test(body)) continue;
+    const pattern = /\bsecrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])/gu;
+    const matches = [...body.matchAll(pattern)];
+    const scrubbed = body.replace(pattern, "");
+    assert.ok(matches.length > 0 && !/\bsecrets\b/u.test(scrubbed),
+      "dynamic or unparsed secret reference");
+    for (const match of matches) references.add(match[1] ?? match[3]);
+  }
+  return references;
+}
+
+function sortJSON(value) {
+  if (Array.isArray(value)) return value.map((item) => sortJSON(item));
+  if (value !== null && typeof value === "object") return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, sortJSON(value[key])]),
+  );
+  return value;
+}
+
+function runWorkflowLeaseValidator(functionSource, functionName, phase, lease, options = {}) {
+  const leaseJSON = options.json ?? JSON.stringify(sortJSON(lease));
+  const digest = options.digest ?? sha256(Buffer.from(leaseJSON));
+  const validatorSource = options.now === undefined ? functionSource : functionSource.replace(
+    "now=$(date -u +%s)", 'now="${LATCHWAY_TEST_NOW:?}"',
+  );
+  if (options.now !== undefined) {
+    assert.ok(Number.isSafeInteger(options.now) && options.now > 0);
+    assert.notEqual(validatorSource, functionSource,
+      "lease validator does not read the current epoch");
+  }
+  execFileSync("/bin/bash", ["-c", [
+    "set -Eeuo pipefail",
+    validatorSource,
+    `${functionName} ${phase}`,
+    "",
+  ].join("\n")], {
+    env: {
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      GITHUB_REPOSITORY: "Latchway/latchway-react-native-sdk",
+      GITHUB_RUN_ID: "41",
+      GITHUB_RUN_ATTEMPT: "2",
+      RELEASE_COMMIT: "a".repeat(40),
+      RELEASE_TAG: "v1.0.0",
+      RELEASE_VERSION: "1.0.0",
+      AUTHORIZATION_LEASE_JSON: leaseJSON,
+      AUTHORIZATION_LEASE_SHA256: digest,
+      FINAL_POLICY_LEASE_JSON: leaseJSON,
+      FINAL_POLICY_LEASE_SHA256: digest,
+      ...(options.now === undefined ? {} : { LATCHWAY_TEST_NOW: String(options.now) }),
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function artifactActionNames(workflow, operation) {

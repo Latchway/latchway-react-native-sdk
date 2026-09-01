@@ -39,6 +39,14 @@ jobs:
       archive_sha256: ${{ steps.seal.outputs.archive_sha256 }}
       artifact_name: ${{ steps.seal.outputs.artifact_name }}
     steps:
+      - name: Fail closed unless private sibling release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"
       - name: Require fixed GitHub release tooling without credentials
         shell: bash
         run: |
@@ -57,7 +65,7 @@ jobs:
         shell: bash
         env:
           CURRENT_REPOSITORY_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           test -n "$CURRENT_REPOSITORY_TOKEN"

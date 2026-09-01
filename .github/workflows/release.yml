@@ -80,7 +80,7 @@ jobs:
           CORE_TAG: ${{ github.event.client_payload.core_tag }}
           REPORT_URL: ${{ github.event.client_payload.promotion_evidence_url }}
           REPORT_SHA256: ${{ github.event.client_payload.promotion_evidence_sha256 }}
-          CORE_READ_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          CORE_READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/latchway-cross-repository-promotion.json"
@@ -99,7 +99,7 @@ jobs:
       - name: Verify the core workflow artifact attestation with read-only credentials
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh attestation verify "$RUNNER_TEMP/latchway-cross-repository-promotion.json" \
@@ -289,6 +289,14 @@ jobs:
       ios_artifact_name: ${{ steps.artifact-names.outputs.ios }}
       javascript_artifact_name: ${{ steps.artifact-names.outputs.javascript }}
     steps:
+      - name: Fail closed unless private sibling release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"
       - name: Validate locked source coordinates before credentials
         shell: bash
         env:
@@ -305,7 +313,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-js
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          token: ${{ github.token }}
           ref: ${{ needs.verify-promotion.outputs.javascript_commit }}
           path: latchway-js
           fetch-depth: 0
@@ -314,7 +322,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-ios-sdk
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          token: ${{ github.token }}
           ref: ${{ needs.verify-promotion.outputs.ios_commit }}
           path: latchway-ios-sdk
           fetch-depth: 0
@@ -323,7 +331,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway-android
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          token: ${{ github.token }}
           ref: ${{ needs.verify-promotion.outputs.android_commit }}
           path: latchway-android
           fetch-depth: 0
@@ -332,7 +340,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway
-          token: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          token: ${{ github.token }}
           ref: ${{ needs.verify-promotion.outputs.core_commit }}
           path: latchway
           fetch-depth: 0
@@ -417,6 +425,14 @@ jobs:
     outputs:
       artifact_name: ${{ steps.artifact-name.outputs.name }}
     steps:
+      - name: Fail closed unless private sibling release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"
       - name: Require fixed GitHub release tooling without credentials
         shell: bash
         run: |
@@ -433,7 +449,7 @@ jobs:
       - name: Download and authenticate exact private release inputs with fixed API calls
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.LATCHWAY_SIBLING_REPOSITORIES_READ_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           ANDROID_COMMIT: ${{ needs.verify-promotion.outputs.android_commit }}
           ANDROID_VERSION: ${{ needs.verify-promotion.outputs.android_version }}
           CORE_COMMIT: ${{ needs.verify-promotion.outputs.core_commit }}
@@ -1013,6 +1029,98 @@ jobs:
           build
         working-directory: latchway-react-native-sdk/example/ios
 
+  authorize-release:
+    name: Require immutable GitHub releases without candidate source or OIDC
+    if: github.repository == 'Latchway/latchway-react-native-sdk'
+    needs: [promote, verify, android, ios, trusted-npm-cli]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release-administration
+    permissions: {}
+    outputs:
+      policy_lease_json: ${{ steps.policy.outputs.lease_json }}
+      policy_lease_sha256: ${{ steps.policy.outputs.lease_sha256 }}
+    steps:
+      - name: Fail closed unless release administration controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:release-administration"
+      - name: Verify immutable-release policy and issue an attempt-bound lease
+        id: policy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+          RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$GH_TOKEN"
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+          (( GITHUB_RUN_ID <= 9007199254740991 ))
+          (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          settings=$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases")
+          unset GH_TOKEN
+          canonical_settings=$(jq --exit-status --compact-output --sort-keys '
+            if type == "object" and
+              (keys | sort) == ["enabled", "enforced_by_owner"] and
+              .enabled == true and .enforced_by_owner == true
+            then {enabled: .enabled, enforced_by_owner: .enforced_by_owner}
+            else error("immutable release policy is not owner-enforced")
+            end
+          ' <<<"$settings")
+          test "$canonical_settings" = '{"enabled":true,"enforced_by_owner":true}'
+          issued_at_epoch=$(date -u +%s)
+          [[ "$issued_at_epoch" =~ ^[1-9][0-9]*$ ]]
+          expires_at_epoch=$((issued_at_epoch + 600))
+          lease_json=$(jq --null-input --compact-output --sort-keys \
+            --arg kind latchway_release_policy_lease \
+            --arg phase draft-and-npm \
+            --arg policy_id \
+              latchway-release-controls-v1:latchway-react-native-sdk:release-administration \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_commit "$RELEASE_COMMIT" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg release_version "$RELEASE_VERSION" \
+            --argjson issued_at_epoch "$issued_at_epoch" \
+            --argjson expires_at_epoch "$expires_at_epoch" \
+            --argjson settings "$canonical_settings" '
+            {
+              schema_version: 1,
+              kind: $kind,
+              phase: $phase,
+              policy_id: $policy_id,
+              repository: $repository,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              release_commit: $release_commit,
+              release_tag: $release_tag,
+              release_version: $release_version,
+              issued_at_epoch: $issued_at_epoch,
+              expires_at_epoch: $expires_at_epoch,
+              settings: $settings
+            }
+          ')
+          test "$(printf '%s' "$lease_json" | wc -c | tr -d ' ')" -le 4096
+          test "$(jq --compact-output --sort-keys . <<<"$lease_json")" = "$lease_json"
+          lease_sha256=$(printf '%s' "$lease_json" | sha256sum | cut -d ' ' -f 1)
+          [[ "$lease_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'lease_json=%s\n' "$lease_json" >> "$GITHUB_OUTPUT"
+          printf 'lease_sha256=%s\n' "$lease_sha256" >> "$GITHUB_OUTPUT"
+
   trusted-npm-cli:
     name: Prepare exact trusted-publishing npm CLI without credentials
     if: github.repository == 'Latchway/latchway-react-native-sdk'
@@ -1104,49 +1212,103 @@ jobs:
   github-draft:
     name: Create or verify GitHub draft without candidate checkout
     if: github.repository == 'Latchway/latchway-react-native-sdk'
-    needs: promote
+    needs: [promote, authorize-release]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment: npm
+    environment: github-release
     permissions:
       contents: write
     outputs:
       release_state: ${{ steps.draft.outputs.release_state }}
     steps:
-      - name: Preflight immutable release and create draft with fixed API calls
+      - name: Fail closed unless GitHub release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:github-release"
+      - name: Create or verify GitHub draft with fixed API calls
         id: draft
         shell: bash
         env:
-          ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+          AUTHORIZATION_LEASE_JSON: ${{ needs.authorize-release.outputs.policy_lease_json }}
+          AUTHORIZATION_LEASE_SHA256: ${{ needs.authorize-release.outputs.policy_lease_sha256 }}
           RELEASE_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
           RELEASE_TAG: ${{ needs.promote.outputs.tag }}
           RELEASE_VERSION: ${{ needs.promote.outputs.version }}
         run: |
           set -Eeuo pipefail
-          test -n "$ADMIN_TOKEN"
-          test -n "$RELEASE_TOKEN"
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
           test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          validate_release_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$AUTHORIZATION_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$AUTHORIZATION_LEASE_JSON")
+            test "$canonical" = "$AUTHORIZATION_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$AUTHORIZATION_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$AUTHORIZATION_LEASE_JSON" >/dev/null
+          }
+          validate_release_policy_lease draft-and-npm
+          test -n "$RELEASE_TOKEN"
           expected_prerelease=false
           if [[ "$RELEASE_TAG" == *-* ]]; then expected_prerelease=true; fi
           version_line=$(gh version | head -n 1)
           [[ "$version_line" =~ ^gh[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]\([^()]+\))?$ ]]
           major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}
           (( major > 2 || (major == 2 && (minor > 97 || (minor == 97 && patch >= 0))) ))
-          GH_TOKEN="$ADMIN_TOKEN" gh api \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            > "$RUNNER_TEMP/immutable-release-settings.json"
-          jq --exit-status '
-            type == "object" and
-            (keys | sort) == ["enabled", "enforced_by_owner"] and
-            .enabled == true and
-            (.enforced_by_owner | type) == "boolean"
-          ' "$RUNNER_TEMP/immutable-release-settings.json" >/dev/null
-          unset ADMIN_TOKEN
           export GH_TOKEN="$RELEASE_TOKEN"
           unset RELEASE_TOKEN
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/tag-ref.json"
@@ -1166,6 +1328,7 @@ jobs:
             grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/release-error.txt"
             prerelease=()
             if [[ "$expected_prerelease" == true ]]; then prerelease=(--prerelease); fi
+            validate_release_policy_lease draft-and-npm
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft --generate-notes --title "$RELEASE_TAG" "${prerelease[@]}"
             gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
@@ -1193,12 +1356,17 @@ jobs:
 
   npm-publish:
     name: Publish or adopt npm archive without candidate checkout
-    needs: [promote, verify, android, ios, trusted-npm-cli, github-draft]
+    needs: [promote, verify, android, ios, trusted-npm-cli, authorize-release, github-draft]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: npm
     env:
+      AUTHORIZATION_LEASE_JSON: ${{ needs.authorize-release.outputs.policy_lease_json }}
+      AUTHORIZATION_LEASE_SHA256: ${{ needs.authorize-release.outputs.policy_lease_sha256 }}
       NPM_CONFIG_IGNORE_SCRIPTS: "true"
+      RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+      RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.promote.outputs.version }}
     permissions:
       actions: read
       attestations: write
@@ -1209,6 +1377,79 @@ jobs:
       producer_run_attempt: ${{ steps.registry.outputs.producer_run_attempt }}
       producer_run_id: ${{ steps.registry.outputs.producer_run_id }}
     steps:
+      - name: Fail closed unless npm release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:npm"
+      - name: Validate the attempt-bound release policy lease before tooling
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          validate_release_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$AUTHORIZATION_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$AUTHORIZATION_LEASE_JSON")
+            test "$canonical" = "$AUTHORIZATION_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$AUTHORIZATION_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$AUTHORIZATION_LEASE_JSON" >/dev/null
+          }
+          validate_release_policy_lease draft-and-npm
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1313,6 +1554,68 @@ jobs:
           test "$(jq --raw-output .sha256 "$evidence")" = "$(sha256sum "$archive" | cut -d ' ' -f 1)"
           test "$(tar -xOzf "$archive" package/package.json | jq --raw-output .name)" = '@latchway/react-native'
           test "$(tar -xOzf "$archive" package/package.json | jq --raw-output .version)" = "$RELEASE_VERSION"
+      - name: Recheck attempt-bound policy immediately before OIDC attestation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          validate_release_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$AUTHORIZATION_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$AUTHORIZATION_LEASE_JSON")
+            test "$canonical" = "$AUTHORIZATION_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$AUTHORIZATION_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$AUTHORIZATION_LEASE_JSON" >/dev/null
+          }
+          validate_release_policy_lease draft-and-npm
       - name: Attest reviewed npm package and reproducibility inputs without candidate checkout
         uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
         with:
@@ -1329,6 +1632,63 @@ jobs:
           RELEASE_VERSION: ${{ needs.promote.outputs.version }}
         run: |
           set -Eeuo pipefail
+          validate_release_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$AUTHORIZATION_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$AUTHORIZATION_LEASE_JSON")
+            test "$canonical" = "$AUTHORIZATION_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$AUTHORIZATION_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$AUTHORIZATION_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$AUTHORIZATION_LEASE_JSON" >/dev/null
+          }
           root="$RUNNER_TEMP/reviewed-release"
           archive="$root/latchway-react-native-$RELEASE_VERSION.tgz"
           expected_integrity=$(jq --exit-status --raw-output .integrity "$root/package-evidence.json")
@@ -1351,6 +1711,7 @@ jobs:
             test "$RELEASE_STATE" = draft
             tag=latest
             if [[ "$RELEASE_VERSION" == *-* ]]; then tag=next; fi
+            validate_release_policy_lease draft-and-npm
             "$LATCHWAY_NPM_CLI" publish "$archive" --access public --provenance --tag "$tag" \
               --registry=https://registry.npmjs.org/
             publish_performed=true
@@ -1375,6 +1736,14 @@ jobs:
       RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
       RELEASE_TAG: ${{ needs.promote.outputs.tag }}
     steps:
+      - name: Fail closed unless npm release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:npm"
       - name: Check out exact promoted React Native SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -1553,29 +1922,91 @@ jobs:
     needs: [promote, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment: npm
-    permissions:
-      contents: read
+    environment: release-administration
+    permissions: {}
+    outputs:
+      policy_lease_json: ${{ steps.policy.outputs.lease_json }}
+      policy_lease_sha256: ${{ steps.policy.outputs.lease_sha256 }}
     steps:
-      - name: Verify immutable releases remain enforced with the protected admin credential
+      - name: Fail closed unless release administration controls are exact
         shell: bash
         env:
-          ADMIN_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:release-administration"
+      - name: Verify immutable releases and issue a final attempt-bound lease
+        id: policy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN }}
+          RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+          RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.promote.outputs.version }}
         run: |
           set -Eeuo pipefail
-          test -n "$ADMIN_TOKEN"
-          GH_TOKEN="$ADMIN_TOKEN" gh api \
+          test -n "$GH_TOKEN"
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+          (( GITHUB_RUN_ID <= 9007199254740991 ))
+          (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          settings=$(gh api \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            > "$RUNNER_TEMP/immutable-release-settings.json"
-          unset ADMIN_TOKEN
-          jq --exit-status '
-            type == "object" and
-            (keys | sort) == ["enabled", "enforced_by_owner"] and
-            .enabled == true and
-            (.enforced_by_owner | type) == "boolean"
-          ' "$RUNNER_TEMP/immutable-release-settings.json" >/dev/null
+            "repos/$GITHUB_REPOSITORY/immutable-releases")
+          unset GH_TOKEN
+          canonical_settings=$(jq --exit-status --compact-output --sort-keys '
+            if type == "object" and
+              (keys | sort) == ["enabled", "enforced_by_owner"] and
+              .enabled == true and .enforced_by_owner == true
+            then {enabled: .enabled, enforced_by_owner: .enforced_by_owner}
+            else error("immutable release policy is not owner-enforced")
+            end
+          ' <<<"$settings")
+          test "$canonical_settings" = '{"enabled":true,"enforced_by_owner":true}'
+          issued_at_epoch=$(date -u +%s)
+          [[ "$issued_at_epoch" =~ ^[1-9][0-9]*$ ]]
+          expires_at_epoch=$((issued_at_epoch + 600))
+          lease_json=$(jq --null-input --compact-output --sort-keys \
+            --arg kind latchway_release_policy_lease \
+            --arg phase final-github-release \
+            --arg policy_id \
+              latchway-release-controls-v1:latchway-react-native-sdk:release-administration \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_commit "$RELEASE_COMMIT" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg release_version "$RELEASE_VERSION" \
+            --argjson issued_at_epoch "$issued_at_epoch" \
+            --argjson expires_at_epoch "$expires_at_epoch" \
+            --argjson settings "$canonical_settings" '
+            {
+              schema_version: 1,
+              kind: $kind,
+              phase: $phase,
+              policy_id: $policy_id,
+              repository: $repository,
+              run_id: $run_id,
+              run_attempt: $run_attempt,
+              release_commit: $release_commit,
+              release_tag: $release_tag,
+              release_version: $release_version,
+              issued_at_epoch: $issued_at_epoch,
+              expires_at_epoch: $expires_at_epoch,
+              settings: $settings
+            }
+          ')
+          test "$(printf '%s' "$lease_json" | wc -c | tr -d ' ')" -le 4096
+          test "$(jq --compact-output --sort-keys . <<<"$lease_json")" = "$lease_json"
+          lease_sha256=$(printf '%s' "$lease_json" | sha256sum | cut -d ' ' -f 1)
+          [[ "$lease_sha256" =~ ^[0-9a-f]{64}$ ]]
+          printf 'lease_json=%s\n' "$lease_json" >> "$GITHUB_OUTPUT"
+          printf 'lease_sha256=%s\n' "$lease_sha256" >> "$GITHUB_OUTPUT"
 
   github-release:
     name: Publish immutable GitHub release without candidate checkout
@@ -1583,13 +2014,92 @@ jobs:
     needs: [promote, publish, github-release-policy]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: npm
+    environment: github-release
     permissions:
       actions: read
       attestations: write
       contents: write
       id-token: write
+    env:
+      FINAL_POLICY_LEASE_JSON: ${{ needs.github-release-policy.outputs.policy_lease_json }}
+      FINAL_POLICY_LEASE_SHA256: ${{ needs.github-release-policy.outputs.policy_lease_sha256 }}
+      RELEASE_COMMIT: ${{ needs.promote.outputs.commit }}
+      RELEASE_TAG: ${{ needs.promote.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.promote.outputs.version }}
     steps:
+      - name: Fail closed unless GitHub release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -euo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:github-release"
+      - name: Validate the final attempt-bound policy lease before tooling
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          validate_final_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$FINAL_POLICY_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$FINAL_POLICY_LEASE_JSON")
+            test "$canonical" = "$FINAL_POLICY_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$FINAL_POLICY_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$FINAL_POLICY_LEASE_JSON" >/dev/null
+          }
+          validate_final_policy_lease final-github-release
       - name: Download exact React Native release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1633,6 +2143,68 @@ jobs:
           printf '%s\n' "${expected[@]}" | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
           printf '%s\n' "${actual[@]##*/}" | LC_ALL=C sort > "$RUNNER_TEMP/actual-assets.txt"
           cmp --silent "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/actual-assets.txt"
+      - name: Recheck final policy immediately before OIDC attestation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          validate_final_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$FINAL_POLICY_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$FINAL_POLICY_LEASE_JSON")
+            test "$canonical" = "$FINAL_POLICY_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$FINAL_POLICY_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$FINAL_POLICY_LEASE_JSON" >/dev/null
+          }
+          validate_final_policy_lease final-github-release
       - name: Attest exact retained registry and release evidence without candidate checkout
         uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
         with:
@@ -1646,6 +2218,64 @@ jobs:
           RELEASE_VERSION: ${{ needs.promote.outputs.version }}
         run: |
           set -Eeuo pipefail
+          validate_final_policy_lease() {
+            local expected_phase=$1 now canonical observed_sha256 bytes
+            [[ "$FINAL_POLICY_LEASE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            bytes=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | wc -c | tr -d ' ')
+            [[ "$bytes" =~ ^[1-9][0-9]*$ ]]
+            (( bytes <= 4096 ))
+            canonical=$(jq --exit-status --compact-output --sort-keys . \
+              <<<"$FINAL_POLICY_LEASE_JSON")
+            test "$canonical" = "$FINAL_POLICY_LEASE_JSON"
+            observed_sha256=$(printf '%s' "$FINAL_POLICY_LEASE_JSON" | \
+              sha256sum | cut -d ' ' -f 1)
+            test "$observed_sha256" = "$FINAL_POLICY_LEASE_SHA256"
+            [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+            (( GITHUB_RUN_ID <= 9007199254740991 ))
+            (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+            now=$(date -u +%s)
+            [[ "$now" =~ ^[1-9][0-9]*$ ]]
+            jq --exit-status \
+              --arg phase "$expected_phase" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$GITHUB_RUN_ID" \
+              --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg release_commit "$RELEASE_COMMIT" \
+              --arg release_tag "$RELEASE_TAG" \
+              --arg release_version "$RELEASE_VERSION" \
+              --argjson now "$now" '
+              type == "object" and
+              (keys | sort) == [
+                "expires_at_epoch", "issued_at_epoch", "kind", "phase", "policy_id",
+                "release_commit", "release_tag", "release_version", "repository",
+                "run_attempt", "run_id", "schema_version", "settings"
+              ] and
+              .schema_version == 1 and .kind == "latchway_release_policy_lease" and
+              .phase == $phase and
+              .policy_id == "latchway-release-controls-v1:latchway-react-native-sdk:release-administration" and
+              .repository == $repository and
+              (.run_id | type) == "number" and (.run_id | floor) == .run_id and
+              (.run_attempt | type) == "number" and
+              (.run_attempt | floor) == .run_attempt and
+              .run_id >= 1 and .run_id <= 9007199254740991 and
+              .run_attempt >= 1 and .run_attempt <= 9007199254740991 and
+              .run_id == $run_id and .run_attempt == $run_attempt and
+              .release_commit == $release_commit and
+              .release_tag == $release_tag and .release_version == $release_version and
+              (.settings | type) == "object" and
+              (.settings | keys | sort) == ["enabled", "enforced_by_owner"] and
+              .settings.enabled == true and .settings.enforced_by_owner == true and
+              (.issued_at_epoch | type) == "number" and
+              (.expires_at_epoch | type) == "number" and
+              (.issued_at_epoch | floor) == .issued_at_epoch and
+              (.expires_at_epoch | floor) == .expires_at_epoch and
+              .issued_at_epoch > 0 and .expires_at_epoch > .issued_at_epoch and
+              (.expires_at_epoch - .issued_at_epoch) <= 600 and
+              .issued_at_epoch <= $now and $now < .expires_at_epoch
+            ' <<<"$FINAL_POLICY_LEASE_JSON" >/dev/null
+          }
+          validate_final_policy_lease final-github-release
           test -n "$RELEASE_TOKEN"
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
@@ -1732,6 +2362,7 @@ jobs:
               return
             fi
             test "$(jq --raw-output .draft "$RUNNER_TEMP/release.json")" = true
+            validate_final_policy_lease final-github-release
             gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
           }
           for asset in "${fixed_assets[@]}"; do verify_or_upload "$asset"; done
@@ -1750,8 +2381,10 @@ jobs:
           ' "$RUNNER_TEMP/release.json" >/dev/null
           if [[ "$(jq --raw-output .draft "$RUNNER_TEMP/release.json")" == true ]]; then
             if [[ "$expected_prerelease" == true ]]; then
+              validate_final_policy_lease final-github-release
               gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
             else
+              validate_final_policy_lease final-github-release
               gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
             fi
           fi
@@ -1777,3 +2410,16 @@ jobs:
             done
             test "$verified" = true
           done
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/post-finalization-tag-ref.json"
+          final_tag_object=$(jq --raw-output \
+            '.object.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$RUNNER_TEMP/post-finalization-tag-ref.json")
+          test "$(jq --raw-output .object.type "$RUNNER_TEMP/post-finalization-tag-ref.json")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$final_tag_object" \
+            > "$RUNNER_TEMP/post-finalization-tag-object.json"
+          jq --exit-status --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" \
+            --arg object "$final_tag_object" \
+            '.sha == $object and .tag == $tag and .object.type == "commit" and \
+              .object.sha == $commit' \
+            "$RUNNER_TEMP/post-finalization-tag-object.json" >/dev/null
