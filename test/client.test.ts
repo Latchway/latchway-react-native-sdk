@@ -54,8 +54,23 @@ interface InstallationFamilyFixture {
   contract_version: string;
   wire_protocol_version: number;
   family: { id: string; status: string };
-  root_component: { installation_family_id?: string; is_root: boolean };
-  provisioned_components: Array<{ response: { installation_family_id: string } }>;
+  root_component: { id: string; granted_features: string[]; is_root: boolean };
+  root_session_claims: {
+    installation_family_id: string;
+    component_id: string;
+    features: string[];
+    trust: { source: string };
+    installation_id?: never;
+  };
+  provisioned_components: Array<{
+    response: { component_id: string; installation_family_id: string; granted_features: string[] };
+    expected_session_claims: {
+      component_id: string;
+      features: string[];
+      trust: { source: string; parent_component_id: string };
+      installation_id?: never;
+    };
+  }>;
   revocations: Array<{ scope: string; expected_family_status: string }>;
 }
 
@@ -1100,8 +1115,23 @@ describe("React Native Latchway native-owned fetch", () => {
       family: { status: "active" },
       root_component: { is_root: true },
     });
+    expect(family.root_session_claims).toMatchObject({
+      installation_family_id: family.family.id,
+      component_id: family.root_component.id,
+      features: family.root_component.granted_features,
+      trust: { source: "direct_attested" },
+    });
+    expect(family.root_session_claims).not.toHaveProperty("installation_id");
     expect(family.provisioned_components.every(
       (component) => component.response.installation_family_id === family.family.id,
+    )).toBe(true);
+    expect(family.provisioned_components.every((component) =>
+      component.expected_session_claims.component_id === component.response.component_id &&
+      JSON.stringify(component.expected_session_claims.features) ===
+        JSON.stringify(component.response.granted_features) &&
+      component.expected_session_claims.trust.source === "delegated_from_attested_root" &&
+      component.expected_session_claims.trust.parent_component_id === family.root_component.id &&
+      !("installation_id" in component.expected_session_claims),
     )).toBe(true);
     expect(family.revocations.map((revocation) => revocation.scope)).toEqual(["component", "family"]);
   });
