@@ -93,7 +93,7 @@ jobs:
         if: matrix.profile == 'newest-compatible'
         run: |
           pnpm install --frozen-lockfile
-          pnpm add --save-dev \
+          pnpm add --workspace-root --save-dev \
             react-native@0.82.0 react@19.1.1 openai@7 ai@7 \
             @react-native/codegen@0.82.0 @react-native/gradle-plugin@0.82.0 \
             @ai-sdk/openai@4 @ai-sdk/anthropic@4 @langchain/openai@1.5

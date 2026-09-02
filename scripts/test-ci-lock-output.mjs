@@ -73,6 +73,7 @@ test("scheduled framework compatibility materializes the exact locked JavaScript
     'test "$(git -C ../latchway-js rev-parse --verify HEAD)" = "$JAVASCRIPT_COMMIT"',
     "pnpm --dir ../latchway-js install --frozen-lockfile --ignore-scripts",
     "pnpm --dir ../latchway-js build",
+    "pnpm add --workspace-root --save-dev",
   ]) {
     assert.ok(workflow.includes(marker), marker);
   }
