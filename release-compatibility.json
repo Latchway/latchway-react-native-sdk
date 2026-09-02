@@ -51,7 +51,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "52f055152431d640febd6c2d64f16799e0f05589",
+    "source_commit": "f847ce600f0a48859ad4cb534b95b6251c3c633e",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "sdk_platform_version": "37.0",
