@@ -43,6 +43,10 @@ android {
         // scripts/verify-compatibility.mjs enforces the reviewed exact lock.
         disable += setOf("AndroidGradlePluginVersion", "NewerVersionAvailable")
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -51,4 +55,8 @@ dependencies {
     implementation("com.facebook.react:react-android:0.82.0")
     implementation("dev.latchway:latchway-okhttp:1.0.0")
     implementation("dev.latchway:latchway-play-integrity:1.0.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.0")
 }

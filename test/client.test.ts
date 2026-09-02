@@ -321,7 +321,7 @@ describe("React Native Latchway native-owned fetch", () => {
     });
   });
 
-  it("rejects methods and paths outside the structured and opaque route contract before identity", async () => {
+  it("FW-AUTH-109 rejects wrong methods and paths before identity or native dispatch", async () => {
     const native = new FakeNativeModule();
     install(native);
     const getIdentityToken = vi.fn(async () => "identity");
@@ -374,6 +374,25 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.requests[1]?.request.headers).toEqual([]);
   });
 
+  it("FW-SEC-102 strips duplicate Authorization values before TurboModule dispatch", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const client = create();
+    const headers = new Headers();
+    headers.append("Authorization", "Bearer first-provider-secret");
+    headers.append("Authorization", "Bearer second-provider-secret");
+
+    await client.fetch("/v1/responses", {
+      method: "POST",
+      latchwayFeature: "chat",
+      headers,
+    });
+
+    expect(native.requests[0]?.request.headers).toEqual([]);
+    expect(native.requests[0]?.encoded).not.toContain("first-provider-secret");
+    expect(native.requests[0]?.encoded).not.toContain("second-provider-secret");
+  });
+
   it.each([
     "access-token",
     "AccessToken",
@@ -392,7 +411,7 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.requests[0]?.request.headers).toEqual([]);
   });
 
-  it("rejects cross-origin, disallowed-path, fragment, and credential-query targets before identity", async () => {
+  it("FW-AUTH-108 rejects a wrong URI before identity or native dispatch", async () => {
     const native = new FakeNativeModule();
     install(native);
     const getIdentityToken = vi.fn(async () => "identity");
@@ -700,9 +719,12 @@ describe("React Native Latchway native-owned fetch", () => {
     await expect(client.ready).rejects.toMatchObject({ code: "attestation_unsupported" });
   });
 
-  it("redacts secret-shaped native errors and preserves canonical reconciliation metadata", async () => {
+  it("FW-BEH-107 redacts native errors without logging credential material", async () => {
+    const logSpies = (["debug", "info", "log", "warn", "error"] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => undefined));
     const native = new FakeNativeModule();
-    native.error = Object.assign(new Error(`identity_token eyJ${"a".repeat(80)}`), {
+    const secret = `identity_token eyJ${"a".repeat(80)}`;
+    native.error = Object.assign(new Error(secret), {
       code: "operation_indeterminate",
       userInfo: {
         code: "operation_indeterminate",
@@ -715,14 +737,26 @@ describe("React Native Latchway native-owned fetch", () => {
     });
     install(native);
     const client = create();
-    await expect(client.quota("chat")).rejects.toMatchObject({
-      code: "operation_indeterminate",
-      requestID: REQUEST_ID,
-      operationID: OPERATION_ID,
-      status: 503,
-      retryable: true,
-      message: "Sensitive native error detail was redacted.",
-    });
+    try {
+      let captured: unknown;
+      try {
+        await client.quota("chat");
+      } catch (error) {
+        captured = error;
+      }
+      expect(captured).toMatchObject({
+        code: "operation_indeterminate",
+        requestID: REQUEST_ID,
+        operationID: OPERATION_ID,
+        status: 503,
+        retryable: true,
+        message: "Sensitive native error detail was redacted.",
+      });
+      expect(`${String(captured)}\n${JSON.stringify(captured)}`).not.toContain(secret);
+      for (const spy of logSpies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of logSpies) spy.mockRestore();
+    }
   });
 
   it("fails closed on missing or mismatched native server documentation URLs", () => {
@@ -801,6 +835,21 @@ describe("React Native Latchway native-owned fetch", () => {
     await client.refresh();
     expect(native.refreshCalls).toBe(1);
     expect(native.lastIdentityToken).toBe("app-owned-identity-token");
+  });
+
+  it("FW-AUTH-104 reacquires external identity for each native refresh operation", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const getIdentityToken = vi.fn()
+      .mockResolvedValueOnce("external-identity-one")
+      .mockResolvedValueOnce("external-identity-two");
+    const client = create({ getIdentityToken });
+
+    await client.refresh();
+    await client.refresh();
+
+    expect(getIdentityToken).toHaveBeenCalledTimes(2);
+    expect(native.identityTokens).toEqual(["external-identity-one", "external-identity-two"]);
   });
 
   it("prepares native iOS components with only a public descriptor crossing JavaScript", async () => {
@@ -954,7 +1003,7 @@ describe("React Native Latchway native-owned fetch", () => {
     }]);
   });
 
-  it("uses native durable component discovery for no-argument family sign-out", async () => {
+  it("FW-AUTH-105 uses native durable component discovery for family revocation", async () => {
     const native = new FakeNativeModule();
     install(native);
     const client = create();
@@ -1196,6 +1245,7 @@ class FakeNativeModule {
   revokeFamilyCalls = 0;
   readCalls = 0;
   lastIdentityToken: string | undefined;
+  readonly identityTokens: string[] = [];
   error: Error | undefined;
   startGate: Promise<string> | undefined;
   readGate: Promise<void> | undefined;
@@ -1305,6 +1355,7 @@ class FakeNativeModule {
 
   async refresh(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
     this.lastIdentityToken = identityToken;
+    this.identityTokens.push(identityToken);
     this.refreshCalls += 1;
     if (this.error !== undefined) throw this.error;
   }

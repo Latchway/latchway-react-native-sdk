@@ -54,6 +54,10 @@ jq --null-input \
   }
 ' > "$evidence_dir/react-native-native-artifact-identity.json"
 
+./android/gradlew -p android testDebugUnitTest \
+  --tests '*NativeLatchwayModuleTest*' \
+  --no-daemon --stacktrace
+
 junit_source='Conformance/native-android-driver/build/test-results/testDebugUnitTest/TEST-dev.latchway.reactnative.conformance.ReactNativeNativeSdkLiveConformanceTest.xml'
 split_report="$evidence_dir/react-native-split-boundary.json"
 copy_junit() {

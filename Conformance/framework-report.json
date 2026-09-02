@@ -1,41 +1,201 @@
 {
-  "schema_version": 1,
-  "manifest_sha256": "32cd1df9365e04cc684fa63ac0798feec37f44ef1a95898f91935108bb58ef9a",
+  "schema_version": 2,
+  "manifest_sha256": "24d09b398d0ae1afd265ff77683847874110636174a4a313ebe62648cb33bbed",
   "repository": "latchway-react-native-sdk",
   "integrations": [
     {
       "id": "react-native-fetch",
       "support": "experimental",
       "pass": {
-        "FW-AUTH-001": ["test/framework-conformance.test.ts#FW-AUTH-001"],
-        "FW-REQ-001": ["test/framework-conformance.test.ts#FW-REQ-001"],
-        "FW-REQ-002": ["test/framework-conformance.test.ts#FW-REQ-002"],
-        "FW-REQ-003": ["test/framework-conformance.test.ts#FW-REQ-003"],
-        "FW-REQ-004": ["test/framework-conformance.test.ts#FW-REQ-004"],
-        "FW-REQ-005": ["test/framework-conformance.test.ts#FW-REQ-005"],
-        "FW-REQ-006": ["test/framework-conformance.test.ts#FW-REQ-006"],
-        "FW-REQ-007": ["test/framework-conformance.test.ts#FW-REQ-007"],
-        "FW-BEH-001": ["test/framework-conformance.test.ts#FW-BEH-001"],
-        "FW-BEH-002": ["test/framework-conformance.test.ts#FW-BEH-002"],
-        "FW-BEH-003": ["test/framework-conformance.test.ts#FW-BEH-003"],
-        "FW-BEH-004": ["test/framework-conformance.test.ts#FW-BEH-004"],
-        "FW-BEH-005": ["test/framework-conformance.test.ts#FW-BEH-005"],
-        "FW-BEH-006": ["test/framework-conformance.test.ts#FW-BEH-006", ".github/workflows/framework-compatibility.yml#native_refresh_ios", ".github/workflows/framework-compatibility.yml#native_refresh_android"],
-        "FW-SEC-001": ["test/framework-conformance.test.ts#FW-SEC-001"],
-        "FW-SEC-002": ["test/framework-conformance.test.ts#FW-SEC-002"],
-        "FW-SEC-003": ["test/framework-conformance.test.ts#FW-SEC-003"],
-        "FW-SEC-004": ["test/framework-conformance.test.ts#FW-SEC-004"],
-        "FW-OAI-001": ["test/framework-conformance.test.ts#FW-BEH-001", "test/framework-conformance.test.ts#FW-BEH-002"],
-        "FW-OAI-002": ["test/framework-conformance.test.ts#FW-REQ-004"]
+        "FW-AUTH-001": [
+          "test/framework-conformance.test.ts#FW-AUTH-001"
+        ],
+        "FW-REQ-001": [
+          "test/framework-conformance.test.ts#FW-REQ-001"
+        ],
+        "FW-REQ-002": [
+          "test/framework-conformance.test.ts#FW-REQ-002"
+        ],
+        "FW-REQ-003": [
+          "test/framework-conformance.test.ts#FW-REQ-003"
+        ],
+        "FW-REQ-004": [
+          "test/framework-conformance.test.ts#FW-REQ-004"
+        ],
+        "FW-REQ-005": [
+          "test/framework-conformance.test.ts#FW-REQ-005"
+        ],
+        "FW-REQ-006": [
+          "test/framework-conformance.test.ts#FW-REQ-006"
+        ],
+        "FW-REQ-007": [
+          "test/framework-conformance.test.ts#FW-REQ-007"
+        ],
+        "FW-BEH-001": [
+          "test/framework-conformance.test.ts#FW-BEH-001"
+        ],
+        "FW-BEH-002": [
+          "test/framework-conformance.test.ts#FW-BEH-002"
+        ],
+        "FW-BEH-003": [
+          "test/framework-conformance.test.ts#FW-BEH-003"
+        ],
+        "FW-BEH-004": [
+          "test/framework-conformance.test.ts#FW-BEH-004"
+        ],
+        "FW-BEH-005": [
+          "test/framework-conformance.test.ts#FW-BEH-005"
+        ],
+        "FW-BEH-006": [
+          "test/framework-conformance.test.ts#FW-BEH-006",
+          ".github/workflows/framework-compatibility.yml#native_refresh_ios",
+          ".github/workflows/framework-compatibility.yml#native_refresh_android"
+        ],
+        "FW-SEC-001": [
+          "test/framework-conformance.test.ts#FW-SEC-001"
+        ],
+        "FW-SEC-002": [
+          "test/framework-conformance.test.ts#FW-SEC-002"
+        ],
+        "FW-SEC-003": [
+          "test/framework-conformance.test.ts#FW-SEC-003"
+        ],
+        "FW-SEC-004": [
+          "test/framework-conformance.test.ts#FW-SEC-004"
+        ],
+        "FW-OAI-001": [
+          "test/framework-conformance.test.ts#FW-BEH-001",
+          "test/framework-conformance.test.ts#FW-BEH-002"
+        ],
+        "FW-OAI-002": [
+          "test/framework-conformance.test.ts#FW-REQ-004"
+        ],
+        "FW-AUTH-101": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-101"
+        ],
+        "FW-AUTH-102": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-102"
+        ],
+        "FW-AUTH-103": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-103"
+        ],
+        "FW-AUTH-104": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-104"
+        ],
+        "FW-AUTH-105": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-105"
+        ],
+        "FW-AUTH-106": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-106"
+        ],
+        "FW-REQ-101": [
+          "Conformance/common-framework-evidence.json#FW-REQ-101"
+        ],
+        "FW-REQ-102": [
+          "Conformance/common-framework-evidence.json#FW-REQ-102"
+        ],
+        "FW-REQ-103": [
+          "Conformance/common-framework-evidence.json#FW-REQ-103"
+        ],
+        "FW-REQ-104": [
+          "Conformance/common-framework-evidence.json#FW-REQ-104"
+        ],
+        "FW-REQ-105": [
+          "Conformance/common-framework-evidence.json#FW-REQ-105"
+        ],
+        "FW-REQ-106": [
+          "Conformance/common-framework-evidence.json#FW-REQ-106"
+        ],
+        "FW-REQ-107": [
+          "Conformance/common-framework-evidence.json#FW-REQ-107"
+        ],
+        "FW-REQ-108": [
+          "Conformance/common-framework-evidence.json#FW-REQ-108"
+        ],
+        "FW-REQ-109": [
+          "Conformance/common-framework-evidence.json#FW-REQ-109"
+        ],
+        "FW-BEH-101": [
+          "Conformance/common-framework-evidence.json#FW-BEH-101"
+        ],
+        "FW-BEH-102": [
+          "Conformance/common-framework-evidence.json#FW-BEH-102"
+        ],
+        "FW-BEH-103": [
+          "Conformance/common-framework-evidence.json#FW-BEH-103"
+        ],
+        "FW-BEH-104": [
+          "Conformance/common-framework-evidence.json#FW-BEH-104"
+        ],
+        "FW-BEH-105": [
+          "Conformance/common-framework-evidence.json#FW-BEH-105"
+        ],
+        "FW-BEH-106": [
+          "Conformance/common-framework-evidence.json#FW-BEH-106"
+        ],
+        "FW-BEH-107": [
+          "Conformance/common-framework-evidence.json#FW-BEH-107"
+        ],
+        "FW-SEC-101": [
+          "Conformance/common-framework-evidence.json#FW-SEC-101"
+        ],
+        "FW-SEC-104": [
+          "Conformance/common-framework-evidence.json#FW-SEC-104"
+        ],
+        "FW-SEC-102": [
+          "Conformance/common-framework-evidence.json#FW-SEC-102"
+        ],
+        "FW-SEC-103": [
+          "Conformance/common-framework-evidence.json#FW-SEC-103"
+        ],
+        "FW-AUTH-108": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-108"
+        ],
+        "FW-AUTH-109": [
+          "Conformance/common-framework-evidence.json#FW-AUTH-109"
+        ]
       },
       "not_applicable": [
         {
-          "case_ids": ["FW-VAI-001", "FW-VAI-002", "FW-VAI-003", "FW-VAI-004"],
+          "case_ids": [
+            "FW-VAI-001",
+            "FW-VAI-002",
+            "FW-VAI-003",
+            "FW-VAI-004"
+          ],
           "reason": "Vercel AI middleware and telemetry are owned by the separate vercel-ai-sdk registry integration, not react-native-fetch."
         },
         {
-          "case_ids": ["FW-LC-001", "FW-LC-002", "FW-LC-003"],
+          "case_ids": [
+            "FW-LC-001",
+            "FW-LC-002",
+            "FW-LC-003"
+          ],
           "reason": "LangChain batch policy is owned by the separate langchain-js registry integration, not react-native-fetch."
+        }
+      ],
+      "pending": [
+        {
+          "case_ids": [
+            "FW-AUTH-107"
+          ],
+          "reason": "DPoP replay rejection requires a real gateway enforcement boundary and is not claimed by the fake native framework gateway.",
+          "blocker": "hosted",
+          "evidence": [
+            "test/framework-conformance.test.ts"
+          ]
+        },
+        {
+          "case_ids": [
+            "FW-SEC-105",
+            "FW-SEC-106"
+          ],
+          "reason": "Hardware-backed key residency and runtime proof that native keys/refresh tokens never cross the real TurboModule require protected physical-device evidence.",
+          "blocker": "protected_device",
+          "evidence": [
+            "test/security-boundary.test.ts",
+            "Conformance/physical-device-evidence.schema.json"
+          ]
         }
       ]
     }

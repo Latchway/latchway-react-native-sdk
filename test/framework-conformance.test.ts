@@ -74,6 +74,7 @@ afterEach(async () => {
   await Promise.allSettled(clients.splice(0).map(async (client) => { await client.dispose(); }));
   restoreNative?.();
   restoreNative = undefined;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -435,6 +436,26 @@ describe("React Native framework conformance", () => {
     expect(gateway.requests[0]?.encoded).not.toContain(MANAGED_PLACEHOLDER);
   });
 
+  it("[FW-SEC-102] removes duplicate caller Authorization values before the native boundary", async () => {
+    const gateway = new NativeFrameworkGateway();
+    const client = install(gateway);
+    const headers = new Headers({ "Content-Type": "application/json" });
+    headers.append("Authorization", "Bearer caller-secret-one");
+    headers.append("Authorization", "Bearer caller-secret-two");
+
+    const response = await client.fetchFor(FEATURE)(`${GATEWAY}/v1/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "latchway", input: "duplicate authorization" }),
+    });
+    await response.text();
+
+    expect(gateway.requests).toHaveLength(1);
+    expect(gateway.requests[0]?.headers.has("authorization")).toBe(false);
+    expect(gateway.requests[0]?.encoded).not.toContain("caller-secret-one");
+    expect(gateway.requests[0]?.encoded).not.toContain("caller-secret-two");
+  });
+
   it(frameworkCaseTitle("FW-SEC-002"), async () => {
     const gateway = new NativeFrameworkGateway();
     const getIdentityToken = vi.fn(async () => IDENTITY_TOKEN);
@@ -463,6 +484,26 @@ describe("React Native framework conformance", () => {
     expect(serialized).not.toContain(MANAGED_PLACEHOLDER);
     expect(serialized).not.toContain(IDENTITY_TOKEN);
     expect(serialized).toContain(REQUEST_ID);
+  });
+
+  it("[FW-BEH-107] keeps identity and placeholder sentinels out of framework console output", async () => {
+    const output: string[] = [];
+    for (const method of ["debug", "info", "log", "warn", "error"] as const) {
+      vi.spyOn(console, method).mockImplementation((...values: unknown[]) => {
+        output.push(values.map((value) => safeSerialize(value)).join(" "));
+      });
+    }
+    const gateway = new NativeFrameworkGateway(() => providerError());
+    const consumers = createFrameworkConsumers(install(gateway), FRAMEWORK_FEATURES);
+
+    await captureError(consumers.openaiResponses.responses.create({
+      model: "latchway",
+      input: "logger conformance",
+    }));
+
+    const serialized = output.join("\n");
+    expect(serialized).not.toContain(IDENTITY_TOKEN);
+    expect(serialized).not.toContain(MANAGED_PLACEHOLDER);
   });
 
   it(frameworkCaseTitle("FW-SEC-004"), async () => {

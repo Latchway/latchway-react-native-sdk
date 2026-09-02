@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FRAMEWORK_CORE_COMMIT: d4693ee36bf8a018a027fb75e5e2ac2fb6b58d50
   NODE_VERSION: 24.19.0
   PNPM_VERSION: 10.15.0
 
@@ -31,19 +32,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Resolve the locked core source
-        id: core
-        shell: bash
-        run: |
-          set -euo pipefail
-          commit=$(jq --raw-output '.contract.core_commit' release-compatibility.json)
-          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
-          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
-      - name: Check out the locked canonical registry and case validator
+      - name: Check out the canonical framework conformance checkpoint
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Latchway/latchway
-          ref: ${{ steps.core.outputs.commit }}
+          ref: ${{ env.FRAMEWORK_CORE_COMMIT }}
           path: _core
           persist-credentials: false
       - name: Validate the complete React Native registry report
@@ -141,10 +134,10 @@ jobs:
           ref: ${{ steps.ios.outputs.commit }}
           path: _ios
           persist-credentials: false
-      - name: Prove automatic refresh through the React Native transport identity
-        run: >-
-          swift test --package-path _ios
-          --filter ClientSessionTests/testReactNativeTransportAutomaticallyRefreshesExpiredSessionBeforeReplay
+      - name: Run the compiled public React Native iOS bridge conformance
+        run: swift test --filter LatchwayNativeBridgeConformanceTests
+      - name: Prove locked iOS bootstrap, refresh, revocation, and fresh-proof semantics
+        run: sh Conformance/Tests/run-ios-locked-native-conformance.sh _ios
 
   native_refresh_android:
     name: Android native pre-dispatch refresh
@@ -175,6 +168,16 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install the exact React Native dependency graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Configure Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
         with:
@@ -182,12 +185,28 @@ jobs:
           packages: ""
       - name: Install the pinned Android platform
         run: _android/scripts/install-android-sdk.sh
-      - name: Prove automatic refresh through the React Native transport identity
+      - name: Publish the exact locked Android SDK to an isolated Maven repository
         working-directory: _android
-        run: >-
-          ./gradlew :latchway-okhttp:testDebugUnitTest
-          --tests '*RetrofitFrameworkConformanceTest.reactNativeTransportAutomaticallyRefreshesExpiredSessionBeforeReplay'
-          --no-daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.android.outputs.commit }}"
+          ./gradlew \
+            -Platchway.central.enabled=false \
+            -Platchway.signing.enabled=false \
+            -Platchway.version=1.0.0 \
+            cleanPublicationTestRepository \
+            publishPublicArtifactsToPublicationTestRepository \
+            --no-daemon
+          mkdir -p "$RUNNER_TEMP/latchway-native-repository"
+          cp -R build/publication-test-repository/. "$RUNNER_TEMP/latchway-native-repository/"
+          test -f "$RUNNER_TEMP/latchway-native-repository/dev/latchway/latchway-okhttp/1.0.0/latchway-okhttp-1.0.0.aar"
+      - name: Run the compiled public React Native Android bridge conformance
+        env:
+          LATCHWAY_NATIVE_REPOSITORY: ${{ runner.temp }}/latchway-native-repository
+        run: pnpm native:android:conformance
+      - name: Prove locked Android bootstrap, refresh, revocation, and fresh-proof semantics
+        run: sh Conformance/Tests/run-android-locked-native-conformance.sh _android
 
   issue-on-failure:
     name: Open one scheduled compatibility issue

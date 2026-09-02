@@ -5,6 +5,7 @@ import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import dev.latchway.core.KeyPolicy
 import dev.latchway.core.LATCHWAY_CONTRACT_VERSION
@@ -39,6 +40,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.Closeable
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -46,10 +48,142 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+internal fun interface NativeClientFactory {
+    fun create(
+        configuration: NativeConfiguration,
+        keyPolicy: KeyPolicy,
+        cloudProjectNumber: Long,
+        tokenProvider: TransientIdentityTokenProvider,
+        reactContext: ReactApplicationContext,
+    ): NativeClientOperations
+}
+
+internal interface NativeClientOperations : Closeable {
+    val applicationClient: OkHttpClient
+
+    suspend fun refresh()
+    suspend fun quota(feature: String): String
+    suspend fun diagnostics(): String
+    suspend fun revokeCurrentInstallation()
+    suspend fun revokeCurrentInstallationFamily()
+}
+
+internal fun nativeApplicationClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
+    .followRedirects(false)
+    .followSslRedirects(false)
+
+private class ProductionNativeClientOperations(
+    private val client: LatchwayClient,
+) : NativeClientOperations {
+    override val applicationClient: OkHttpClient = client.buildOkHttpClient(
+        nativeApplicationClientBuilder(),
+    )
+
+    override suspend fun refresh() {
+        client.refresh()
+    }
+
+    override suspend fun quota(feature: String): String {
+        val snapshot = client.quota(feature)
+        val limits = JSONArray()
+        snapshot.limits.forEach { limit ->
+            limits.put(JSONObject()
+                .put("metric", limit.metric)
+                .putNullable("maximum", limit.maximum)
+                .putNullable("used", limit.used)
+                .putNullable("reserved", limit.reserved)
+                .putNullable("remaining", limit.remaining)
+                .putNullable("resets_at", limit.resetsAt)
+                .put("hard", limit.hard))
+        }
+        return JSONObject()
+            .put("feature", snapshot.feature)
+            .put("observed_at", snapshot.observedAt)
+            .put("limits", limits)
+            .toString()
+    }
+
+    override suspend fun diagnostics(): String {
+        val diagnostics = client.diagnostics()
+        return JSONObject()
+            .put("contractVersion", diagnostics.contractVersion)
+            .put("protocolVersion", diagnostics.protocolVersion)
+            .put("keyStorage", diagnostics.key.backing.name.lowercase())
+            .put("attestation", JSONObject()
+                .put("support", "supported")
+                .put("provider", diagnostics.trustProvider)
+                .put("trustLevel", diagnostics.trustLevel))
+            .put("session", JSONObject()
+                .put("state", "active")
+                .put("expiresAt", diagnostics.sessionExpiresAt)
+                .put("refreshAvailable", diagnostics.refreshAvailable))
+            .put("installation", JSONObject()
+                .put("id", diagnostics.installationId)
+                .put("status", diagnostics.installationStatus))
+            .put("server", JSONObject()
+                .put("version", diagnostics.serverVersion)
+                .put("lastRequestID", diagnostics.requestId))
+            .toString()
+    }
+
+    override suspend fun revokeCurrentInstallation() {
+        client.revokeCurrentInstallation()
+    }
+
+    override suspend fun revokeCurrentInstallationFamily() {
+        client.revokeCurrentInstallationFamily()
+    }
+
+    override fun close() {
+        applicationClient.dispatcher.cancelAll()
+        applicationClient.connectionPool.evictAll()
+        applicationClient.dispatcher.executorService.shutdown()
+        client.close()
+    }
+}
+
+private val PRODUCTION_NATIVE_CLIENT_FACTORY = NativeClientFactory {
+        configuration,
+        keyPolicy,
+        cloudProjectNumber,
+        tokenProvider,
+        reactContext,
+    ->
+    val nativeConfiguration = LatchwayConfiguration(
+        baseUrl = configuration.baseURL.toHttpUrl(),
+        applicationId = configuration.applicationID,
+        environment = configuration.environment,
+        identityProvider = configuration.identityProvider,
+        clientPlatform = LatchwayClientPlatform.REACT_NATIVE_ANDROID,
+        sdkVersion = configuration.sdkVersion,
+        keyPolicy = keyPolicy,
+        allowInsecureLoopback = configuration.allowInsecureLoopback,
+    )
+    ProductionNativeClientOperations(
+        LatchwayClient(
+            configuration = nativeConfiguration,
+            identityTokenProvider = { tokenProvider.current() },
+            attestationProvider = PlayIntegrityAttestationProvider(
+                context = reactContext,
+                cloudProjectNumber = cloudProjectNumber,
+            ),
+            context = reactContext,
+        ),
+    )
+}
+
 @ReactModule(name = NativeLatchwayModule.NAME)
-public class NativeLatchwayModule(
+public class NativeLatchwayModule internal constructor(
     reactContext: ReactApplicationContext,
+    private val clientFactory: NativeClientFactory,
+    private val userInfoFactory: () -> WritableMap,
 ) : NativeLatchwaySpec(reactContext) {
+    public constructor(reactContext: ReactApplicationContext) : this(
+        reactContext,
+        PRODUCTION_NATIVE_CLIENT_FACTORY,
+        { Arguments.createMap() },
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val clients = ConcurrentHashMap<String, NativeClientContext>()
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -74,26 +208,14 @@ public class NativeLatchwayModule(
                 else -> throw IllegalArgumentException("Android key policy is invalid")
             }
             val tokenProvider = TransientIdentityTokenProvider()
-            val nativeConfiguration = LatchwayConfiguration(
-                baseUrl = configuration.baseURL.toHttpUrl(),
-                applicationId = configuration.applicationID,
-                environment = configuration.environment,
-                identityProvider = configuration.identityProvider,
-                clientPlatform = LatchwayClientPlatform.REACT_NATIVE_ANDROID,
-                sdkVersion = configuration.sdkVersion,
+            val client = clientFactory.create(
+                configuration = configuration,
                 keyPolicy = keyPolicy,
-                allowInsecureLoopback = configuration.allowInsecureLoopback,
+                cloudProjectNumber = projectNumber,
+                tokenProvider = tokenProvider,
+                reactContext = reactApplicationContext,
             )
-            val client = LatchwayClient(
-                configuration = nativeConfiguration,
-                identityTokenProvider = { tokenProvider.current() },
-                attestationProvider = PlayIntegrityAttestationProvider(
-                    context = reactApplicationContext,
-                    cloudProjectNumber = projectNumber,
-                ),
-                context = reactApplicationContext,
-            )
-            val context = NativeClientContext(client, tokenProvider, nativeConfiguration.baseUrl)
+            val context = NativeClientContext(client, tokenProvider, configuration.baseURL.toHttpUrl())
             check(clients.putIfAbsent(clientID, context) == null) { "client identifier is already configured" }
             JSONObject()
                 .put("platform", "react_native_android")
@@ -166,48 +288,13 @@ public class NativeLatchwayModule(
         promise: Promise,
     ) {
         operate(clientID, operationID, promise) { context ->
-            val snapshot = context.withIdentityToken(identityToken) { client -> client.quota(feature) }
-            val limits = JSONArray()
-            snapshot.limits.forEach { limit ->
-                limits.put(JSONObject()
-                    .put("metric", limit.metric)
-                    .putNullable("maximum", limit.maximum)
-                    .putNullable("used", limit.used)
-                    .putNullable("reserved", limit.reserved)
-                    .putNullable("remaining", limit.remaining)
-                    .putNullable("resets_at", limit.resetsAt)
-                    .put("hard", limit.hard))
-            }
-            JSONObject()
-                .put("feature", snapshot.feature)
-                .put("observed_at", snapshot.observedAt)
-                .put("limits", limits)
-                .toString()
+            context.withIdentityToken(identityToken) { client -> client.quota(feature) }
         }
     }
 
     override fun diagnostics(clientID: String, operationID: String, identityToken: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
-            val diagnostics = context.withIdentityToken(identityToken) { client -> client.diagnostics() }
-            JSONObject()
-                .put("contractVersion", diagnostics.contractVersion)
-                .put("protocolVersion", diagnostics.protocolVersion)
-                .put("keyStorage", diagnostics.key.backing.name.lowercase())
-                .put("attestation", JSONObject()
-                    .put("support", "supported")
-                    .put("provider", diagnostics.trustProvider)
-                    .put("trustLevel", diagnostics.trustLevel))
-                .put("session", JSONObject()
-                    .put("state", "active")
-                    .put("expiresAt", diagnostics.sessionExpiresAt)
-                    .put("refreshAvailable", diagnostics.refreshAvailable))
-                .put("installation", JSONObject()
-                    .put("id", diagnostics.installationId)
-                    .put("status", diagnostics.installationStatus))
-                .put("server", JSONObject()
-                    .put("version", diagnostics.serverVersion)
-                    .put("lastRequestID", diagnostics.requestId))
-                .toString()
+            context.withIdentityToken(identityToken) { client -> client.diagnostics() }
         }
     }
 
@@ -362,7 +449,7 @@ public class NativeLatchwayModule(
             try {
                 promise.resolve(action(context))
             } catch (failure: Throwable) {
-                promise.rejectSafe(failure)
+                promise.rejectSafe(failure, userInfoFactory)
             } finally {
                 jobs.remove(key)
             }
@@ -384,7 +471,7 @@ public class NativeLatchwayModule(
         val key = operationKey(clientID, operationID)
         val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try { promise.resolve(action()) }
-            catch (failure: Throwable) { promise.rejectSafe(failure) }
+            catch (failure: Throwable) { promise.rejectSafe(failure, userInfoFactory) }
             finally { jobs.remove(key) }
         }
         if (jobs.putIfAbsent(key, job) != null) {
@@ -398,20 +485,14 @@ public class NativeLatchwayModule(
     public companion object { public const val NAME: String = "NativeLatchway" }
 }
 
-private class NativeClientContext(
-    private val client: LatchwayClient,
+internal class NativeClientContext(
+    private val client: NativeClientOperations,
     private val tokenProvider: TransientIdentityTokenProvider,
     private val baseURL: okhttp3.HttpUrl,
 ) {
     private val operationMutex = Mutex()
     private val responses = ConcurrentHashMap<String, NativeResponse>()
-    private val applicationClient = OkHttpClient.Builder()
-        .addInterceptor(client.interceptor())
-        .addNetworkInterceptor(client.originGuard())
-        .authenticator(client.authenticator())
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    private val applicationClient = client.applicationClient
 
     suspend fun startRequest(identityToken: String, encoded: String): String =
         withIdentityToken(identityToken) {
@@ -421,7 +502,7 @@ private class NativeClientContext(
             } catch (failure: IllegalArgumentException) {
                 throw requestFailure("The request URL is invalid", failure)
             }
-            validateTarget(baseURL, url, input.method, input.feature)
+            validateNativeTarget(baseURL, url, input.method, input.feature)
             val mediaType = input.headers.firstOrNull { it.first.equals("content-type", ignoreCase = true) }
                 ?.second?.toMediaTypeOrNull()
             val body = when {
@@ -448,7 +529,7 @@ private class NativeClientContext(
                 )
             }
             try {
-                validateTarget(baseURL, response.request.url, input.method, input.feature)
+                validateNativeTarget(baseURL, response.request.url, input.method, input.feature)
                 if (response.code !in 200..599) throw responseFailure("The native response status is invalid")
             } catch (failure: Throwable) {
                 response.close()
@@ -488,7 +569,7 @@ private class NativeClientContext(
         responses.remove(responseID)?.close()
     }
 
-    suspend fun <T> withIdentityToken(token: String, action: suspend (LatchwayClient) -> T): T {
+    suspend fun <T> withIdentityToken(token: String, action: suspend (NativeClientOperations) -> T): T {
         if (token.isEmpty() || token.toByteArray(Charsets.UTF_8).size > 65_536 || token.any(Char::isISOControl)) {
             throw LatchwayException(
                 code = LatchwayErrorCode.REQUEST_INVALID,
@@ -504,9 +585,6 @@ private class NativeClientContext(
     fun close() {
         responses.values.forEach(NativeResponse::close)
         responses.clear()
-        applicationClient.dispatcher.cancelAll()
-        applicationClient.connectionPool.evictAll()
-        applicationClient.dispatcher.executorService.shutdown()
         client.close()
     }
 }
@@ -547,14 +625,14 @@ private class NativeResponse(
     }
 }
 
-private class TransientIdentityTokenProvider {
+internal class TransientIdentityTokenProvider {
     @Volatile private var value: String? = null
     fun set(token: String) { value = token }
     fun clear() { value = null }
     fun current(): String = value ?: throw IllegalStateException("identity token is unavailable")
 }
 
-private data class NativeConfiguration(
+internal data class NativeConfiguration(
     val baseURL: String,
     val applicationID: String,
     val environment: String,
@@ -702,7 +780,7 @@ private fun responseMetadata(responseID: String, response: Response): String {
         .toString()
 }
 
-private fun validateTarget(
+internal fun validateNativeTarget(
     baseURL: okhttp3.HttpUrl,
     target: okhttp3.HttpUrl,
     method: String,
@@ -836,7 +914,7 @@ private fun JSONObject.putNullable(name: String, value: Any?): JSONObject =
 
 private fun operationKey(clientID: String, operationID: String): String = "$clientID|$operationID"
 
-private fun Promise.rejectSafe(failure: Throwable) {
+private fun Promise.rejectSafe(failure: Throwable, userInfoFactory: () -> WritableMap) {
     val code: String
     val message: String
     val requestID: String?
@@ -865,7 +943,7 @@ private fun Promise.rejectSafe(failure: Throwable) {
             requestID = null; operationID = null; status = null; retryable = false
         }
     }
-    val userInfo = Arguments.createMap().apply {
+    val userInfo = userInfoFactory().apply {
         putString("code", code)
         putString("documentationURL", "https://docs.latchway.dev/errors/${code.replace('_', '-')}")
         requestID?.let { putString("requestID", it) }

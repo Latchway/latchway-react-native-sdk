@@ -24,6 +24,7 @@ __pycache__/
 
 # iOS local output
 Pods/
+.build/
 .swiftpm/
 .xcode.env.local
 DerivedData/

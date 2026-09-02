@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "FW-AUTH-101": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH101And102PublicBridgeConfiguresAndDispatchesNativeRequest",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth101And102GeneratedSpecForwardsBootstrapAndDpopDispatchToNativeSdk",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-101",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-101",
+      "Conformance/native-android-driver/src/test/kotlin/dev/latchway/reactnative/conformance/ReactNativeNativeSdkLiveConformanceTest.kt#exactLocallyPublishedAndroidSdkDrivesReactNativeDebugSession"
+    ],
+    "FW-AUTH-102": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH101And102PublicBridgeConfiguresAndDispatchesNativeRequest",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth101And102GeneratedSpecForwardsBootstrapAndDpopDispatchToNativeSdk",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-102",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-102",
+      "Conformance/native-android-driver/src/test/kotlin/dev/latchway/reactnative/conformance/ReactNativeNativeSdkLiveConformanceTest.kt#exactLocallyPublishedAndroidSdkDrivesReactNativeDebugSession"
+    ],
+    "FW-AUTH-103": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH103And104PublicBridgeForwardsFreshIdentityToExplicitRefresh",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth103AndBeh104OneGeneratedSpecCallKeepsSafeRetryAndFreshProofNative",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-103",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-103",
+      "Conformance/native-android-driver/src/test/kotlin/dev/latchway/reactnative/conformance/ReactNativeNativeSdkLiveConformanceTest.kt#exactLocallyPublishedAndroidSdkDrivesReactNativeDebugSession"
+    ],
+    "FW-AUTH-104": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH103And104PublicBridgeForwardsFreshIdentityToExplicitRefresh",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth104GeneratedSpecClearsRejectedIdentityBeforeReauthentication",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-104",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-104"
+    ],
+    "FW-AUTH-105": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH105And106PublicBridgeForwardsFamilyAndComponentRevocation",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth105GeneratedSpecDelegatesFamilyRetirementAndSurfacesTerminalState",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-105",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-105"
+    ],
+    "FW-AUTH-106": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWAUTH105And106PublicBridgeForwardsFamilyAndComponentRevocation",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth106GeneratedSpecSurfacesNativeComponentRevocationWithoutDispatch",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-AUTH-106",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-AUTH-106"
+    ],
+    "FW-REQ-101": [
+      "test/framework-conformance.test.ts#FW-REQ-001",
+      "test/framework-conformance.test.ts#FW-REQ-002",
+      "test/framework-conformance.test.ts#FW-REQ-003"
+    ],
+    "FW-REQ-102": [
+      "test/framework-conformance.test.ts#FW-AUTH-001"
+    ],
+    "FW-REQ-103": [
+      "test/framework-conformance.test.ts#FW-SEC-001"
+    ],
+    "FW-REQ-104": [
+      "test/framework-conformance.test.ts#FW-REQ-004"
+    ],
+    "FW-REQ-105": [
+      "test/framework-conformance.test.ts#FW-REQ-006"
+    ],
+    "FW-REQ-106": [
+      "test/framework-conformance.test.ts#FW-REQ-007"
+    ],
+    "FW-REQ-107": [
+      "test/framework-conformance.test.ts#FW-REQ-001",
+      "test/framework-conformance.test.ts#FW-REQ-002",
+      "test/framework-conformance.test.ts#FW-REQ-003"
+    ],
+    "FW-REQ-108": [
+      "test/framework-conformance.test.ts#FW-REQ-005"
+    ],
+    "FW-REQ-109": [
+      "test/framework-conformance.test.ts#FW-REQ-005"
+    ],
+    "FW-BEH-101": [
+      "test/framework-conformance.test.ts#FW-BEH-001"
+    ],
+    "FW-BEH-102": [
+      "test/framework-conformance.test.ts#FW-BEH-002"
+    ],
+    "FW-BEH-103": [
+      "test/framework-conformance.test.ts#FW-AUTH-001",
+      "test/framework-conformance.test.ts#FW-REQ-004"
+    ],
+    "FW-BEH-104": [
+      "test/framework-conformance.test.ts#FW-BEH-005",
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWBEH104PublicBridgeKeepsFrameworkRetryInsideNativeTransport",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwAuth103AndBeh104OneGeneratedSpecCallKeepsSafeRetryAndFreshProofNative",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-BEH-104",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-BEH-104"
+    ],
+    "FW-BEH-105": [
+      "test/framework-conformance.test.ts#FW-BEH-004"
+    ],
+    "FW-BEH-106": [
+      "test/framework-conformance.test.ts#FW-BEH-003"
+    ],
+    "FW-BEH-107": [
+      "test/framework-conformance.test.ts#FW-BEH-107",
+      "test/client.test.ts#FW-BEH-107",
+      "test/security-boundary.test.ts#FW-BEH-107"
+    ],
+    "FW-SEC-101": [
+      "test/framework-conformance.test.ts#FW-SEC-002"
+    ],
+    "FW-SEC-102": [
+      "test/framework-conformance.test.ts#FW-SEC-102",
+      "test/client.test.ts#FW-SEC-102",
+      "test/security-boundary.test.ts#FW-SEC-102"
+    ],
+    "FW-SEC-103": [
+      "Conformance/Tests/NativeIOSBridge/LatchwayNativeBridgeConformanceTests.swift#testFWSEC103ProductionTargetValidatorRevalidatesEveryRedirectDestination",
+      "android/src/test/java/dev/latchway/reactnative/NativeLatchwayModuleTest.kt#fwSec103ProductionResponseTargetRevalidationRejectsCrossOriginRedirectResult",
+      "Conformance/Tests/run-ios-locked-native-conformance.sh#FW-SEC-103",
+      "Conformance/Tests/run-android-locked-native-conformance.sh#FW-SEC-103"
+    ],
+    "FW-SEC-104": [
+      "test/framework-conformance.test.ts#FW-SEC-001"
+    ],
+    "FW-AUTH-108": [
+      "test/framework-conformance.test.ts#FW-AUTH-001",
+      "test/client.test.ts#FW-AUTH-108"
+    ],
+    "FW-AUTH-109": [
+      "test/framework-conformance.test.ts#FW-AUTH-001",
+      "test/client.test.ts#FW-AUTH-109"
+    ]
+  }
+}

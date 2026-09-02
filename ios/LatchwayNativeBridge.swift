@@ -8,9 +8,38 @@ public typealias LatchwayResolveString = @Sendable (String) -> Void
 public typealias LatchwayResolveVoid = @Sendable () -> Void
 public typealias LatchwayReject = @Sendable (String, String, NSError?) -> Void
 
+protocol NativeClientOperating: Sendable {
+    func startRequest(identityToken: String, encoded: String) async throws -> String
+    func readResponseChunk(responseID: String, maximumBytes: Double) async throws -> String
+    func closeResponse(responseID: String) async
+    func close() async
+    func quota(identityToken: String, feature: String) async throws -> String
+    func diagnostics(identityToken: String) async throws -> String
+    func refresh(identityToken: String) async throws
+    func prepareComponents(identityToken: String, encoded: String) async throws -> String
+    func revokeComponent(identityToken: String, encoded: String) async throws
+    func replaceComponent(identityToken: String, encoded: String) async throws -> String
+    func componentDiagnostics(encoded: String) async throws -> String
+    func revokeCurrentInstallation(identityToken: String) async throws
+    func revokeCurrentInstallationFamily(identityToken: String) async throws
+    func revokeFamily(identityToken: String, encoded: String) async throws
+}
+
+typealias NativeClientFactory = @Sendable (NativeConfiguration) throws -> any NativeClientOperating
+
 @objc(LatchwayNativeBridge)
 public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
-    private let store = LatchwayBridgeStore()
+    private let store: LatchwayBridgeStore
+
+    public override init() {
+        store = LatchwayBridgeStore { try NativeClientContext(configuration: $0) }
+        super.init()
+    }
+
+    init(makeClient: @escaping NativeClientFactory) {
+        store = LatchwayBridgeStore(makeClient: makeClient)
+        super.init()
+    }
 
     @objc(configureWithClientID:configurationJSON:resolve:reject:)
     public func configure(
@@ -104,7 +133,7 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         reject: @escaping LatchwayReject
     ) {
         runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
-            try await $0.refresh()
+            try await $0.refresh(identityToken: $1)
         }
     }
 
@@ -259,7 +288,7 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         reject: @escaping LatchwayReject
     ) {
         runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
-            try await $0.revokeCurrentInstallation()
+            try await $0.revokeCurrentInstallation(identityToken: $1)
         }
     }
 
@@ -272,7 +301,7 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         reject: @escaping LatchwayReject
     ) {
         runVoid(clientID: clientID, operationID: operationID, identityToken: identityToken, resolve: resolve, reject: reject) {
-            try await $0.revokeCurrentInstallationFamily()
+            try await $0.revokeCurrentInstallationFamily(identityToken: $1)
         }
     }
 
@@ -319,12 +348,12 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
         identityToken: String,
         resolve: @escaping LatchwayResolveVoid,
         reject: @escaping LatchwayReject,
-        operation: @escaping @Sendable (LatchwayClient) async throws -> Void
+        operation: @escaping @Sendable (any NativeClientOperating, String) async throws -> Void
     ) {
         Task {
             do {
                 _ = try await store.run(clientID: clientID, operationID: operationID) { context in
-                    try await context.withIdentityToken(identityToken, operation: operation)
+                    try await operation(context, identityToken)
                     return true
                 }
                 resolve()
@@ -350,16 +379,21 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
 }
 
 private actor LatchwayBridgeStore {
-    private var clients: [String: NativeClientContext] = [:]
+    private let makeClient: NativeClientFactory
+    private var clients: [String: any NativeClientOperating] = [:]
     private var componentClients: [String: NativeComponentContext] = [:]
     private var cancellations: [String: @Sendable () -> Void] = [:]
+
+    init(makeClient: @escaping NativeClientFactory) {
+        self.makeClient = makeClient
+    }
 
     func configure(clientID: String, encoded: String) throws -> String {
         guard clients[clientID] == nil, componentClients[clientID] == nil else {
             throw LatchwayError.invalidConfiguration("client identifier is already configured")
         }
         let configuration = try NativeConfiguration.decode(encoded)
-        let context = try NativeClientContext(configuration: configuration)
+        let context = try makeClient(configuration)
         clients[clientID] = context
         return try jsonString([
             "platform": "react_native_ios",
@@ -401,7 +435,7 @@ private actor LatchwayBridgeStore {
     func run<T: Sendable>(
         clientID: String,
         operationID: String,
-        operation: @escaping @Sendable (NativeClientContext) async throws -> T
+        operation: @escaping @Sendable (any NativeClientOperating) async throws -> T
     ) async throws -> T {
         guard let context = clients[clientID] else { throw LatchwayError.invalidConfiguration("client is not configured") }
         let key = "\(clientID)|\(operationID)"
@@ -452,7 +486,7 @@ private actor LatchwayBridgeStore {
     }
 }
 
-private final class NativeClientContext: @unchecked Sendable {
+private final class NativeClientContext: NativeClientOperating, @unchecked Sendable {
     private let identity = TransientIdentityTokenProvider()
     private let operationLock = NativeOperationLock()
     private let client: LatchwayClient
@@ -905,7 +939,7 @@ private actor NativeResponseHandle {
     }
 }
 
-private struct NativeConfiguration: Decodable {
+struct NativeConfiguration: Decodable {
     struct Apple: Decodable {
         let appAttestEnabled: Bool
         let rootKeychainAccessGroup: String
@@ -1190,7 +1224,7 @@ private func validateTarget(baseURL: URL, target: URL, method: String, feature: 
     }
 }
 
-private func targetHasSameAllowedOriginAndPath(
+func targetHasSameAllowedOriginAndPath(
     baseURL: URL,
     target: URL,
     method: String,
