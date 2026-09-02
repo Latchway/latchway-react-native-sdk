@@ -8,11 +8,15 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  ANDROID_RELEASE_PROFILES,
   accumulateMavenArchiveBytes,
   androidReleaseAssetNames,
+  expectedSingleMaintainerAndroidTagMessage,
   expectedMavenPrimaryPaths,
   validateAndroidReleaseEvidence,
+  validateAndroidReleaseFileEvidenceShape,
   validateMavenRepositoryPathClosure,
+  validateSingleMaintainerAndroidReleaseEvidence,
 } from "./android-release-evidence.mjs";
 import { validateCocoaPodsSourceBinding } from "./ios-release-evidence.mjs";
 import { readJSON, readLock, requireLockValue } from "./release-metadata.mjs";
@@ -71,6 +75,16 @@ execFileSync("python3", [fileURLToPath(new URL("./require-gh-version.py", import
 const compatibility = await readJSON("release-compatibility.json");
 const contractLock = await readLock();
 const selected = new Set(process.argv.slice(2));
+const supportedArguments = new Set([
+  "--all", "--javascript", "--core-ref", "--native-refs", "--android-single-maintainer-v1",
+]);
+const unsupportedArguments = [...selected].filter((argument) => !supportedArguments.has(argument));
+if (unsupportedArguments.length !== 0) {
+  throw new Error(`Unsupported published-dependency verifier argument: ${unsupportedArguments.join(", ")}.`);
+}
+if (selected.has("--android-single-maintainer-v1") && selected.size !== 1) {
+  throw new Error("The Android single-maintainer verifier cannot be combined with another release profile.");
+}
 const verifyAll = selected.size === 0 || selected.has("--all");
 const evidence = {
   schema_version: 1,
@@ -105,6 +119,9 @@ try {
   if (verifyAll || selected.has("--native-refs")) {
     evidence.dependencies.ios = await verifyIOS();
     evidence.dependencies.android = await verifyAndroid();
+  }
+  if (selected.has("--android-single-maintainer-v1")) {
+    evidence.dependencies.android = await verifyAndroid(ANDROID_RELEASE_PROFILES.singleMaintainerV1);
   }
   const output = process.env.LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE;
   if (typeof output === "string") {
@@ -809,23 +826,30 @@ async function verifyIOS() {
   });
 }
 
-async function verifyAndroid() {
+async function verifyAndroid(profile = ANDROID_RELEASE_PROFILES.strict) {
+  const singleMaintainer = profile === ANDROID_RELEASE_PROFILES.singleMaintainerV1;
   const dependency = compatibility.android;
   const repository = repositorySlug(dependency.repository, "Latchway/latchway-android");
   const tag = `v${dependency.version}`;
   const tagReference = verifyReleaseTag(dependency, "Android", tag);
   const release = githubRelease(repository, tag);
-  requireImmutableRelease(release, tag);
+  if (singleMaintainer) requireSingleMaintainerAndroidRelease(release, tag, dependency.version);
+  else requireImmutableRelease(release, tag);
   const archiveName = `latchway-android-${dependency.version}-maven-repository.zip`;
   const portalName = `latchway-android-${dependency.version}-central-portal.zip`;
-  const required = androidReleaseAssetNames(dependency.version);
+  const required = androidReleaseAssetNames(dependency.version, profile);
   requireExactReleaseAssets(release, required);
   const assets = await downloadAssets(repository, release, required, "android");
-  const releaseAttestation = verifyImmutableReleaseAttestations(
+  const releaseAttestation = singleMaintainer ? undefined : verifyImmutableReleaseAttestations(
     repository, tag, dependency.source_commit, assets,
   );
   for (const name of required) {
-    verifyGitHubAttestation(repository, assets.get(name).path, dependency.source_commit);
+    verifyGitHubAttestation(
+      repository,
+      assets.get(name).path,
+      dependency.source_commit,
+      singleMaintainer ? ".github/workflows/single-maintainer-release.yml" : ".github/workflows/release.yml",
+    );
   }
   const sums = parseSHA256SUMS(assets.get("SHA256SUMS").bytes.toString("utf8"));
   const checksumTargets = required.filter((name) => name !== "SHA256SUMS");
@@ -849,6 +873,7 @@ async function verifyAndroid() {
   const recordSHA = digest(assets.get("maven-central-deployment.json").bytes);
   const statusSHA = digest(assets.get("maven-central-deployment-status.json").bytes);
   validateAndroidReleaseEvidence({
+    profile,
     version: dependency.version,
     sourceCommit: dependency.source_commit,
     tag,
@@ -869,6 +894,34 @@ async function verifyAndroid() {
     proof,
     tagBinding,
   });
+  if (singleMaintainer) {
+    const maintainerIntent = await jsonAsset(assets, "latchway-single-maintainer-v1-intent.json");
+    const completion = await jsonAsset(assets, "single-maintainer-release-evidence.json");
+    const maintainerIntentSHA = digest(assets.get("latchway-single-maintainer-v1-intent.json").bytes);
+    validateSingleMaintainerAndroidReleaseEvidence({
+      version: dependency.version,
+      sourceCommit: dependency.source_commit,
+      tag,
+      coreCommit: compatibility.contract.core_commit,
+      coreBundleSHA256: compatibility.contract.bundle_sha256,
+      intentSHA256: maintainerIntentSHA,
+      mavenEvidenceSHA256: digest(assets.get("maven-central-release-evidence.json").bytes),
+      pinnedCoreConformanceSHA256: digest(assets.get("pinned-core-conformance.tar.gz").bytes),
+      intent: maintainerIntent,
+      completion,
+    });
+    const expectedTagMessage = expectedSingleMaintainerAndroidTagMessage(
+      dependency.version,
+      maintainerIntentSHA,
+    );
+    const tagObject = githubAnnotatedTag(repository, tagReference.tagObject);
+    if (tagObject?.sha !== tagReference.tagObject || tagObject?.tag !== tag
+        || tagObject?.object?.type !== "commit" || tagObject.object.sha !== dependency.source_commit
+        || tagObject.message !== expectedTagMessage
+        || tagBinding.message_sha256 !== digest(Buffer.from(expectedTagMessage, "utf8"))) {
+      throw new Error("Android single-maintainer annotated tag message does not bind the exact release intent.");
+    }
+  }
   if (proof.files.length !== expectedPrimaryPaths.size) {
     throw new Error("Maven Central evidence does not enumerate every exact primary artifact.");
   }
@@ -878,10 +931,8 @@ async function verifyAndroid() {
   );
   const seen = new Set();
   for (const [index, file] of proof.files.entries()) {
-    if (!hasExactKeys(file, [
-      "path", "sha256", "bytes", "signature_sha256", "signature_bytes", "signature_armored", "gpg_status",
-      "checksums", "checksums_byte_identical",
-    ]) || !hasExactKeys(file.gpg_status, GPG_STATUS_RECORD_KEYS)
+    validateAndroidReleaseFileEvidenceShape(file, profile);
+    if (!hasExactKeys(file.gpg_status, GPG_STATUS_RECORD_KEYS)
         || typeof file.path !== "string" || !/^[-A-Za-z0-9._/]+$/u.test(file.path) || seen.has(file.path)
         || !expectedPrimaryPaths.has(file.path)
         || !/^[0-9a-f]{64}$/u.test(file.sha256) || !/^[0-9a-f]{64}$/u.test(file.signature_sha256)
@@ -933,11 +984,14 @@ async function verifyAndroid() {
       }
     }
   }
-  return dependencySummary(repository, tag, dependency.source_commit, releaseAttestation, assets, {
+  const registry = {
     registry: "maven_central",
     repository_archive_sha256: digest(assets.get(archiveName).bytes),
     signing_fingerprint: proof.signing_fingerprint,
-  });
+  };
+  return singleMaintainer
+    ? singleMaintainerDependencySummary(repository, tag, dependency.source_commit, release, assets, registry)
+    : dependencySummary(repository, tag, dependency.source_commit, releaseAttestation, assets, registry);
 }
 
 function expectedMavenPURLs(version) {
@@ -1095,6 +1149,20 @@ function requireImmutableRelease(release, tag) {
   }
 }
 
+function requireSingleMaintainerAndroidRelease(release, tag, version) {
+  const expectedBody = "Published with the `single_maintainer_v1` profile.\n\n"
+    + "The Maven Central bytes, OpenPGP signatures, deterministic source artifacts, pinned-core conformance, "
+    + "and GitHub provenance in this release were verified by automation. Independent human review and "
+    + "external platform/device/provider evidence are deferred. Docker Compose and GCP Cloud Run evidence "
+    + "remain required by the global v1 profile.\n\n"
+    + "This release is not `release_qualified`, fully evidence-gated, or independently reviewed.";
+  if (release.tag_name !== tag || release.draft !== false || release.prerelease !== false
+      || release.name !== `Latchway Android SDK ${version} — single-maintainer v1`
+      || release.body !== expectedBody) {
+    throw new Error(`GitHub release ${tag} is not the exact finalized Android single-maintainer release.`);
+  }
+}
+
 function requireExactReleaseAssets(release, names) {
   const expected = [...names].sort();
   const observed = release.assets.map((asset) => asset.name).sort();
@@ -1201,8 +1269,16 @@ function verifyImmutableReleaseAttestations(repository, tag, sourceCommit, asset
   return releaseAttestation;
 }
 
-function verifyGitHubAttestation(repository, path, sourceCommit) {
+function verifyGitHubAttestation(
+  repository,
+  path,
+  sourceCommit,
+  workflow = ".github/workflows/release.yml",
+) {
   if (authenticatedInputs !== undefined) {
+    if (workflow !== ".github/workflows/release.yml") {
+      throw new Error("Offline GitHub build-attestation markers support only the strict release workflow.");
+    }
     const asset = basename(path);
     const marker = readAuthenticatedJSON(
       repository, join("build-attestations", `${asset}.json`), 64 * 1024,
@@ -1217,7 +1293,7 @@ function verifyGitHubAttestation(repository, path, sourceCommit) {
   }
   runGitHubCLI(["attestation", "verify", path,
     "--repo", repository,
-    "--signer-workflow", `${repository}/.github/workflows/release.yml`,
+    "--signer-workflow", `${repository}/${workflow}`,
     "--source-ref", "refs/heads/main",
     "--source-digest", sourceCommit,
     "--deny-self-hosted-runners"], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024 });
@@ -1284,6 +1360,17 @@ function verifyReleaseTag(dependency, label, explicitTag) {
     output = `${reference.object.sha}\trefs/tags/${tag}\n${tagObject.object.sha}\trefs/tags/${tag}^{}`;
   }
   return requireAnnotatedTagRefs(output, { tag, expectedCommit: dependency.source_commit, label });
+}
+
+function githubAnnotatedTag(repository, tagObject) {
+  if (!/^[0-9a-f]{40}$/u.test(tagObject)) throw new Error("Invalid annotated tag object identifier.");
+  if (authenticatedInputs !== undefined) {
+    return readAuthenticatedJSON(repository, "tag-object.json", 1024 * 1024);
+  }
+  const output = runGitHubCLI([
+    "api", "-H", "X-GitHub-Api-Version: 2026-03-10", `repos/${repository}/git/tags/${tagObject}`,
+  ], { encoding: "buffer", maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  return parseStrictJSONBytes(output, `${repository} annotated tag object`, 1024 * 1024);
 }
 
 function authenticatedInputRoot() {
@@ -1435,6 +1522,26 @@ function dependencySummary(repository, tag, sourceCommit, releaseAttestation, as
         sha256: asset.sha256,
         immutable_attestation: asset.immutableAttestation,
       }])),
+    public_registry: registry,
+  };
+}
+
+function singleMaintainerDependencySummary(repository, tag, sourceCommit, release, assets, registry) {
+  return {
+    repository: `https://github.com/${repository}`,
+    release_tag: tag,
+    source_commit: sourceCommit,
+    release_profile: ANDROID_RELEASE_PROFILES.singleMaintainerV1,
+    github_release_finalized: true,
+    github_release_immutable: release.immutable === true,
+    github_build_provenance: {
+      signer_workflow: `${repository}/.github/workflows/single-maintainer-release.yml`,
+      source_ref: "refs/heads/main",
+      source_commit: sourceCommit,
+      asset_count: assets.size,
+    },
+    release_assets: Object.fromEntries([...assets.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, asset]) => [name, { bytes: asset.bytes.byteLength, sha256: asset.sha256 }])),
     public_registry: registry,
   };
 }

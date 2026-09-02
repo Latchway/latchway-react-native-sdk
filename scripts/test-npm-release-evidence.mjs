@@ -24,7 +24,7 @@ import {
   validateGPGStatus,
   validateRetainedGPGStatus,
 } from "./gpg-status.mjs";
-import { androidReleaseAssetNames } from "./android-release-evidence.mjs";
+import { ANDROID_RELEASE_PROFILES, androidReleaseAssetNames } from "./android-release-evidence.mjs";
 import {
   decodeBase64Strict,
   RELEASE_PREDICATE_TYPE,
@@ -209,6 +209,32 @@ test("provenance from a prior failed run can be adopted by a later attempt", () 
   assert.equal(adoption.tarball.sha256, "d".repeat(64));
 });
 
+test("single-maintainer provenance must name its exact workflow", () => {
+  const workflow = ".github/workflows/single-maintainer-release.yml";
+  const statement = provenanceStatement(`${repository}/actions/runs/41/attempts/1`, {
+    workflow: "single-maintainer-release.yml",
+    eventName: "workflow_dispatch",
+  });
+  const origin = verifyProvenanceStatement(statement, {
+    packageName: "@latchway/react-native",
+    packageVersion: "1.0.0",
+    sha512,
+    expectedRepositoryURL: repository,
+    expectedCommit: commit,
+    expectedEvent: "workflow_dispatch",
+    expectedWorkflowPath: workflow,
+  });
+  assert.equal(origin.run_id, 41);
+  assert.throws(() => verifyProvenanceStatement(statement, {
+    packageName: "@latchway/react-native",
+    packageVersion: "1.0.0",
+    sha512,
+    expectedRepositoryURL: repository,
+    expectedCommit: commit,
+    expectedEvent: "workflow_dispatch",
+  }), /provenance/u);
+});
+
 test("publication state becomes adoption when only the consumer reruns", () => {
   assert.equal(normalizePublishPerformedForConsumerAttempt(true, {
     producerRunID: 41,
@@ -380,6 +406,7 @@ test("production dependency asset caps cover every fixed platform asset without 
     ["javascript", javascript],
     ["ios", ios],
     ["android", androidReleaseAssetNames("1.0.0")],
+    ["android", androidReleaseAssetNames("1.0.0", ANDROID_RELEASE_PROFILES.singleMaintainerV1)],
   ]) {
     for (const name of names) {
       const maximum = publishedDependencyAssetMaximumBytes(kind, name);
@@ -1288,7 +1315,7 @@ test("raw GitHub dependency readers use only authenticated offline captures in c
   const source = await readFile(new URL("verify-published-dependencies.mjs", import.meta.url), "utf8");
   assert.equal(source.match(/execFileSync\("gh"/gu)?.length ?? 0, 1,
     "all GitHub CLI calls must pass through the authenticated wrapper");
-  assert.equal((source.match(/runGitHubCLI\(/gu)?.length ?? 0) - 1, 4,
+  assert.equal((source.match(/runGitHubCLI\(/gu)?.length ?? 0) - 1, 5,
     "each GitHub CLI consumer must use the authenticated wrapper");
   assert.match(source,
     /execFileSync\("gh", arguments_, \{ \.\.\.options, env: githubReadEnvironment\(\) \}\)/u);
@@ -1743,7 +1770,7 @@ function provenanceStatement(invocation, overrides = {}) {
           uri: `git+${repository}@${resolvedCommit}`,
           digest: { gitCommit: resolvedCommit },
         }],
-        internalParameters: { github: { event_name: "repository_dispatch" } },
+        internalParameters: { github: { event_name: overrides.eventName ?? "repository_dispatch" } },
       },
       runDetails: {
         builder: { id: "https://github.com/actions/runner/github-hosted" },

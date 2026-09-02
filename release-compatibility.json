@@ -34,13 +34,13 @@
     "package": "@latchway/client",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "e3a57617e75bf3d46e858a1084749f46f819db1f"
+    "source_commit": "efa0a1074fd5639a02c4b852eac9ecaf4baf00f7"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "9f306d1e585069ca4aa703412c5d70656336e50f",
+    "source_commit": "92a394acbc00d1af6d258372f22b11ddae8e1750",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -51,7 +51,7 @@
     ],
     "version": "1.0.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "a994f8b5ee81fa831b8b2e57885df39f50fa2777",
+    "source_commit": "694cb4d2bff9e91582896e3cbbe140e960d9e4e4",
     "minimum_sdk": 24,
     "compile_sdk": 37,
     "sdk_platform_version": "37.0",

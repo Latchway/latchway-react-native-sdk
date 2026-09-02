@@ -4,15 +4,18 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  ANDROID_RELEASE_PROFILES,
   ANDROID_RELEASE_SCHEMAS,
   MAXIMUM_MAVEN_PORTAL_EXPANDED_BYTES,
   MAXIMUM_MAVEN_REPOSITORY_EXPANDED_BYTES,
   MAXIMUM_MAVEN_RETAINED_EXPANDED_BYTES,
   accumulateMavenArchiveBytes,
   androidReleaseAssetNames,
+  expectedSingleMaintainerAndroidTagMessage,
   expectedMavenPrimaryPaths,
   publicManifestFromFiles,
   validateAndroidReleaseEvidence,
+  validateSingleMaintainerAndroidReleaseEvidence,
   validateMavenRepositoryPathClosure,
 } from "./android-release-evidence.mjs";
 
@@ -60,6 +63,23 @@ test("Android dependency contract requires the exact ten release assets", () => 
     "maven-central-deployment-status.json",
     "maven-central-release-evidence.json",
   ]);
+  assert.deepEqual(androidReleaseAssetNames("1.0.0", ANDROID_RELEASE_PROFILES.singleMaintainerV1), [
+    "latchway-android-1.0.0-maven-repository.zip",
+    "latchway-android-1.0.0-central-portal.zip",
+    "docs-bundle-1.0.0.tar.gz",
+    "android-dependency-vulnerability-scan.json",
+    "latchway-maven-signing-public-key.asc",
+    "maven-central-upload-intent.json",
+    "latchway-single-maintainer-v1-intent.json",
+    "pinned-core-conformance.tar.gz",
+    "maven-central-deployment.json",
+    "maven-central-deployment-status.json",
+    "maven-central-release-evidence.json",
+    "github-release-tag-binding.json",
+    "single-maintainer-release-evidence.json",
+    "SHA256SUMS",
+  ]);
+  assert.throws(() => androidReleaseAssetNames("1.0.0", "permissive"), /Unsupported Android release/u);
 });
 
 test("Android reviewed repository requires the exact 24-primary and 120-file closure", () => {
@@ -146,6 +166,74 @@ test("Android dependency contract accepts manifest-bound public-registry adoptio
     () => validateAndroidReleaseEvidence(adopted),
     /public-registry adoption state/u,
   );
+});
+
+test("Android single-maintainer proof requires exact public signature byte identity", () => {
+  const value = fixture();
+  value.profile = ANDROID_RELEASE_PROFILES.singleMaintainerV1;
+  value.proof.signature_files_byte_identical = true;
+  value.proof.files[0].expected_signature_sha256 = value.proof.files[0].signature_sha256;
+  value.proof.files[0].signature_byte_identical = true;
+  assert.doesNotThrow(() => validateAndroidReleaseEvidence(value));
+
+  for (const [name, mutate] of [
+    ["missing aggregate signature identity", (candidate) => {
+      delete candidate.proof.signature_files_byte_identical;
+    }],
+    ["false aggregate signature identity", (candidate) => {
+      candidate.proof.signature_files_byte_identical = false;
+    }],
+    ["substituted expected signature", (candidate) => {
+      candidate.proof.files[0].expected_signature_sha256 = "0".repeat(64);
+    }],
+    ["false per-file signature identity", (candidate) => {
+      candidate.proof.files[0].signature_byte_identical = false;
+    }],
+  ]) {
+    const candidate = structuredClone(value);
+    mutate(candidate);
+    assert.throws(() => validateAndroidReleaseEvidence(candidate), undefined, name);
+  }
+  const strict = fixture();
+  strict.proof.signature_files_byte_identical = true;
+  assert.throws(
+    () => validateAndroidReleaseEvidence(strict),
+    /unexpected schema/u,
+    "the strict profile must not silently accept the lower-assurance proof extension",
+  );
+});
+
+test("Android single-maintainer completion binds exact source, intent, Maven proof, and deferrals", () => {
+  const value = singleMaintainerFixture();
+  assert.doesNotThrow(() => validateSingleMaintainerAndroidReleaseEvidence(value));
+  const recovered = structuredClone(value);
+  recovered.completion.workflow.run_attempt = 2;
+  assert.doesNotThrow(() => validateSingleMaintainerAndroidReleaseEvidence(recovered));
+  assert.equal(
+    expectedSingleMaintainerAndroidTagMessage(value.version, value.intentSHA256),
+    `Latchway Android SDK v1.0.0\n\nRelease profile: single_maintainer_v1\n`
+      + "Assurance: deferred; not release-qualified or independently reviewed\n"
+      + `Maintainer intent SHA-256: ${value.intentSHA256}`,
+  );
+  for (const [name, mutate] of [
+    ["source substitution", (candidate) => { candidate.completion.source.commit = "9".repeat(40); }],
+    ["Maven proof substitution", (candidate) => {
+      candidate.completion.maven_central_release_evidence_sha256 = "9".repeat(64);
+    }],
+    ["missing deferred evidence", (candidate) => { candidate.completion.deferred_evidence.pop(); }],
+    ["strong release claim", (candidate) => { candidate.completion.release_qualified = true; }],
+    ["different workflow run", (candidate) => { candidate.completion.workflow.run_id = 124; }],
+    ["earlier completion attempt", (candidate) => {
+      candidate.intent.workflow.run_attempt = 2;
+      candidate.completion.workflow.run_attempt = 1;
+    }],
+    ["boolean workflow run", (candidate) => { candidate.intent.workflow.run_id = true; }],
+    ["unexpected intent field", (candidate) => { candidate.intent.unreviewed = true; }],
+  ]) {
+    const candidate = structuredClone(value);
+    mutate(candidate);
+    assert.throws(() => validateSingleMaintainerAndroidReleaseEvidence(candidate), undefined, name);
+  }
 });
 
 function fixture() {
@@ -277,6 +365,80 @@ function fixture() {
       commit: sourceCommit,
       message_sha256: "a".repeat(64),
     },
+  };
+}
+
+function singleMaintainerFixture() {
+  const version = "1.0.0";
+  const sourceCommit = "a".repeat(40);
+  const coreCommit = "b".repeat(40);
+  const tag = `v${version}`;
+  const coreBundleSHA256 = "c".repeat(64);
+  const intentSHA256 = "d".repeat(64);
+  const mavenEvidenceSHA256 = "e".repeat(64);
+  const pinnedCoreConformanceSHA256 = "f".repeat(64);
+  const publishedCoordinates = [
+    "latchway-core", "latchway-okhttp", "latchway-play-integrity", "latchway-firebase-auth", "latchway-bom",
+  ].map((module) => `dev.latchway:${module}:${version}`);
+  const deferredEvidence = [
+    "independent_human_review", "live_sdk_conformance", "physical_devices",
+    "apple_distribution_and_extensions", "play_integrity_and_android_device", "firebase_app_check",
+    "turnstile", "live_provider", "cloud_deployments.aws_verified", "cloud_deployments.fly_io_verified",
+    "cloud_deployments.cloudflare_containers_verified", "operational_resilience",
+    "public_registries.documentation_production_verified", "mintlify_production",
+  ];
+  const forbiddenClaims = ["release_qualified", "fully_evidence_gated", "independently_reviewed"];
+  const globalEvidence = ["cloud_deployments.compose_verified", "cloud_deployments.gcp_cloud_run_verified"];
+  const intent = {
+    schema_version: 1,
+    kind: "latchway_single_maintainer_release_intent",
+    profile: "single_maintainer_v1",
+    status: "maintainer_requested",
+    status_claim: "v1_publication_in_progress_with_deferred_assurance",
+    publication_ready: false,
+    release_qualified: false,
+    requires_independent_human_review: false,
+    source: {
+      repository: "Latchway/latchway-android", commit: sourceCommit, version, tag, ref: "refs/heads/main",
+    },
+    contract: { core_commit: coreCommit, core_tag: tag, bundle_sha256: coreBundleSHA256, wire_protocol: 2 },
+    workflow: {
+      file: ".github/workflows/single-maintainer-release.yml", event: "workflow_dispatch", run_id: 123, run_attempt: 1,
+    },
+    maintainer_confirmation: "accepted_exact_phrase",
+    maven_coordinates: publishedCoordinates,
+    deferred_evidence: deferredEvidence,
+    forbidden_claims: forbiddenClaims,
+    global_profile_required_evidence: globalEvidence,
+    downstream_required_gates: [
+      "complete_local_release_tests_before_tag", "dependency_vulnerability_scan_before_tag",
+      "deterministic_maven_repository_before_tag", "annotated_tag_exact_commit",
+      "openpgp_signed_maven_artifacts", "exact_maven_central_byte_verification",
+      "build_provenance_attestation", "exact_github_release",
+    ],
+  };
+  const completion = {
+    schema_version: 1,
+    kind: "latchway_single_maintainer_release_evidence",
+    profile: "single_maintainer_v1",
+    status: "publication_completed_with_deferred_assurance",
+    publication_completed: true,
+    release_qualified: false,
+    fully_evidence_gated: false,
+    independently_reviewed: false,
+    source: { repository: "Latchway/latchway-android", commit: sourceCommit, tag, version },
+    workflow: { file: ".github/workflows/single-maintainer-release.yml", run_id: 123, run_attempt: 1 },
+    maintainer_intent_sha256: intentSHA256,
+    maven_central_release_evidence_sha256: mavenEvidenceSHA256,
+    pinned_core_conformance_sha256: pinnedCoreConformanceSHA256,
+    published_coordinates: publishedCoordinates,
+    global_profile_required_evidence: globalEvidence,
+    deferred_evidence: deferredEvidence,
+    forbidden_claims: forbiddenClaims,
+  };
+  return {
+    version, sourceCommit, tag, coreCommit, coreBundleSHA256, intentSHA256, mavenEvidenceSHA256,
+    pinnedCoreConformanceSHA256, intent, completion,
   };
 }
 

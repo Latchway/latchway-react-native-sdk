@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { validateIOSSwiftPMLocks } from "./swiftpm-release-lock.mjs";
+
 const root = new URL("../", import.meta.url);
 
 test("CI lock exposes exact published Android toolchain package versions", () => {
@@ -113,4 +115,46 @@ test("standalone source verification freezes every contract-bundle source", asyn
     assert.ok(verifier.includes(`    "${path}",`), path);
   }
   assert.match(verifier, /"--",\s*\.\.\.frozenContractPaths,/u);
+});
+
+test("SwiftPM bridge locks follow the exact iOS source revision in release compatibility", async () => {
+  const compatibility = JSON.parse(await readFile(new URL("release-compatibility.json", root), "utf8"));
+  const packageSwift = await readFile(new URL("Package.swift", root), "utf8");
+  const packageResolved = JSON.parse(await readFile(new URL("Package.resolved", root), "utf8"));
+  const input = {
+    packageSwift,
+    packageResolved,
+    expectedRepository: compatibility.ios.repository,
+    expectedCommit: compatibility.ios.source_commit,
+  };
+  assert.doesNotThrow(() => validateIOSSwiftPMLocks(input));
+
+  assert.throws(
+    () => validateIOSSwiftPMLocks({ ...input, packageSwift: packageSwift.replace(
+      compatibility.ios.source_commit, "0".repeat(40),
+    ) }),
+    /Package\.swift does not pin/u,
+  );
+  const substituted = structuredClone(packageResolved);
+  substituted.pins.find((pin) => pin.identity === "latchway-ios-sdk").state.revision = "0".repeat(40);
+  assert.throws(
+    () => validateIOSSwiftPMLocks({ ...input, packageResolved: substituted }),
+    /Package\.resolved does not pin/u,
+  );
+  const ambiguous = structuredClone(packageResolved);
+  ambiguous.pins.push(structuredClone(ambiguous.pins.find((pin) => pin.identity === "latchway-ios-sdk")));
+  assert.throws(
+    () => validateIOSSwiftPMLocks({ ...input, packageResolved: ambiguous }),
+    /Package\.resolved does not pin/u,
+  );
+  const versioned = structuredClone(packageResolved);
+  versioned.pins.find((pin) => pin.identity === "latchway-ios-sdk").state.version = "1.0.0";
+  assert.throws(
+    () => validateIOSSwiftPMLocks({ ...input, packageResolved: versioned }),
+    /Package\.resolved does not pin/u,
+  );
+
+  const verifier = await readFile(new URL("scripts/verify-compatibility.mjs", root), "utf8");
+  assert.match(verifier, /validateIOSSwiftPMLocks/u);
+  assert.match(verifier, /expectedCommit:\s*compatibility\.ios\.source_commit/u);
 });

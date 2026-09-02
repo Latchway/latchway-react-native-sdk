@@ -10,6 +10,7 @@ import {
   requireLockValue,
   requireMatch,
 } from "./release-metadata.mjs";
+import { validateIOSSwiftPMLocks } from "./swiftpm-release-lock.mjs";
 
 const compatibility = await readJSON("release-compatibility.json");
 const packageJSON = await readJSON("package.json");
@@ -59,6 +60,12 @@ if (!new RegExp(`spec\\.dependency "${escapedPod}", "${escapedIOSVersion}"`, "u"
 }
 assertEqual(requireMatch(podspec, /ios:\s*"([^"]+)"/u, "podspec minimum iOS version"),
   compatibility.ios.minimum_platform, "podspec minimum iOS version");
+validateIOSSwiftPMLocks({
+  packageSwift: await readText("Package.swift"),
+  packageResolved: await readJSON("Package.resolved"),
+  expectedRepository: compatibility.ios.repository,
+  expectedCommit: compatibility.ios.source_commit,
+});
 
 const androidBuild = await readText("android/build.gradle.kts");
 const androidSettings = await readText("android/settings.gradle.kts");

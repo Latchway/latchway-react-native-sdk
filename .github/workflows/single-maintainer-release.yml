@@ -1,0 +1,620 @@
+name: Single-maintainer v1 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_profile:
+        description: Explicit lower-assurance publication profile
+        required: true
+        type: choice
+        options: [single_maintainer_v1]
+      release_commit:
+        description: Exact 40-character main commit to publish
+        required: true
+        type: string
+      release_version:
+        description: Must be 1.0.0
+        required: true
+        default: 1.0.0
+        type: string
+      confirmation:
+        description: Type publish-v1.0.0-with-deferred-assurance
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: react-native-single-maintainer-v1-${{ inputs.release_commit }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.19.0
+  PNPM_VERSION: 10.15.0
+  NPM_VERSION: 11.6.2
+  NPM_CLI_SHA256: 585f95094ee5cb2788ee11d90f2a518a7c9ef6e083fa141d0b63ca3383675a20
+  RELEASE_VERSION: 1.0.0
+  RELEASE_TAG: v1.0.0
+
+jobs:
+  intent:
+    name: Bind explicit deferred-assurance intent to exact main source
+    if: github.repository == 'Latchway/latchway-react-native-sdk' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      android_commit: ${{ steps.intent.outputs.android_commit }}
+      android_version: ${{ steps.intent.outputs.android_version }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      commit: ${{ steps.intent.outputs.commit }}
+      core_commit: ${{ steps.intent.outputs.core_commit }}
+      intent_sha256: ${{ steps.intent.outputs.intent_sha256 }}
+      ios_commit: ${{ steps.intent.outputs.ios_commit }}
+      ios_version: ${{ steps.intent.outputs.ios_version }}
+      javascript_commit: ${{ steps.intent.outputs.javascript_commit }}
+      javascript_version: ${{ steps.intent.outputs.javascript_version }}
+      tag: ${{ steps.intent.outputs.tag }}
+      version: ${{ steps.intent.outputs.version }}
+    steps:
+      - name: Authenticate this exact workflow run and attempt before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,15}$ ]]
+          (( GITHUB_RUN_ID <= 9007199254740991 ))
+          (( GITHUB_RUN_ATTEMPT <= 9007199254740991 ))
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            > "$RUNNER_TEMP/run.json"
+          jq --exit-status --arg commit "$RELEASE_COMMIT" --argjson run "$GITHUB_RUN_ID" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" '
+              .id == $run and .run_attempt == $attempt and .event == "workflow_dispatch" and
+              .status == "in_progress" and .head_sha == $commit and .head_branch == "main" and
+              .repository.full_name == "Latchway/latchway-react-native-sdk" and
+              .head_repository.full_name == "Latchway/latchway-react-native-sdk" and
+              (.workflow_id | type == "number" and . > 0)
+            ' "$RUNNER_TEMP/run.json" >/dev/null
+          workflow_id=$(jq --raw-output .workflow_id "$RUNNER_TEMP/run.json")
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id" > "$RUNNER_TEMP/workflow.json"
+          jq --exit-status \
+            '.path == ".github/workflows/single-maintainer-release.yml" and .state == "active"' \
+            "$RUNNER_TEMP/workflow.json" >/dev/null
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify explicit single-maintainer request without credentials
+        id: intent
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: >-
+          python3 scripts/verify-maintainer-release.py
+          --repository-id react_native --repository-name "$GITHUB_REPOSITORY"
+          --profile "$RELEASE_PROFILE"
+          --release-commit "$RELEASE_COMMIT"
+          --release-version "$RELEASE_VERSION_INPUT"
+          --workflow-commit "$GITHUB_SHA" --workflow-ref "$GITHUB_REF"
+          --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --confirmation "$CONFIRMATION"
+          --intent-output "$RUNNER_TEMP/latchway-single-maintainer-v1-intent.json"
+          --github-output "$GITHUB_OUTPUT"
+      - name: Reject a v1 tag owned by another workflow transaction
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.intent.outputs.commit }}
+          INTENT_SHA256: ${{ steps.intent.outputs.intent_sha256 }}
+        run: |
+          set -euo pipefail
+          message="Latchway React Native SDK v1.0.0
+
+          Release profile: single_maintainer_v1
+          Assurance: deferred; not release-qualified or independently reviewed
+          Maintainer intent SHA-256: $INTENT_SHA256"
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/existing-tag-ref.json" 2> "$RUNNER_TEMP/existing-tag-error"; then
+            grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/existing-tag-error"
+            exit 0
+          fi
+          test "$(jq -r .object.type "$RUNNER_TEMP/existing-tag-ref.json")" = tag
+          object=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$RUNNER_TEMP/existing-tag-ref.json")
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" > "$RUNNER_TEMP/existing-tag-object.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" --arg message "$message" \
+            '.tag==$tag and .object.type=="commit" and .object.sha==$commit and .message==$message' \
+            "$RUNNER_TEMP/existing-tag-object.json" >/dev/null
+      - id: artifact
+        run: printf 'name=react-native-maintainer-intent-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/latchway-single-maintainer-v1-intent.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  verify-source:
+    name: Verify all locked sources and public dependency coordinates before mutation
+    needs: intent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      attestations: read
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          path: latchway-react-native-sdk
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-js
+          ref: ${{ needs.intent.outputs.javascript_commit }}
+          path: latchway-js
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-ios-sdk
+          ref: ${{ needs.intent.outputs.ios_commit }}
+          path: latchway-ios-sdk
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway-android
+          ref: ${{ needs.intent.outputs.android_commit }}
+          path: latchway-android
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: Latchway/latchway
+          ref: ${{ env.RELEASE_TAG }}
+          path: latchway
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact locked SDK commits and actual annotated public tags
+        run: |
+          set -euo pipefail
+          pairs=(
+            "latchway-js:${{ needs.intent.outputs.javascript_commit }}"
+            "latchway-ios-sdk:${{ needs.intent.outputs.ios_commit }}"
+            "latchway-android:${{ needs.intent.outputs.android_commit }}"
+          )
+          for pair in "${pairs[@]}"; do
+            directory=${pair%%:*}; commit=${pair#*:}
+            test "$(git -C "$directory" rev-parse HEAD)" = "$commit"
+            test "$(git -C "$directory" cat-file -t "$RELEASE_TAG")" = tag
+            test "$(git -C "$directory" rev-parse "$RELEASE_TAG^{commit}")" = "$commit"
+          done
+          core_release_commit=$(git -C latchway rev-parse "$RELEASE_TAG^{commit}")
+          test "$(git -C latchway cat-file -t "$RELEASE_TAG")" = tag
+          test "$(git -C latchway rev-parse HEAD)" = "$core_release_commit"
+          git -C latchway merge-base --is-ancestor \
+            "${{ needs.intent.outputs.core_commit }}" "$core_release_commit"
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - name: Build deterministic locked JavaScript packages
+        working-directory: latchway-js
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm pack:check
+      - name: Verify byte-identical locked JavaScript npm dependency
+        run: |
+          set -euo pipefail
+          metadata=$(npm view '@latchway/client@1.0.0' dist.tarball --json --registry=https://registry.npmjs.org/)
+          url=$(jq -er '.["dist.tarball"] // .dist.tarball // . | select(startswith("https://registry.npmjs.org/"))' <<<"$metadata")
+          curl --proto '=https' --tlsv1.2 --fail --location --max-filesize 20971520 --output "$RUNNER_TEMP/client.tgz" "$url"
+          cmp latchway-js/.artifacts/latchway-client-1.0.0.tgz "$RUNNER_TEMP/client.tgz"
+      - name: Rebuild and verify the locked contract bundle from the core release source
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/latchway-contract"
+          python3 latchway/scripts/build-contract-bundle.py \
+            --output-directory "$RUNNER_TEMP/latchway-contract"
+          pnpm --dir latchway-react-native-sdk verify:bundle -- \
+            "$RUNNER_TEMP/latchway-contract/latchway-contract-${{ needs.intent.outputs.version }}.tar.gz"
+      - name: Verify exact CocoaPods publication metadata
+        run: |
+          set -euo pipefail
+          podspec_url='https://cdn.cocoapods.org/Specs/4/e/b/Latchway/1.0.0/Latchway.podspec.json'
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --max-filesize 1048576 --output "$RUNNER_TEMP/Latchway.json" "$podspec_url"
+          jq -e '.name=="Latchway" and .version=="1.0.0" and .source.git=="https://github.com/Latchway/latchway-ios-sdk.git" and .source.tag=="v1.0.0" and ([.subspecs[].name]|sort)==["AppAttest","AppExtensions","Core","FirebaseAuth"]' "$RUNNER_TEMP/Latchway.json" >/dev/null
+      - name: Authenticate exact Android single-maintainer release, provenance, and Maven bytes
+        working-directory: latchway-react-native-sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATCHWAY_PUBLISHED_DEPENDENCY_EVIDENCE: ${{ runner.temp }}/android-published-dependency-evidence.json
+        run: node scripts/verify-published-dependencies.mjs --android-single-maintainer-v1
+      - name: Run complete React Native source, compatibility, package, and consumer gates
+        working-directory: latchway-react-native-sdk
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm verify:compatibility --sources
+          pnpm check
+          pnpm pack:check
+          pnpm verify:reproducible
+          pnpm consumer:check --published
+
+  core-release-gate:
+    name: Authenticate the exact public core v1 evidence before mutation
+    needs: intent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: read
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          persist-credentials: false
+      - name: Verify the public single-maintainer core record, supply chain, Compose, and Cloud Run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/verify-public-core-release.sh "${{ needs.intent.outputs.core_commit }}" "$RUNNER_TEMP/public-core-v1"
+
+  tag:
+    name: Create or verify exact annotated deferred-assurance tag
+    needs: [intent, verify-source, core-release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: single-maintainer-v1
+    permissions:
+      contents: write
+    steps:
+      - name: Verify exact lower-assurance environment before tag mutation
+        env:
+          OBSERVED_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: test "$OBSERVED_POLICY_ID" = "latchway-release-controls-v1:latchway-react-native-sdk:single-maintainer-v1"
+      - name: Create or adopt only the exact annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTENT_SHA256: ${{ needs.intent.outputs.intent_sha256 }}
+          REQUESTED_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_COMMIT: ${{ needs.intent.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_COMMIT" = "$REQUESTED_COMMIT"
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          main_head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+            --jq '.object.sha | select(test("^[0-9a-f]{40}$"))')
+          test "$RELEASE_COMMIT" = "$main_head"
+          message="Latchway React Native SDK v1.0.0
+
+          Release profile: single_maintainer_v1
+          Assurance: deferred; not release-qualified or independently reviewed
+          Maintainer intent SHA-256: $INTENT_SHA256"
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/ref.json" 2> "$RUNNER_TEMP/ref.err"; then
+            grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/ref.err"
+            jq -n --arg tag "$RELEASE_TAG" --arg message "$message" --arg object "$RELEASE_COMMIT" '{tag:$tag,message:$message,object:$object,type:"commit"}' > "$RUNNER_TEMP/tag.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input "$RUNNER_TEMP/tag.json" > "$RUNNER_TEMP/tag-result.json"
+            jq -n --arg ref "refs/tags/$RELEASE_TAG" --arg sha "$(jq -r .sha "$RUNNER_TEMP/tag-result.json")" '{ref:$ref,sha:$sha}' > "$RUNNER_TEMP/create-ref.json"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input "$RUNNER_TEMP/create-ref.json" >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/ref.json"
+          fi
+          object=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$RUNNER_TEMP/ref.json")
+          test "$(jq -r .object.type "$RUNNER_TEMP/ref.json")" = tag
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" > "$RUNNER_TEMP/tag-object.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" --arg message "$message" '.tag==$tag and .object.type=="commit" and .object.sha==$commit and .message==$message' "$RUNNER_TEMP/tag-object.json" >/dev/null
+
+  package:
+    name: Seal deterministic tagged React Native package
+    needs: [intent, tag]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - name: Verify exact tag, rebuild twice, and seal documentation
+        run: |
+          pnpm release:preflight -- "$RELEASE_TAG"
+          pnpm pack:check
+          pnpm verify:reproducible
+          python3 scripts/build_docs_bundle.py --output-dir .artifacts --version "$RELEASE_VERSION" --commit "${{ needs.intent.outputs.commit }}" --require-clean
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.intent.outputs.artifact_name }}
+          path: .artifacts/intent
+      - name: Verify and stage maintainer intent
+        env:
+          INTENT_SHA256: ${{ needs.intent.outputs.intent_sha256 }}
+        run: |
+          printf '%s  %s\n' "$INTENT_SHA256" .artifacts/intent/latchway-single-maintainer-v1-intent.json | sha256sum -c --strict
+          install -m 600 .artifacts/intent/latchway-single-maintainer-v1-intent.json .artifacts/
+      - id: artifact
+        run: printf 'name=react-native-single-maintainer-release-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            .artifacts/latchway-react-native-1.0.0.tgz
+            .artifacts/latchway-react-native-1.0.0.tgz.sha256
+            .artifacts/docs-bundle-1.0.0.tar.gz
+            .artifacts/package-evidence.json
+            .artifacts/build-reproducibility.json
+            .artifacts/latchway-single-maintainer-v1-intent.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  android-consumer:
+    name: Compile Android bridge and host against public Maven 1.0.0
+    needs: [intent, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with: {version: 10.15.0}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with: {node-version: 24.19.0}
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with: {distribution: temurin, java-version: "17"}
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      - run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'ndk;27.1.12297006'
+      - run: pnpm install --frozen-lockfile
+      - run: ./android/gradlew -p android clean check --no-daemon
+      - run: ./android/gradlew -p example/android :app:compileDebugKotlin :app:lintDebug --no-daemon
+
+  ios-consumer:
+    name: Compile iOS host against public CocoaPods 1.0.0
+    needs: [intent, package]
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@d15e628ca66d93ee5f352c71671a7bc6a97af5c9 # v6.0.8
+        with: {version: 10.15.0}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with: {node-version: 24.19.0}
+      - run: pnpm install --frozen-lockfile
+      - run: pod install --repo-update
+        working-directory: example/ios
+        env: {RCT_NEW_ARCH_ENABLED: "1"}
+      - run: xcodebuild -workspace LatchwayExample.xcworkspace -scheme LatchwayExample -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/latchway-rn-ios-release" CODE_SIGNING_ALLOWED=NO build
+        working-directory: example/ios
+
+  publish:
+    name: Trusted npm publication with provenance and byte adoption
+    needs: [intent, package, android-consumer, ios-consumer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: single-maintainer-v1
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - name: Verify exact lower-assurance environment before OIDC or npm publication
+        env:
+          OBSERVED_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: test "$OBSERVED_POLICY_ID" = "latchway-release-controls-v1:latchway-react-native-sdk:single-maintainer-v1"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.intent.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+      - name: Install the hash-pinned trusted-publishing npm CLI
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/npm-$NPM_VERSION.tgz"
+          curl --proto '=https' --tlsv1.2 --fail --location --max-filesize 4194304 \
+            --output "$archive" "https://registry.npmjs.org/npm/-/npm-$NPM_VERSION.tgz"
+          printf '%s  %s\n' "$NPM_CLI_SHA256" "$archive" | sha256sum -c --strict
+          mkdir -m 700 "$RUNNER_TEMP/npm-cli"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/npm-cli" --no-same-owner --no-same-permissions
+          cli="$RUNNER_TEMP/npm-cli/package/bin/npm-cli.js"
+          test "$("$cli" --version)" = "$NPM_VERSION"
+          printf 'LATCHWAY_NPM_CLI=%s\n' "$cli" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: ${{ runner.temp }}/release/latchway-react-native-1.0.0.tgz
+      - name: Publish missing version or adopt byte-identical registry archive
+        id: npm_publish
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          set -euo pipefail
+          test -z "${NODE_AUTH_TOKEN:-}"
+          test -z "${NPM_TOKEN:-}"
+          archive="$RUNNER_TEMP/release/latchway-react-native-1.0.0.tgz"
+          integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | base64 -w 0)"
+          publish_performed=false
+          if metadata=$("$LATCHWAY_NPM_CLI" view '@latchway/react-native@1.0.0' dist.integrity dist.tarball --json --registry=https://registry.npmjs.org/ 2>"$RUNNER_TEMP/npm-view.err"); then
+            test "$(jq -r '.["dist.integrity"] // .dist.integrity' <<<"$metadata")" = "$integrity"
+            url=$(jq -er '.["dist.tarball"] // .dist.tarball | select(startswith("https://registry.npmjs.org/"))' <<<"$metadata")
+            curl --proto '=https' --tlsv1.2 --fail --location --max-filesize 20971520 --output "$RUNNER_TEMP/existing.tgz" "$url"
+            cmp --silent "$archive" "$RUNNER_TEMP/existing.tgz"
+          else
+            grep -Eq 'E404|404 Not Found' "$RUNNER_TEMP/npm-view.err"
+            "$LATCHWAY_NPM_CLI" publish "$archive" --access public --provenance --tag latest --ignore-scripts --registry=https://registry.npmjs.org/
+            publish_performed=true
+          fi
+          verified=false
+          for attempt in $(seq 1 30); do
+            if metadata=$("$LATCHWAY_NPM_CLI" view '@latchway/react-native@1.0.0' dist.integrity dist.tarball --json --registry=https://registry.npmjs.org/ 2>/dev/null); then
+              test "$(jq -r '.["dist.integrity"] // .dist.integrity' <<<"$metadata")" = "$integrity"
+              url=$(jq -er '.["dist.tarball"] // .dist.tarball | select(startswith("https://registry.npmjs.org/"))' <<<"$metadata")
+              curl --proto '=https' --tlsv1.2 --fail --location --max-filesize 20971520 --output "$RUNNER_TEMP/published.tgz" "$url"
+              cmp --silent "$archive" "$RUNNER_TEMP/published.tgz" && verified=true && break
+            fi
+            sleep 10
+          done
+          test "$verified" = true
+          printf 'publish_performed=%s\n' "$publish_performed" >> "$GITHUB_OUTPUT"
+      - name: Verify exact trusted-publisher provenance and registry signatures
+        id: registry_evidence
+        env:
+          EXPECTED_RELEASE_TAG: ${{ needs.intent.outputs.tag }}
+          EXPECTED_SOURCE_COMMIT: ${{ needs.intent.outputs.commit }}
+          EXPECTED_WORKFLOW_PATH: .github/workflows/single-maintainer-release.yml
+          PUBLISH_PERFORMED: ${{ steps.npm_publish.outputs.publish_performed }}
+          PUBLISH_PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+          PUBLISH_PRODUCER_RUN_ID: ${{ github.run_id }}
+        run: node scripts/verify-published.mjs "$RUNNER_TEMP/release/latchway-react-native-1.0.0.tgz"
+      - id: artifact
+        run: printf 'name=react-native-maintainer-npm-evidence-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            ${{ runner.temp }}/release/npm-registry-version.json
+            ${{ runner.temp }}/release/npm-registry-view.json
+            ${{ runner.temp }}/release/npm-attestations.json
+            ${{ runner.temp }}/release/npm-audit-signatures.json
+            ${{ runner.temp }}/release/npm-registry-evidence-manifest.json
+            ${{ runner.temp }}/release/post-publish-evidence.json
+            ${{ runner.temp }}/release/${{ steps.registry_evidence.outputs.adoption_asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  github-release:
+    name: Publish exact GitHub release with deferred-assurance notice
+    needs: [intent, package, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: single-maintainer-v1
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Verify exact lower-assurance environment before OIDC or release mutation
+        env:
+          OBSERVED_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: test "$OBSERVED_POLICY_ID" = "latchway-release-controls-v1:latchway-react-native-sdk:single-maintainer-v1"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.publish.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/attest-build-provenance@e4d4f7c39adfa4c260fb5c147f0622000aa14b99 # v4.0.0
+        with:
+          subject-path: ${{ runner.temp }}/release/*
+      - name: Resume an exact draft, verify every byte, and finalize once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTENT_SHA256: ${{ needs.intent.outputs.intent_sha256 }}
+          RELEASE_COMMIT: ${{ needs.intent.outputs.commit }}
+        run: |
+          set -euo pipefail
+          title='Latchway React Native SDK 1.0.0 — single-maintainer v1'
+          printf '%s\n' 'Published with the `single_maintainer_v1` profile. External platform/device/provider evidence and independent human review are deferred. This release is not `release_qualified`, fully evidence-gated, or independently reviewed.' > "$RUNNER_TEMP/notes.md"
+          message="Latchway React Native SDK v1.0.0
+
+          Release profile: single_maintainer_v1
+          Assurance: deferred; not release-qualified or independently reviewed
+          Maintainer intent SHA-256: $INTENT_SHA256"
+          verify_tag() {
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-tag-ref.json"
+            test "$(jq -r .object.type "$RUNNER_TEMP/release-tag-ref.json")" = tag
+            local object
+            object=$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' "$RUNNER_TEMP/release-tag-ref.json")
+            gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" > "$RUNNER_TEMP/release-tag-object.json"
+            jq -e --arg tag "$RELEASE_TAG" --arg commit "$RELEASE_COMMIT" --arg message "$message" \
+              '.tag==$tag and .object.type=="commit" and .object.sha==$commit and .message==$message' \
+              "$RUNNER_TEMP/release-tag-object.json" >/dev/null
+          }
+          root="$RUNNER_TEMP/release"
+          test -z "$(find "$root" -type l -print -quit)"
+          find "$root" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$RUNNER_TEMP/local-assets"
+          test -s "$RUNNER_TEMP/local-assets"
+          verify_tag
+          if ! gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json" 2> "$RUNNER_TEMP/release-error"; then
+            grep --fixed-strings --quiet 'HTTP 404' "$RUNNER_TEMP/release-error"
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "$title" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          jq -e --arg title "$title" --rawfile body "$RUNNER_TEMP/notes.md" '
+            .tag_name=="v1.0.0" and .name==$title and .body==$body and
+            .prerelease==false and (.draft==true or .draft==false)
+          ' "$RUNNER_TEMP/release.json" >/dev/null
+          jq -r '.assets[].name' "$RUNNER_TEMP/release.json" | while IFS= read -r name; do
+            grep --fixed-strings --line-regexp --quiet "$name" "$RUNNER_TEMP/local-assets"
+          done
+          while IFS= read -r name; do
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+            count=$(jq --arg name "$name" '[.assets[] | select(.name==$name)] | length' "$RUNNER_TEMP/release.json")
+            if [[ "$count" = 0 ]]; then
+              test "$(jq -r .draft "$RUNNER_TEMP/release.json")" = true
+              gh release upload "$RELEASE_TAG" "$root/$name"
+            else
+              test "$count" = 1
+              existing=$(mktemp -d "$RUNNER_TEMP/existing-asset.XXXXXX")
+              gh release download "$RELEASE_TAG" --pattern "$name" --dir "$existing"
+              cmp --silent "$root/$name" "$existing/$name"
+            fi
+          done < "$RUNNER_TEMP/local-assets"
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          jq -r '.assets[].name' "$RUNNER_TEMP/release.json" | LC_ALL=C sort > "$RUNNER_TEMP/remote-assets"
+          diff --unified=0 "$RUNNER_TEMP/local-assets" "$RUNNER_TEMP/remote-assets"
+          verified=$(mktemp -d "$RUNNER_TEMP/verified-assets.XXXXXX")
+          gh release download "$RELEASE_TAG" --dir "$verified"
+          diff -qr "$root" "$verified"
+          verify_tag
+          if [[ "$(jq -r .draft "$RUNNER_TEMP/release.json")" == true ]]; then
+            release_id=$(jq -er '.id | select(type=="number" and .>0)' "$RUNNER_TEMP/release.json")
+            printf '{"draft":false}\n' > "$RUNNER_TEMP/finalize-release.json"
+            gh api --method PATCH -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id" --input "$RUNNER_TEMP/finalize-release.json" >/dev/null
+          fi
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/final-release.json"
+          jq -e --arg title "$title" --rawfile body "$RUNNER_TEMP/notes.md" '
+            .tag_name=="v1.0.0" and .name==$title and .body==$body and .draft==false and .prerelease==false
+          ' "$RUNNER_TEMP/final-release.json" >/dev/null
+          final=$(mktemp -d "$RUNNER_TEMP/final-assets.XXXXXX")
+          gh release download "$RELEASE_TAG" --dir "$final"
+          diff -qr "$root" "$final"
+          verify_tag

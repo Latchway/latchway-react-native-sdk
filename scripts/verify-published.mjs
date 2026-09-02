@@ -64,7 +64,14 @@ const expectedRepository = requiredEnvironment(
   "GITHUB_REPOSITORY", /^Latchway\/latchway-react-native-sdk$/u,
 );
 const expectedRef = requiredEnvironment("GITHUB_REF", /^refs\/heads\/main$/u);
-const expectedEvent = requiredEnvironment("GITHUB_EVENT_NAME", /^repository_dispatch$/u);
+const expectedEvent = requiredEnvironment("GITHUB_EVENT_NAME", /^(?:repository_dispatch|workflow_dispatch)$/u);
+const expectedWorkflowPath = process.env.EXPECTED_WORKFLOW_PATH ?? WORKFLOW_PATH;
+if (![WORKFLOW_PATH, ".github/workflows/single-maintainer-release.yml"].includes(expectedWorkflowPath)
+    || (expectedEvent === "repository_dispatch" && expectedWorkflowPath !== WORKFLOW_PATH)
+    || (expectedEvent === "workflow_dispatch"
+      && expectedWorkflowPath !== ".github/workflows/single-maintainer-release.yml")) {
+  throw new Error("The publication workflow path and event are not an approved release pair.");
+}
 const currentRunID = Number(requiredEnvironment("GITHUB_RUN_ID", /^[1-9]\d*$/u));
 const currentRunAttempt = Number(requiredEnvironment("GITHUB_RUN_ATTEMPT", /^[1-9]\d*$/u));
 const producerRunID = Number(requiredEnvironment("PUBLISH_PRODUCER_RUN_ID", /^[1-9]\d*$/u));
@@ -116,8 +123,9 @@ const provenanceOrigin = verifyProvenanceStatement(decodeStatement(provenance), 
   expectedRepositoryURL,
   expectedCommit,
   expectedEvent,
+  expectedWorkflowPath,
 });
-verifyWorkflowCertificate(provenance, expectedRepositoryURL);
+verifyWorkflowCertificate(provenance, expectedRepositoryURL, expectedWorkflowPath);
 requireCurrentPublicationOrigin(provenanceOrigin, { publishPerformed, currentRunID, currentRunAttempt });
 verifyPublishStatement(decodeStatement(publish), {
   packageName: manifest.name,
@@ -163,7 +171,7 @@ const publicationEvidence = {
   kind: "latchway_npm_publication_evidence",
   package: manifest.name,
   version: manifest.version,
-  source: { repository: expectedRepositoryURL, commit: expectedCommit, workflow: WORKFLOW_PATH, ref: SOURCE_REF },
+  source: { repository: expectedRepositoryURL, commit: expectedCommit, workflow: expectedWorkflowPath, ref: SOURCE_REF },
   release_tag: expectedReleaseTag,
   registry: REGISTRY_URL,
   tarball: {
@@ -206,6 +214,7 @@ const adoption = buildAdoptionRecord({
   currentRunID,
   currentRunAttempt,
   publishPerformed,
+  workflowPath: expectedWorkflowPath,
 });
 const adoptionName = `npm-release-adoption-${currentRunID}-${currentRunAttempt}.json`;
 const adoptionBytes = jsonBytes(adoption);
@@ -279,7 +288,7 @@ function decodeStatement(attestation) {
   return parseStrictJSONBytes(bytes, "npm attestation statement", 256 * 1024);
 }
 
-function verifyWorkflowCertificate(attestation, repositoryURL) {
+function verifyWorkflowCertificate(attestation, repositoryURL, workflowPath) {
   const encoded = attestation?.bundle?.verificationMaterial?.certificate?.rawBytes;
   if (typeof encoded !== "string") throw new Error("The provenance bundle is missing its signing certificate.");
   const certificateBytes = decodeBase64Strict(encoded, "npm provenance certificate");
@@ -287,7 +296,7 @@ function verifyWorkflowCertificate(attestation, repositoryURL) {
     throw new Error("The npm provenance certificate exceeds its size limit.");
   }
   const certificate = new X509Certificate(certificateBytes);
-  if (certificate.subjectAltName !== `URI:${repositoryURL}/${WORKFLOW_PATH}@${SOURCE_REF}`) {
+  if (certificate.subjectAltName !== `URI:${repositoryURL}/${workflowPath}@${SOURCE_REF}`) {
     throw new Error("The provenance signing certificate has an unexpected workflow identity.");
   }
 }

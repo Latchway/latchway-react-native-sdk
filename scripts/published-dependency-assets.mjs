@@ -25,6 +25,7 @@ export function publishedDependencyAssetMaximumBytes(kind, name) {
   } else if (kind === "android") {
     if (/^latchway-android-.+-(?:maven-repository|central-portal)\.zip$/u.test(name)) return 256 * MIB;
     if (/^docs-bundle-.+\.tar\.gz$/u.test(name)) return 64 * MIB;
+    if (name === "pinned-core-conformance.tar.gz") return 128 * MIB;
     if (name === "SHA256SUMS") return 64 * KIB;
     if (name === "latchway-maven-signing-public-key.asc") return MIB;
     if (name.endsWith(".json")) return 10 * MIB;

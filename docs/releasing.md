@@ -6,6 +6,89 @@ locked commits from that file, checks out those exact objects, verifies every
 SDK contract lock, rebuilds and checks the full core contract bundle, and then
 builds real React Native 0.82 hosts.
 
+## Single-maintainer v1 publication profile
+
+The additive `single-maintainer-release.yml` workflow is the explicit launch
+path for `1.0.0` while independent human review and external device/provider
+evidence remain deferred. It accepts only an exact `main` commit, validates all
+four locked sibling source commits, and records
+`single_maintainer_v1`, `release_qualified: false`, and the forbidden stronger
+claims before proceeding.
+
+Before any React Native tag mutation, the workflow requires exact annotated
+`v1.0.0` tags for core, JavaScript, iOS, and Android; a byte-identical locked
+`@latchway/client` npm archive; and the exact CocoaPods source binding. The
+Android dependency gate authenticates the exact finalized 14-asset
+`single_maintainer_v1` GitHub release, annotated tag message, per-asset GitHub
+build provenance, maintainer intent, completion record, and the declared
+deferred-evidence set against the Android commit in
+`release-compatibility.json`. It then compares every Maven Central primary
+artifact and checksum byte with the reviewed repository archive, compares every
+public OpenPGP signature with the signed Portal candidate, and independently
+verifies each signature against the release public key. A POM or coordinate
+existence check is not sufficient. The workflow then runs the complete
+TypeScript, compatibility, deterministic package, consumer, Android host, and
+iOS host gates. Deferring Android physical-device evidence therefore does not
+defer the Android SDK or Maven publication dependency.
+
+`pnpm verify:compatibility` also requires both `Package.swift` and the
+`latchway-ios-sdk` entry in `Package.resolved` to use the exact iOS source
+revision in `release-compatibility.json`. Updating the compatibility tuple
+without updating either SwiftPM lock fails ordinary CI and both release paths.
+
+Create a `single-maintainer-v1` GitHub environment restricted to `main`, with
+the environment-only `LATCHWAY_RELEASE_CONTROL_POLICY_ID` variable set exactly
+to
+`latchway-release-controls-v1:latchway-react-native-sdk:single-maintainer-v1`.
+The first step of every job that names this environment checks the sentinel
+before any checkout, credential access, OIDC request, or mutation, so a missing
+environment cannot be silently auto-created without the intended controls. It
+contains no npm token and does not require an independent reviewer. Configure
+`@latchway/react-native`'s one npm trusted publisher as organization
+`Latchway`, repository `latchway-react-native-sdk`, workflow file
+`single-maintainer-release.yml`, environment `single-maintainer-v1`, and the
+publish action. npm permits only one trusted publisher: while this tuple is
+active, strict `release.yml` cannot publish the package. A future `strict_full`
+release requires deliberate reconfiguration back to workflow file
+`release.yml` and environment `npm`.
+
+```bash
+gh workflow run single-maintainer-release.yml --ref main \
+  -f release_profile=single_maintainer_v1 \
+  -f release_commit="$(git rev-parse HEAD)" \
+  -f release_version=1.0.0 \
+  -f confirmation=publish-v1.0.0-with-deferred-assurance
+```
+
+The additive workflow treats one workflow run as the transaction owner. Its
+intent hash binds the run ID and run attempt into the annotated tag. Before the
+candidate checkout can execute, a source-free step authenticates the GitHub run
+ID, attempt, workflow path, `main` head branch, and requested source commit.
+Dispatch strings reach shell commands only through quoted environment
+variables. Immediately before tag creation, the protected job rechecks that
+the authenticated intent commit, dispatch input, workflow SHA, and current
+public `main` head are identical. Before the tag exists, the intent job rejects
+any pre-existing `v1.0.0` tag unless that tag belongs to this exact
+transaction. Once the tag, npm coordinate, or GitHub
+draft has been created, resume only with **Re-run failed jobs** on that same
+workflow run. Never use **Re-run all jobs** and never start a new workflow
+dispatch after a mutation: either action creates a different intent and the
+early tag-owner guard fails closed. Prerequisite intent, package, and npm
+evidence artifacts are retained for 90 days. The GitHub publisher resumes an
+exact partial draft asset-by-asset, compares every adopted asset byte for byte,
+and finalizes only an exact remote closure; it never overwrites an asset.
+
+Before any React Native tag or npm mutation, the workflow authenticates the
+public core `v1.0.0` `single_maintainer_v1` record, annotated core tag, candidate
+and deployment attestations, scans, SBOMs, image digest, and the exact Docker
+Compose and Google Cloud Run captures. The locked contract commit must be an
+ancestor of that published core commit. Existing
+`@latchway/react-native@1.0.0` bytes are not sufficient for adoption: npm's
+Sigstore provenance must bind the exact `Latchway/latchway-react-native-sdk`
+repository, `single-maintainer-release.yml`, `main` ref, and source commit, and
+the package signature is audited. AWS, Fly.io, Cloudflare Containers, devices,
+providers, and independent review remain explicitly deferred.
+
 ## Cross-repository order
 
 1. Create a core **contract checkpoint** that marks the manifest released,
