@@ -1,8 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
+import {
+  isolatedRegistryEnvironment,
+  npmRegistryArguments,
+  writeRegistryNpmrcs,
+} from "./npm-registry-isolation.mjs";
 import { assertEqual, readJSON } from "./release-metadata.mjs";
 
 const archiveArgument = process.argv.slice(2).find((argument) => argument !== "--" && !argument.startsWith("--"));
@@ -16,7 +23,22 @@ const manifest = JSON.parse(execFileSync("tar", ["-xOzf", archive, "package/pack
 assertEqual(manifest.name, compatibility.react_native.package, "release archive package name");
 assertEqual(manifest.version, compatibility.react_native.version, "release archive package version");
 
-const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+const registryConfigurationRoot = mkdtempSync(join(tmpdir(), "latchway-rn-publish-npm-"));
+const userconfig = join(registryConfigurationRoot, "user.npmrc");
+const globalconfig = join(registryConfigurationRoot, "global.npmrc");
+writeRegistryNpmrcs(userconfig, globalconfig, ["fund=false"]);
+const npmEnvironment = isolatedRegistryEnvironment(process.env, {
+  cache: join(registryConfigurationRoot, "cache"),
+  excludedNames: ["NODE_AUTH_TOKEN", "NPM_TOKEN"],
+  globalconfig,
+  userconfig,
+});
+process.once("exit", () => rmSync(registryConfigurationRoot, { recursive: true, force: true }));
+
+const npmVersion = execFileSync("npm", ["--version"], {
+  encoding: "utf8",
+  env: npmEnvironment,
+}).trim();
 if (compareVersions(npmVersion, "11.5.1") < 0) {
   throw new Error(`npm ${npmVersion} cannot use trusted publishing; npm 11.5.1 or newer is required.`);
 }
@@ -45,8 +67,10 @@ if (published !== undefined) {
     throw new Error("An immutable GitHub release cannot be paired with a missing npm version.");
   }
   const distributionTag = manifest.version.includes("-") ? "next" : "latest";
-  execFileSync("npm", ["publish", archive, "--access", "public", "--provenance", "--tag", distributionTag,
-    "--registry=https://registry.npmjs.org/"], {
+  execFileSync("npm", npmRegistryArguments([
+    "publish", archive, "--access", "public", "--provenance", "--tag", distributionTag,
+  ]), {
+    env: npmEnvironment,
     stdio: "inherit",
   });
   publishPerformed = true;
@@ -57,9 +81,11 @@ if (typeof process.env.GITHUB_OUTPUT === "string") {
 
 function lookupPublished(specification) {
   try {
-    const output = execFileSync("npm", ["view", specification, "dist.integrity", "dist.tarball", "--json",
-      "--registry=https://registry.npmjs.org/"], {
+    const output = execFileSync("npm", npmRegistryArguments([
+      "view", specification, "dist.integrity", "dist.tarball", "--json",
+    ]), {
       encoding: "utf8",
+      env: npmEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
     if (output.length === 0) throw new Error(`npm returned no metadata for existing package ${specification}.`);

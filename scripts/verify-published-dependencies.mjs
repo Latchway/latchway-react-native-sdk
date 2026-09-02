@@ -48,8 +48,14 @@ import {
 } from "./release-attestation.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
 import { validatePublishedDependencyAssetMetadata } from "./published-dependency-assets.mjs";
+import {
+  LATCHWAY_SCOPE_REGISTRY_KEY,
+  NPM_REGISTRY_URL,
+  isolatedRegistryEnvironment,
+  npmRegistryArguments,
+  writeRegistryNpmrcs,
+} from "./npm-registry-isolation.mjs";
 
-const NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const JAVASCRIPT_RELEASE_PACKAGES = Object.freeze([
   Object.freeze({ id: "client", package: "@latchway/client" }),
   Object.freeze({ id: "openai", package: "@latchway/openai" }),
@@ -341,7 +347,8 @@ async function verifyJavaScript() {
           sha256: digest(assets.get(package_.attestations).bytes),
         }) || !hasExactKeys(publication.registry_signature_verification, ["command", "output"])
         || publication.registry_signature_verification.command
-          !== `npm audit signatures --json --registry=${NPM_REGISTRY_URL}`
+          !== `npm audit signatures --json --registry=${NPM_REGISTRY_URL} `
+            + `--${LATCHWAY_SCOPE_REGISTRY_KEY}=${NPM_REGISTRY_URL}`
         || !isDeepStrictEqual(publication.registry_signature_verification.output, {
           file: package_.auditSignatures,
           bytes: assets.get(package_.auditSignatures).bytes.byteLength,
@@ -1341,9 +1348,12 @@ async function auditNpmSignatures(
     dependencies,
   }, null, 2)}\n`);
   const npmrc = join(root, ".npmrc");
-  await writeFile(npmrc, "registry=https://registry.npmjs.org/\nfund=false\n", { mode: 0o600 });
-  const environment = sanitizedNpmEnvironment(npmrc, join(root, ".npm-cache"));
-  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact"], {
+  const globalconfig = join(root, ".global.npmrc");
+  writeRegistryNpmrcs(npmrc, globalconfig, ["fund=false"]);
+  const environment = sanitizedNpmEnvironment(npmrc, globalconfig, join(root, ".npm-cache"));
+  execFileSync("npm", npmRegistryArguments([
+    "install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact",
+  ]), {
     cwd: root, env: environment, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024,
   });
   const lock = readBoundedStrictJSONFileSync(
@@ -1362,24 +1372,18 @@ async function auditNpmSignatures(
       throw new Error(`${packageName} npm signature audit did not install exact external peer ${name}.`);
     }
   }
-  execFileSync("npm", ["audit", "signatures", "--json", "--registry=https://registry.npmjs.org/"], {
+  execFileSync("npm", npmRegistryArguments(["audit", "signatures", "--json"]), {
     cwd: root, env: environment, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 4 * 1024 * 1024,
   });
 }
 
-function sanitizedNpmEnvironment(userconfig, cache) {
-  const excluded = new Set(["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN",
-    "npm_config__auth", "npm_config_auth", "npm_config__authToken", "NPM_CONFIG__AUTH",
-    "NPM_CONFIG_AUTH"]);
-  return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => {
-      const normalized = name.toLowerCase();
-      return !excluded.has(name) && !(normalized.startsWith("npm_config_") && normalized.includes("auth"));
-    })),
-    NPM_CONFIG_USERCONFIG: userconfig,
-    NPM_CONFIG_GLOBALCONFIG: `${userconfig}.global`,
-    NPM_CONFIG_CACHE: cache,
-  };
+function sanitizedNpmEnvironment(userconfig, globalconfig, cache) {
+  return isolatedRegistryEnvironment(process.env, {
+    cache,
+    excludedNames: ["GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NPM_TOKEN"],
+    globalconfig,
+    userconfig,
+  });
 }
 
 async function fetchBounded(rawURL, maximumBytes, allowedOrigins) {

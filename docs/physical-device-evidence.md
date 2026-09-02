@@ -153,9 +153,15 @@ repository build or candidate output. Runtime identity grants are rejected if
 present during candidate production.
 
 Use `.github/workflows/react-native-android-candidate.yml` for the Android
-release handoff. Its build job is the only job with a checkout and emits only
-unsigned data; `sign-isolated` has no checkout or Gradle, and `verify-signed`
-has neither signing secrets nor a checkout. Configure the protected verifier
+release handoff. Its build job is the only job with a checkout and is isolated
+in the credential-free `react-native-android-candidate-build` environment; it
+emits only unsigned data. `sign-isolated` uses only
+`react-native-android-upload-signing`, has no checkout or Gradle, and
+`verify-signed` uses only the no-secret
+`react-native-android-candidate-verification` environment, with neither signing
+secrets nor a checkout. Each exact environment policy sentinel is the first
+step, before checkout, artifact download, tool execution, secret access, or
+job-token use. Configure the protected verifier
 environment with the exact SHA-256 of
 `scripts/VerifyReactNativeAabSignature.java`; changing the verifier therefore
 requires an explicit protected-coordinate review. Also set the protected
@@ -312,6 +318,13 @@ repository. It must contain no device, identity, application, native-evidence,
 or runner credentials; the exact application identifiers above are coordinates,
 not credentials. Require independent reviewers and restrict deployments to
 `main`.
+
+The GitHub-hosted `authorize-source` job and both final attestation jobs reuse
+`physical-evidence-signing`; only the two collectors use their corresponding
+`react-native-ios-production` or `react-native-android-production` environment.
+Every job that names one of these protected environments has the exact
+environment policy sentinel as its first step, before checkout, artifact
+access, device work, credentials, job-token use, OIDC, or attestation.
 
 Environment protection should require an independent reviewer and prevent
 untrusted pull-request code from reaching the devices or application accounts.

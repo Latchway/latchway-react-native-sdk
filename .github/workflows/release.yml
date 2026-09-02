@@ -218,6 +218,7 @@ jobs:
     needs: verify-promotion
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    environment: github-release
     permissions:
       contents: write
     outputs:
@@ -227,6 +228,14 @@ jobs:
       core_tag: ${{ needs.verify-promotion.outputs.core_tag }}
       report_sha256: ${{ needs.verify-promotion.outputs.report_sha256 }}
     steps:
+      - name: Fail closed unless GitHub release controls are exact
+        shell: bash
+        env:
+          LATCHWAY_RELEASE_CONTROL_POLICY_ID: ${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}
+        run: |
+          set -Eeuo pipefail
+          test "$LATCHWAY_RELEASE_CONTROL_POLICY_ID" = \
+            "latchway-release-controls-v1:latchway-react-native-sdk:github-release"
       - name: Create or verify evidence-gated annotated SDK tag using fixed API calls
         shell: bash
         env:
@@ -1693,6 +1702,27 @@ jobs:
           archive="$root/latchway-react-native-$RELEASE_VERSION.tgz"
           expected_integrity=$(jq --exit-status --raw-output .integrity "$root/package-evidence.json")
           metadata="$RUNNER_TEMP/npm-version.json"
+          npm_userconfig="$RUNNER_TEMP/latchway-npm-publish-user.npmrc"
+          npm_globalconfig="$RUNNER_TEMP/latchway-npm-publish-global.npmrc"
+          npm_cache="$RUNNER_TEMP/latchway-npm-publish-cache"
+          umask 077
+          printf '%s\n' \
+            'registry=https://registry.npmjs.org/' \
+            '@latchway:registry=https://registry.npmjs.org/' \
+            'fund=false' > "$npm_userconfig"
+          cp "$npm_userconfig" "$npm_globalconfig"
+          mkdir -m 700 "$npm_cache"
+          sanitized_npm_environment=(env)
+          while IFS='=' read -r -d '' name _; do
+            normalized=${name,,}
+            case "$normalized" in
+              npm_config_*auth*|pnpm_config_*auth*|npm_config_*registry*|pnpm_config_*registry*|\
+              npm_config_userconfig|pnpm_config_userconfig|npm_config_globalconfig|\
+              pnpm_config_globalconfig|npm_config_cache|pnpm_config_cache)
+                sanitized_npm_environment+=(-u "$name")
+                ;;
+            esac
+          done < <(env -0)
           status=$(curl --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 \
             --silent --show-error --output "$metadata" --write-out '%{http_code}' \
             "https://registry.npmjs.org/%40latchway%2Freact-native/$RELEASE_VERSION")
@@ -1712,8 +1742,13 @@ jobs:
             tag=latest
             if [[ "$RELEASE_VERSION" == *-* ]]; then tag=next; fi
             validate_release_policy_lease draft-and-npm
-            "$LATCHWAY_NPM_CLI" publish "$archive" --access public --provenance --tag "$tag" \
-              --registry=https://registry.npmjs.org/
+            "${sanitized_npm_environment[@]}" \
+              NPM_CONFIG_USERCONFIG="$npm_userconfig" \
+              NPM_CONFIG_GLOBALCONFIG="$npm_globalconfig" \
+              NPM_CONFIG_CACHE="$npm_cache" \
+              "$LATCHWAY_NPM_CLI" publish "$archive" --access public --provenance --tag "$tag" \
+              --registry=https://registry.npmjs.org/ \
+              --@latchway:registry=https://registry.npmjs.org/
             publish_performed=true
           fi
           printf 'publish_performed=%s\n' "$publish_performed" >> "$GITHUB_OUTPUT"

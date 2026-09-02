@@ -48,10 +48,120 @@ import {
   validatePublishedDependencyAssetMetadata,
 } from "./published-dependency-assets.mjs";
 import { requireAnnotatedTagRefs } from "./release-tag.mjs";
+import {
+  NPM_REGISTRY_URL,
+  isolatedRegistryEnvironment,
+  npmRegistryArguments,
+  pnpmRegistryArguments,
+  registryNpmrc,
+  writeRegistryNpmrcs,
+} from "./npm-registry-isolation.mjs";
 
 const repository = "https://github.com/Latchway/latchway-react-native-sdk";
 const commit = "a".repeat(40);
 const sha512 = "b".repeat(128);
+
+test("registry isolation defeats hostile environment, user, and project configuration without network", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "latchway-rn-registry-isolation-test-"));
+  try {
+    const project = join(temporary, "project");
+    const hostileUserconfig = join(temporary, "hostile-user.npmrc");
+    const controlledUserconfig = join(temporary, "controlled-user.npmrc");
+    const controlledGlobalconfig = join(temporary, "controlled-global.npmrc");
+    await mkdir(project, { recursive: true });
+    const hostileConfiguration = [
+      "registry=https://default.invalid/",
+      "@latchway:registry=https://scope.invalid/",
+      "",
+    ].join("\n");
+    await writeFile(join(project, ".npmrc"), hostileConfiguration);
+    await writeFile(hostileUserconfig, hostileConfiguration);
+    writeRegistryNpmrcs(controlledUserconfig, controlledGlobalconfig, ["fund=false"]);
+    const environment = isolatedRegistryEnvironment({
+      ...process.env,
+      "NpM_CoNfIg_ReGiStRy": "https://environment.invalid/",
+      "NpM_CoNfIg_UsErCoNfIg": hostileUserconfig,
+      "PNPM_CONFIG_GLOBALCONFIG": hostileUserconfig,
+      "npm_config_@latchway:registry": "https://environment-scope.invalid/",
+      "npm_config_//registry.npmjs.org/:_authToken": "hostile-token",
+    }, {
+      cache: join(temporary, "cache"),
+      excludedNames: ["NODE_AUTH_TOKEN", "NPM_TOKEN"],
+      globalconfig: controlledGlobalconfig,
+      userconfig: controlledUserconfig,
+    });
+    assert.equal(environment.NPM_CONFIG_USERCONFIG, controlledUserconfig);
+    assert.equal(environment.PNPM_CONFIG_USERCONFIG, controlledUserconfig);
+    assert.equal(environment.NPM_CONFIG_GLOBALCONFIG, controlledGlobalconfig);
+    assert.ok(!Object.values(environment).includes("https://environment-scope.invalid/"));
+    assert.ok(!Object.values(environment).includes("hostile-token"));
+    assert.equal(await readFile(controlledUserconfig, "utf8"), registryNpmrc(["fund=false"]));
+    assert.equal(await readFile(controlledGlobalconfig, "utf8"), registryNpmrc(["fund=false"]));
+
+    assert.deepEqual(npmRegistryArguments(["view", "@latchway/react-native@1.0.0"]), [
+      "view", "@latchway/react-native@1.0.0",
+      `--registry=${NPM_REGISTRY_URL}`,
+      `--@latchway:registry=${NPM_REGISTRY_URL}`,
+    ]);
+    const npmConfiguration = JSON.parse(execFileSync("npm", npmRegistryArguments([
+      "config", "list", "--json",
+    ]), {
+      cwd: project,
+      encoding: "utf8",
+      env: environment,
+      maxBuffer: 2 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    }));
+    assert.equal(npmConfiguration.registry, NPM_REGISTRY_URL);
+    assert.equal(npmConfiguration["@latchway:registry"], NPM_REGISTRY_URL);
+    const pnpmArguments = pnpmRegistryArguments(["config", "list", "--json"]);
+    assert.deepEqual(pnpmArguments.slice(-2), [
+      `--config.registry=${NPM_REGISTRY_URL}`,
+      `--config.@latchway:registry=${NPM_REGISTRY_URL}`,
+    ]);
+    const effectiveConfiguration = JSON.parse(execFileSync("pnpm", pnpmArguments, {
+      cwd: project,
+      encoding: "utf8",
+      env: environment,
+      maxBuffer: 2 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    }));
+    assert.equal(effectiveConfiguration.registry, NPM_REGISTRY_URL);
+    assert.equal(effectiveConfiguration["@latchway:registry"], NPM_REGISTRY_URL);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("every scoped npm release path pins the public default and Latchway registries", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const npmPublish = workflowJob(workflow, "npm-publish");
+  assert.match(npmPublish,
+    /"\$LATCHWAY_NPM_CLI" publish "\$archive" --access public --provenance --tag "\$tag" \\\n+ {14}--registry=https:\/\/registry\.npmjs\.org\/ \\\n+ {14}--@latchway:registry=https:\/\/registry\.npmjs\.org\/\n {12}publish_performed=true/u);
+  assert.match(npmPublish,
+    /'registry=https:\/\/registry\.npmjs\.org\/' \\\n+ {12}'@latchway:registry=https:\/\/registry\.npmjs\.org\/'/u);
+  assert.match(npmPublish, /while IFS='=' read -r -d '' name _; do[\s\S]*normalized=\$\{name,,\}/u);
+
+  const publishOrVerify = await readFile(new URL("publish-or-verify.mjs", import.meta.url), "utf8");
+  assert.match(publishOrVerify,
+    /execFileSync\("npm", npmRegistryArguments\(\[\n {4}"publish"/u);
+  assert.match(publishOrVerify,
+    /execFileSync\("npm", npmRegistryArguments\(\[\n {6}"view"/u);
+  const verifier = await readFile(new URL("verify-published.mjs", import.meta.url), "utf8");
+  assert.match(verifier, /arguments_ = npmRegistryArguments\(arguments_\)/u);
+  assert.match(verifier, /writeRegistryNpmrcs\(controlledUserconfig, controlledGlobalconfig/u);
+  const dependencies = await readFile(
+    new URL("verify-published-dependencies.mjs", import.meta.url), "utf8",
+  );
+  assert.match(dependencies,
+    /execFileSync\("npm", npmRegistryArguments\(\[\n {4}"install"/u);
+  assert.match(dependencies,
+    /execFileSync\("npm", npmRegistryArguments\(\["audit", "signatures", "--json"\]\)/u);
+  const consumer = await readFile(new URL("verify-consumer.mjs", import.meta.url), "utf8");
+  assert.match(consumer,
+    /runPackageManager\(pnpmRegistryArguments\(\[\n {4}"install"/u);
+  assert.match(consumer, /writeRegistryNpmrcs\(userconfig, globalconfig/u);
+});
 
 test("provenance from a prior failed run can be adopted by a later attempt", () => {
   const statement = provenanceStatement(`${repository}/actions/runs/41/attempts/1`);
@@ -797,7 +907,7 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
     /environment: github-release\n {4}permissions:\n {6}actions: read\n {6}attestations: write\n {6}contents: write\n {6}id-token: write/u);
   assert.equal((workflow.match(/environment: npm/gu) ?? []).length, 2);
   assert.equal((workflow.match(/environment: release-administration/gu) ?? []).length, 2);
-  assert.equal((workflow.match(/environment: github-release/gu) ?? []).length, 2);
+  assert.equal((workflow.match(/environment: github-release/gu) ?? []).length, 3);
   const releaseDocumentation = await readFile(
     new URL("../docs/releasing.md", import.meta.url), "utf8",
   );
@@ -810,7 +920,7 @@ test("release workflow drafts before npm and publishes GitHub only after evidenc
   assert.match(releaseDocumentation,
     /The\s+`release-administration` environment contains only a fine-grained\s+`LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN`/u);
   assert.match(releaseDocumentation,
-    /The\s+`github-release` environment[\s\S]*receive neither the administration token nor\s+npm credentials/u);
+    /The\s+`github-release` protects[\s\S]*receive neither the administration token nor npm credentials/u);
   assert.match(releaseDocumentation,
     /`LATCHWAY_RELEASE_CONTROL_POLICY_ID`, with no repository- or organization-level\s+fallback/u);
   assert.match(releaseDocumentation, /disable administrator bypass/u);
@@ -854,6 +964,7 @@ test("protected release authority is sentinel-first, lease-bound, and secret-exa
   assert.match(documentation,
     /the irreversible tag exists before those gates execute/u);
   const policies = new Map([
+    ["promote", "latchway-release-controls-v1:latchway-react-native-sdk:github-release"],
     ["locked-sources", "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"],
     ["published-dependencies", "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read"],
     ["authorize-release", "latchway-release-controls-v1:latchway-react-native-sdk:release-administration"],
@@ -864,6 +975,7 @@ test("protected release authority is sentinel-first, lease-bound, and secret-exa
     ["github-release", "latchway-release-controls-v1:latchway-react-native-sdk:github-release"],
   ]);
   const secretAllowlists = new Map([
+    ["promote", []],
     ["locked-sources", []],
     ["published-dependencies", []],
     ["authorize-release", ["LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"]],
@@ -938,7 +1050,7 @@ test("protected release authority is sentinel-first, lease-bound, and secret-exa
   assert.match(npm,
     /validate_release_policy_lease draft-and-npm\n {6}- name: Attest reviewed npm package/u);
   assert.match(npm,
-    /validate_release_policy_lease draft-and-npm\n {12}"\$LATCHWAY_NPM_CLI" publish/u);
+    /validate_release_policy_lease draft-and-npm\n {12}"\$\{sanitized_npm_environment\[@\]\}"[\s\S]*?"\$LATCHWAY_NPM_CLI" publish/u);
   const release = workflowJob(workflow, "github-release");
   assert.match(release,
     /validate_final_policy_lease final-github-release\n {6}- name: Attest exact retained registry and release evidence/u);

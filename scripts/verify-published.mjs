@@ -1,5 +1,6 @@
 import { createHash, X509Certificate } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -7,6 +8,13 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { decodeBase64Strict, parseStrictJSONBytes } from "./release-attestation.mjs";
+import {
+  LATCHWAY_SCOPE_REGISTRY_KEY,
+  NPM_REGISTRY_URL,
+  isolatedRegistryEnvironment,
+  npmRegistryArguments,
+  writeRegistryNpmrcs,
+} from "./npm-registry-isolation.mjs";
 
 import {
   PROVENANCE_TYPE,
@@ -23,7 +31,7 @@ import {
   verifyPublishStatement,
 } from "./npm-release-evidence.mjs";
 
-const REGISTRY_URL = "https://registry.npmjs.org/";
+const REGISTRY_URL = NPM_REGISTRY_URL;
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const trustedNpmCLI = process.env.LATCHWAY_NPM_CLI;
 if (typeof trustedNpmCLI !== "string" || !isAbsolute(trustedNpmCLI)
@@ -75,7 +83,6 @@ const metadata = published.value;
 assertPublishedMetadata(metadata);
 const npmViewBytes = runNpmCaptured([
   "view", `${manifest.name}@${manifest.version}`, "--json", "--include-attestations",
-  `--registry=${REGISTRY_URL}`,
 ], ROOT, 2 * 1024 * 1024, "npm view");
 const npmView = assertSafeRetainedOutput(npmViewBytes, "npm view output", 2 * 1024 * 1024);
 assertNpmView(npmView);
@@ -174,7 +181,8 @@ const publicationEvidence = {
     sigstore_bundle: { file: "npm-attestations.json", ...evidenceReferences["npm-attestations.json"] },
   },
   registry_signature_verification: {
-    command: `npm audit signatures --json --registry=${REGISTRY_URL}`,
+    command: `npm audit signatures --json --registry=${REGISTRY_URL} `
+      + `--${LATCHWAY_SCOPE_REGISTRY_KEY}=${REGISTRY_URL}`,
     output: { file: "npm-audit-signatures.json", ...evidenceReferences["npm-audit-signatures.json"] },
   },
   retained_outputs: evidenceReferences,
@@ -288,7 +296,8 @@ async function auditRegistrySignatures() {
   const consumer = await mkdtemp(join(tmpdir(), "latchway-rn-signature-audit-"));
   try {
     const npmrc = join(consumer, ".npmrc");
-    await writeFile(npmrc, `registry=${REGISTRY_URL}\nfund=false\n`, { mode: 0o600 });
+    const globalconfig = join(consumer, ".global.npmrc");
+    writeRegistryNpmrcs(npmrc, globalconfig, ["fund=false"]);
     await writeFile(join(consumer, "package.json"), `${JSON.stringify({
       name: "latchway-react-native-signature-audit", version: "0.0.0", private: true,
       dependencies: { [manifest.name]: manifest.version },
@@ -301,7 +310,7 @@ async function auditRegistrySignatures() {
     if (lock.packages?.[`node_modules/${manifest.name}`]?.integrity !== packageEvidence.integrity) {
       throw new Error("The registry consumer lock does not contain the exact published integrity.");
     }
-    return runNpmCaptured(["audit", "signatures", "--json", `--registry=${REGISTRY_URL}`],
+    return runNpmCaptured(["audit", "signatures", "--json"],
       consumer, 2 * 1024 * 1024, "npm audit signatures", npmrc);
   } finally {
     await rm(consumer, { recursive: true, force: true });
@@ -309,18 +318,31 @@ async function auditRegistrySignatures() {
 }
 
 function runNpmCaptured(arguments_, cwd, maximumBytes, operation, userconfig) {
-  const excluded = new Set(["NODE_AUTH_TOKEN", "NPM_TOKEN", "npm_config__auth", "npm_config_auth",
-    "npm_config__authToken", "NPM_CONFIG__AUTH", "NPM_CONFIG_AUTH"]);
-  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => {
-    const normalized = name.toLowerCase();
-    return !excluded.has(name) && !(normalized.startsWith("npm_config_") && normalized.includes("auth"));
-  }));
-  environment.NPM_CONFIG_USERCONFIG = userconfig ?? join(tmpdir(), "latchway-empty-release.npmrc");
-  environment.NPM_CONFIG_GLOBALCONFIG = `${environment.NPM_CONFIG_USERCONFIG}.global`;
-  environment.NPM_CONFIG_CACHE = join(tmpdir(), `latchway-npm-read-cache-${process.pid}`);
-  const result = spawnSync(process.execPath, [trustedNpmCLI, ...arguments_], {
-    cwd, env: environment, encoding: "buffer", maxBuffer: maximumBytes, stdio: ["ignore", "pipe", "pipe"],
+  const ownedConfigurationRoot = userconfig === undefined
+    ? mkdtempSync(join(tmpdir(), "latchway-rn-read-npm-"))
+    : undefined;
+  const controlledUserconfig = userconfig ?? join(ownedConfigurationRoot, "user.npmrc");
+  const controlledGlobalconfig = userconfig === undefined
+    ? join(ownedConfigurationRoot, "global.npmrc")
+    : join(dirname(userconfig), ".global.npmrc");
+  writeRegistryNpmrcs(controlledUserconfig, controlledGlobalconfig, ["fund=false"]);
+  const environment = isolatedRegistryEnvironment(process.env, {
+    cache: join(dirname(controlledUserconfig), `.npm-cache-${process.pid}`),
+    excludedNames: ["NODE_AUTH_TOKEN", "NPM_TOKEN"],
+    globalconfig: controlledGlobalconfig,
+    userconfig: controlledUserconfig,
   });
+  arguments_ = npmRegistryArguments(arguments_);
+  let result;
+  try {
+    result = spawnSync(process.execPath, [trustedNpmCLI, ...arguments_], {
+      cwd, env: environment, encoding: "buffer", maxBuffer: maximumBytes, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } finally {
+    if (ownedConfigurationRoot !== undefined) {
+      rmSync(ownedConfigurationRoot, { recursive: true, force: true });
+    }
+  }
   if (result.error !== undefined || result.status !== 0 || !Buffer.isBuffer(result.stdout)) {
     throw new Error(`${operation} failed during published-package verification.`);
   }

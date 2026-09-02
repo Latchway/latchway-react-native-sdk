@@ -39,6 +39,7 @@ OCI_DIGEST = "ghcr.io/latchway/latchway@sha256:" + "a" * 64
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
 
 PROTECTED_RELEASE_POLICY_IDS = {
+    "promote": "latchway-release-controls-v1:latchway-react-native-sdk:github-release",
     "locked-sources": "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
     "published-dependencies": "latchway-release-controls-v1:latchway-react-native-sdk:private-sibling-read",
     "authorize-release": "latchway-release-controls-v1:latchway-react-native-sdk:release-administration",
@@ -49,6 +50,7 @@ PROTECTED_RELEASE_POLICY_IDS = {
     "github-release": "latchway-release-controls-v1:latchway-react-native-sdk:github-release",
 }
 PROTECTED_RELEASE_SECRET_ALLOWLISTS = {
+    "promote": set(),
     "locked-sources": set(),
     "published-dependencies": set(),
     "authorize-release": {"LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"},
@@ -893,7 +895,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.count("environment: npm"), 2)
         self.assertEqual(workflow.count("environment: release-administration"), 2)
-        self.assertEqual(workflow.count("environment: github-release"), 2)
+        self.assertEqual(workflow.count("environment: github-release"), 3)
         self.assertEqual(
             workflow.count("secrets.LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN"), 2
         )
@@ -918,7 +920,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             documentation,
         )
         self.assertIn(
-            "`github-release` environment protects the separate draft and final GitHub",
+            "`github-release` protects the promotion job that creates or verifies the\n"
+            "annotated tag as well as the separate draft and final GitHub release mutation",
             documentation,
         )
         self.assertIn(

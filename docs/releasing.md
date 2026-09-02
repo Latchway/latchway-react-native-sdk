@@ -102,9 +102,10 @@ registry evidence; it contains no reusable credential. The
 permission, stored only as an environment secret. Its jobs use
 `permissions: {}`, never check out candidate source,
 and receive neither OIDC nor GitHub content-write authority. The
-`github-release` environment protects the separate draft and final GitHub
-release mutation jobs; those jobs receive neither the administration token nor
-npm credentials, and that environment contains no secret. Do not define any of
+`github-release` protects the promotion job that creates or verifies the
+annotated tag as well as the separate draft and final GitHub release mutation
+jobs; those jobs receive neither the administration token nor npm credentials,
+and that environment contains no secret. Do not define any of
 these protected names as a repository or organization secret: environment
 review must never fall back to a broader secret scope. The built-in
 `github.token` used for public reads is not a substitute for a protected secret.
@@ -211,9 +212,14 @@ attestation and every GitHub asset upload or release-finalization mutation. It
 validates the exact local asset closure before attesting it. It checks an existing npm version by
 exact tarball bytes and SHA-512 for safe retry, then retains the bounded raw npm
 registry, `npm view --json --include-attestations`, Sigstore, and
-`npm audit signatures` outputs as hash-bound release assets. Existing GitHub
-assets are downloaded and compared byte for byte, only missing draft assets are
-attached, and a mismatched or incomplete final release stops the run. After
+`npm audit signatures` outputs as hash-bound release assets. Project and user
+configuration cannot redirect these scoped operations: each npm or
+pnpm network command pins both the default registry and `@latchway:registry` to
+`https://registry.npmjs.org/` at CLI precedence, while isolated user, global,
+project, and cache configuration removes inherited registry overrides.
+Existing GitHub assets are downloaded and compared byte for byte, only missing
+draft assets are attached, and a mismatched or incomplete final release stops
+the run. After
 finalization and every release/asset attestation verification, it fetches the
 remote tag ref and annotated tag object again and requires the exact tag name
 and promoted commit binding. Bounded retries of `gh release verify` and

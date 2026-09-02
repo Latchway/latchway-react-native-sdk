@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { assertEqual, readJSON } from "./release-metadata.mjs";
+import {
+  isolatedRegistryEnvironment,
+  pnpmRegistryArguments,
+  writeRegistryNpmrcs,
+} from "./npm-registry-isolation.mjs";
 
 const compatibility = await readJSON("release-compatibility.json");
 const packageJSON = await readJSON("package.json");
@@ -27,6 +32,15 @@ if (clientArchive !== undefined && !existsSync(clientArchive)) {
 const temporary = await mkdtemp(join(tmpdir(), "latchway-rn-consumer-"));
 try {
   await cp(new URL("../integration/consumer/", import.meta.url), temporary, { recursive: true });
+  const userconfig = join(temporary, ".npmrc");
+  const globalconfig = join(temporary, ".global.npmrc");
+  writeRegistryNpmrcs(userconfig, globalconfig, ["fund=false"]);
+  const packageManagerEnvironment = isolatedRegistryEnvironment(process.env, {
+    cache: join(temporary, ".npm-cache"),
+    excludedNames: ["NODE_AUTH_TOKEN", "NPM_TOKEN"],
+    globalconfig,
+    userconfig,
+  });
   const manifestPath = join(temporary, "package.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   assertEqual(manifest.dependencies[compatibility.react_native.package], compatibility.react_native.version,
@@ -42,8 +56,10 @@ try {
   }
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  runPackageManager(["install", "--ignore-scripts", "--lockfile=false", "--prefer-offline"], temporary);
-  runPackageManager(["exec", "tsc", "-p", "tsconfig.json"], temporary);
+  runPackageManager(pnpmRegistryArguments([
+    "install", "--ignore-scripts", "--lockfile=false", "--prefer-offline",
+  ]), temporary, packageManagerEnvironment);
+  runPackageManager(["exec", "tsc", "-p", "tsconfig.json"], temporary, packageManagerEnvironment);
 
   const installed = JSON.parse(await readFile(
     join(temporary, "node_modules", "@latchway", "react-native", "package.json"),
@@ -65,12 +81,14 @@ function option(name) {
   return value;
 }
 
-function runPackageManager(arguments_, cwd) {
+function runPackageManager(arguments_, cwd, environment) {
   const packageManager = process.env.npm_execpath;
   if (packageManager === undefined) throw new Error("Run consumer verification through pnpm.");
   if (/\.[cm]?js$/u.test(packageManager)) {
-    execFileSync(process.execPath, [packageManager, ...arguments_], { cwd, stdio: "inherit" });
+    execFileSync(process.execPath, [packageManager, ...arguments_], {
+      cwd, env: environment, stdio: "inherit",
+    });
   } else {
-    execFileSync(packageManager, arguments_, { cwd, stdio: "inherit" });
+    execFileSync(packageManager, arguments_, { cwd, env: environment, stdio: "inherit" });
   }
 }

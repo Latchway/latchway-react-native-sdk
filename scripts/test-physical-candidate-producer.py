@@ -852,6 +852,35 @@ class PhysicalCandidateProducerTests(unittest.TestCase):
         for action in actions:
             self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
+    def test_android_candidate_environments_are_exact_and_sentinel_first(self) -> None:
+        expected = {
+            "build-unsigned": "react-native-android-candidate-build",
+            "sign-isolated": "react-native-android-upload-signing",
+            "verify-signed": "react-native-android-candidate-verification",
+        }
+        for job_name, environment in expected.items():
+            with self.subTest(job=job_name):
+                match = re.search(
+                    rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [a-z0-9][a-z0-9-]*:\n|\Z)",
+                    self.android_workflow,
+                )
+                self.assertIsNotNone(match)
+                block = match.group(0)
+                self.assertIn(f"    environment: {environment}\n", block)
+                prefix = (
+                    "    steps:\n"
+                    f"      - name: Verify the exact protected {environment} environment\n"
+                    "        shell: bash\n"
+                    "        env:\n"
+                    "          OBSERVED_POLICY_ID: "
+                    "${{ vars.LATCHWAY_RELEASE_CONTROL_POLICY_ID }}\n"
+                    "        run: |\n"
+                    "          set -Eeuo pipefail\n"
+                    "          test \"$OBSERVED_POLICY_ID\" = "
+                    f"\"latchway-release-controls-v1:latchway-react-native-sdk:{environment}\"\n"
+                )
+                self.assertEqual(block.index(prefix), block.index("    steps:\n"))
+
     def test_fresh_apk_verifier_rejects_multiple_signers(self) -> None:
         verification = self.android_workflow.split("  verify-signed:", 1)[1]
         start = verification.index("          def single_apk_signer_certificate")
