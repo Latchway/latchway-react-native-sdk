@@ -17,8 +17,10 @@ test "$(jq --raw-output '.android.repository' release-compatibility.json)" = 'ht
 native_repository=$(cd "$native_repository" && pwd)
 core_aar="$native_repository/dev/latchway/latchway-core/1.0.0/latchway-core-1.0.0.aar"
 okhttp_aar="$native_repository/dev/latchway/latchway-okhttp/1.0.0/latchway-okhttp-1.0.0.aar"
+play_integrity_aar="$native_repository/dev/latchway/latchway-play-integrity/1.0.0/latchway-play-integrity-1.0.0.aar"
 test -f "$core_aar"
 test -f "$okhttp_aar"
+test -f "$play_integrity_aar"
 
 package_report="$evidence_dir/react-native-package-bridge.json"
 pnpm exec vitest run test/client.test.ts test/security-boundary.test.ts \
@@ -32,15 +34,18 @@ LATCHWAY_RN_PACKAGE_BRIDGE_VERIFIED=1
 LATCHWAY_ANDROID_SOURCE_STATE=exact_clean_locked
 LATCHWAY_ANDROID_CORE_AAR_SHA256=$(sha256sum "$core_aar" | awk '{print $1}')
 LATCHWAY_ANDROID_OKHTTP_AAR_SHA256=$(sha256sum "$okhttp_aar" | awk '{print $1}')
+LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256=$(sha256sum "$play_integrity_aar" | awk '{print $1}')
 LATCHWAY_NATIVE_REPOSITORY=$native_repository
 export LATCHWAY_RN_PACKAGE_BRIDGE_VERIFIED LATCHWAY_ANDROID_CORE_AAR_SHA256
-export LATCHWAY_ANDROID_OKHTTP_AAR_SHA256 LATCHWAY_NATIVE_REPOSITORY
+export LATCHWAY_ANDROID_OKHTTP_AAR_SHA256 LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256
+export LATCHWAY_NATIVE_REPOSITORY
 export LATCHWAY_ANDROID_SOURCE_STATE
 
 jq --null-input \
   --arg android_commit "$android_commit" \
   --arg core_aar_sha256 "$LATCHWAY_ANDROID_CORE_AAR_SHA256" \
-  --arg okhttp_aar_sha256 "$LATCHWAY_ANDROID_OKHTTP_AAR_SHA256" '
+  --arg okhttp_aar_sha256 "$LATCHWAY_ANDROID_OKHTTP_AAR_SHA256" \
+  --arg play_integrity_aar_sha256 "$LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256" '
   {
     schema_version: 1,
     kind: "latchway_react_native_pr_native_artifact_identity",
@@ -50,6 +55,7 @@ jq --null-input \
     coordinate_origin: "exact_source_built_local_maven_publication",
     core_aar_sha256: $core_aar_sha256,
     okhttp_aar_sha256: $okhttp_aar_sha256,
+    play_integrity_aar_sha256: $play_integrity_aar_sha256,
     physical_attestation_claimed: false
   }
 ' > "$evidence_dir/react-native-native-artifact-identity.json"
@@ -77,6 +83,7 @@ finalize() {
       --arg android_commit "$android_commit" \
       --arg core_aar_sha256 "$LATCHWAY_ANDROID_CORE_AAR_SHA256" \
       --arg okhttp_aar_sha256 "$LATCHWAY_ANDROID_OKHTTP_AAR_SHA256" \
+      --arg play_integrity_aar_sha256 "$LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256" \
       --arg failure_evidence "$failure_evidence" '
       {
         schema_version: 1,
@@ -95,7 +102,8 @@ finalize() {
           source_state: "exact_clean_locked",
           coordinate_origin: "exact_source_built_local_maven_publication",
           core_aar_sha256: $core_aar_sha256,
-          okhttp_aar_sha256: $okhttp_aar_sha256
+          okhttp_aar_sha256: $okhttp_aar_sha256,
+          play_integrity_aar_sha256: $play_integrity_aar_sha256
         },
         remaining_ordinary_ci_boundary: "This job does not execute either React Native TurboModule host or the native iOS dependency; the iOS SDK repository owns native iOS live coverage",
         remaining_protected_gate: "Physical React Native Android/iOS hosts with Play Integrity/App Attest"
@@ -132,7 +140,8 @@ jq --exit-status --arg android_commit "$android_commit" '
 jq --null-input \
   --arg android_commit "$android_commit" \
   --arg core_aar_sha256 "$LATCHWAY_ANDROID_CORE_AAR_SHA256" \
-  --arg okhttp_aar_sha256 "$LATCHWAY_ANDROID_OKHTTP_AAR_SHA256" '
+  --arg okhttp_aar_sha256 "$LATCHWAY_ANDROID_OKHTTP_AAR_SHA256" \
+  --arg play_integrity_aar_sha256 "$LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256" '
   {
     schema_version: 1,
     kind: "latchway_react_native_pr_split_boundary",
@@ -149,7 +158,8 @@ jq --null-input \
       source_state: "exact_clean_locked",
       coordinate_origin: "exact_source_built_local_maven_publication",
       core_aar_sha256: $core_aar_sha256,
-      okhttp_aar_sha256: $okhttp_aar_sha256
+      okhttp_aar_sha256: $okhttp_aar_sha256,
+      play_integrity_aar_sha256: $play_integrity_aar_sha256
     },
     remaining_ordinary_ci_boundary: "This job does not execute either React Native TurboModule host or the native iOS dependency; the iOS SDK repository owns native iOS live coverage",
     remaining_protected_gate: "Physical React Native Android/iOS hosts with Play Integrity/App Attest"

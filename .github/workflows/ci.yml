@@ -249,11 +249,15 @@ jobs:
           test "$(git -C _android_sdk rev-parse --verify HEAD)" = "$ANDROID_COMMIT"
           test -z "$(git -C _android_sdk status --porcelain=v1 --untracked-files=all)"
           ./_android_sdk/gradlew -p _android_sdk \
-            :latchway-core:publishReleasePublicationToPublicationTestRepository \
-            :latchway-okhttp:publishReleasePublicationToPublicationTestRepository \
-            -Platchway.version="$ANDROID_VERSION" --no-daemon --stacktrace
+            -Platchway.central.enabled=false \
+            -Platchway.signing.enabled=false \
+            -Platchway.version="$ANDROID_VERSION" \
+            cleanPublicationTestRepository \
+            publishPublicArtifactsToPublicationTestRepository \
+            --no-daemon --stacktrace
           test -f "_android_sdk/build/publication-test-repository/dev/latchway/latchway-core/$ANDROID_VERSION/latchway-core-$ANDROID_VERSION.aar"
           test -f "_android_sdk/build/publication-test-repository/dev/latchway/latchway-okhttp/$ANDROID_VERSION/latchway-okhttp-$ANDROID_VERSION.aar"
+          test -f "_android_sdk/build/publication-test-repository/dev/latchway/latchway-play-integrity/$ANDROID_VERSION/latchway-play-integrity-$ANDROID_VERSION.aar"
           test -z "$(git -C _android_sdk status --porcelain=v1 --untracked-files=all)"
       - name: Load the contract bundle and run the exact core image plus split SDK vertical
         env:

@@ -29,6 +29,25 @@ test("Android workflows install packages from the immutable compatibility lock",
     assert.match(workflow, /android_ndk_version/u, path);
     assert.doesNotMatch(workflow, /platforms;android-\$\{\{ steps\.lock\.outputs\.android_compile_sdk \}\}/u, path);
   }
+  const ordinaryCI = await readFile(new URL(".github/workflows/ci.yml", root), "utf8");
+  for (const marker of [
+    "cleanPublicationTestRepository",
+    "publishPublicArtifactsToPublicationTestRepository",
+    "latchway-play-integrity-$ANDROID_VERSION.aar",
+  ]) {
+    assert.ok(ordinaryCI.includes(marker), marker);
+  }
+  const liveConformance = await readFile(
+    new URL("scripts/run-pr-react-native-live-conformance.sh", root),
+    "utf8",
+  );
+  for (const marker of [
+    "latchway-play-integrity-1.0.0.aar",
+    "LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256",
+    "play_integrity_aar_sha256",
+  ]) {
+    assert.ok(liveConformance.includes(marker), marker);
+  }
 });
 
 test("ordinary pull-request CI materializes the exact locked JavaScript sibling", async () => {

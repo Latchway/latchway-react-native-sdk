@@ -73,6 +73,7 @@ public class ReactNativeNativeSdkLiveConformanceTest {
         val androidSourceState = requiredEnvironment("LATCHWAY_ANDROID_SOURCE_STATE")
         val coreAarSha256 = requiredEnvironment("LATCHWAY_ANDROID_CORE_AAR_SHA256")
         val okHttpAarSha256 = requiredEnvironment("LATCHWAY_ANDROID_OKHTTP_AAR_SHA256")
+        val playIntegrityAarSha256 = requiredEnvironment("LATCHWAY_ANDROID_PLAY_INTEGRITY_AAR_SHA256")
 
         val gatewayUri = requireCanonicalLoopbackOrigin(baseUrl)
         assertEquals("$baseUrl/development/v1/identity-token", identityTokenUrl)
@@ -85,6 +86,7 @@ public class ReactNativeNativeSdkLiveConformanceTest {
         }
         assertTrue(coreAarSha256.matches(Regex("^[0-9a-f]{64}$")))
         assertTrue(okHttpAarSha256.matches(Regex("^[0-9a-f]{64}$")))
+        assertTrue(playIntegrityAarSha256.matches(Regex("^[0-9a-f]{64}$")))
 
         val httpClient = OkHttpClient.Builder()
             .followRedirects(false)
@@ -231,7 +233,8 @@ public class ReactNativeNativeSdkLiveConformanceTest {
                     .put("source_state", androidSourceState)
                     .put("coordinate_origin", coordinateOrigin)
                     .put("core_aar_sha256", coreAarSha256)
-                    .put("okhttp_aar_sha256", okHttpAarSha256))
+                    .put("okhttp_aar_sha256", okHttpAarSha256)
+                    .put("play_integrity_aar_sha256", playIntegrityAarSha256))
                 .put("observations", JSONObject()
                     .put("platform", refreshedState.installation.platform)
                     .put("trust_provider", refreshedDiagnostics.trustProvider)
