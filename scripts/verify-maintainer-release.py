@@ -29,7 +29,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAXIMUM_JSON_BYTES = 1024 * 1024
 MAXIMUM_JSON_SAFE_INTEGER = 9_007_199_254_740_991
 REPOSITORIES = {"javascript": ("latchway-js", "Latchway/latchway-js"), "ios": ("latchway-ios-sdk", "Latchway/latchway-ios-sdk"), "react_native": ("latchway-react-native-sdk", "Latchway/latchway-react-native-sdk")}
-DEFERRED_EVIDENCE = ["independent_human_review", "live_sdk_conformance", "physical_devices", "apple_distribution_and_extensions", "play_integrity_and_android_device", "firebase_app_check", "turnstile", "live_provider", "cloud_deployments.aws_verified", "cloud_deployments.fly_io_verified", "cloud_deployments.cloudflare_containers_verified", "operational_resilience", "public_registries.documentation_production_verified", "mintlify_production"]
+DEFERRED_EVIDENCE = ["independent_human_review", "live_sdk_conformance", "physical_devices", "apple_distribution_and_extensions", "play_integrity_and_android_device", "firebase_app_check", "turnstile", "live_provider", "cloud_deployments", "operational_resilience", "public_registries.documentation_production_verified", "mintlify_production"]
 FORBIDDEN_CLAIMS = ["release_qualified", "fully_evidence_gated", "independently_reviewed"]
 
 

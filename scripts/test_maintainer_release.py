@@ -83,6 +83,8 @@ class MaintainerReleaseTests(unittest.TestCase):
         intent = json.loads((Path(self.temporary.name) / "intent.json").read_text())
         self.assertFalse(intent["release_qualified"])
         self.assertEqual(intent["workflow"]["file"], ".github/workflows/single-maintainer-release.yml")
+        self.assertIn("cloud_deployments", intent["deferred_evidence"])
+        self.assertFalse(any(item.startswith("cloud_deployments.") for item in intent["deferred_evidence"]))
 
     def test_rejects_wrong_confirmation_or_non_main_ref(self) -> None:
         for change in ({"confirmation": "yes"}, {"workflow_ref": "refs/heads/feature"}):
@@ -99,7 +101,10 @@ class MaintainerReleaseTests(unittest.TestCase):
         self.assertIn("--rawfile body", workflow)
         documentation = (SOURCE / "docs/releasing.md").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", workflow)
-        self.assertIn("needs: [intent, verify-source, core-release-gate]", workflow)
+        self.assertIn(
+            "needs: [intent, verify-source, core-release-gate]",
+            workflow,
+        )
         self.assertNotIn('"latchway:${{ needs.intent.outputs.core_commit }}"', workflow)
         self.assertIn("git -C latchway merge-base --is-ancestor", workflow)
         self.assertIn("verify:bundle", workflow)
@@ -123,6 +128,31 @@ class MaintainerReleaseTests(unittest.TestCase):
         self.assertIn("workflow file\n`single-maintainer-release.yml`", documentation)
         self.assertIn("strict `release.yml` cannot publish", documentation)
         self.assertIn("npm permits only one trusted publisher", documentation)
+
+    def test_selected_release_proves_github_immutability_after_publication(self) -> None:
+        workflow = (SOURCE / ".github/workflows/single-maintainer-release.yml").read_text(encoding="utf-8")
+        release = workflow.split("\n  github-release:\n", 1)[1]
+        self.assertNotIn("\n  immutable-release-settings:\n", workflow)
+        self.assertNotIn("single-maintainer-v1-administration", workflow)
+        self.assertNotIn("LATCHWAY_RELEASE_PROFILE_POLICY_ID", workflow)
+        self.assertNotIn("LATCHWAY_GITHUB_RELEASE_ADMIN_TOKEN", workflow)
+        self.assertNotIn("repos/$GITHUB_REPOSITORY/immutable-releases", workflow)
+        self.assertIn(".immutable==true", release)
+        self.assertIn("If-None-Match:", release)
+        self.assertIn("304( |$)", release)
+        self.assertIn("gh release verify-asset", release)
+        self.assertIn("gh release verify \"$RELEASE_TAG\"", release)
+        self.assertIn("pre-publish-tag-ref.json", release)
+        self.assertNotIn("--clobber", release)
+        self.assertNotIn("gh release delete", release)
+
+    def test_every_github_release_command_names_the_repository(self) -> None:
+        workflow = (SOURCE / ".github/workflows/single-maintainer-release.yml").read_text(encoding="utf-8")
+        commands = [line.strip() for line in workflow.splitlines() if "gh release " in line]
+        self.assertGreater(len(commands), 0)
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIn('--repo "$GITHUB_REPOSITORY"', command)
 
     def test_dispatch_inputs_are_never_interpolated_directly_into_shell(self) -> None:
         workflow = (SOURCE / ".github/workflows/single-maintainer-release.yml").read_text(encoding="utf-8")
@@ -171,10 +201,14 @@ class MaintainerReleaseTests(unittest.TestCase):
             self.assertIn(value, workflow)
         self.assertNotIn("--clobber", workflow)
         self.assertNotIn("gh release delete", workflow)
-        for value in ("gh attestation verify", "single-maintainer-release.yml", "release.yml", "deployment-evidence.yml", "compare/$locked_core_commit...$core_commit"):
+        for value in ("gh attestation verify", "single-maintainer-release.yml", "release.yml", "compare/$locked_core_commit...$core_commit", "registry-only; cloud deployment evidence is explicitly deferred", ".immutable == true", "(.assets | length) == 11"):
             self.assertIn(value, verifier)
-        for value in ("core_publication_gate", "vulnerability_scan_verified", "sbom_verified", "compose", "cloud_run"):
+        for value in ("core_publication_gate", "vulnerability_scan_verified", "sbom_verified", 'record.get("deployment_evidence") != {}', '"cloud_deployments"', '"publication_scope": "registry_only"'):
             self.assertIn(value, semantic)
+        self.assertNotIn("deployment-evidence.yml", verifier)
+        self.assertNotIn("compose.tar.gz", semantic)
+        self.assertNotIn("cloud_run.tar.gz", semantic)
+        self.assertIn("registry-only", documentation)
         self.assertIn("Re-run failed jobs", documentation)
         self.assertIn("Never use **Re-run all jobs**", documentation)
         self.assertIn("never start a new workflow", documentation)

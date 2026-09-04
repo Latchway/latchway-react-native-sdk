@@ -383,12 +383,11 @@ function singleMaintainerFixture() {
   const deferredEvidence = [
     "independent_human_review", "live_sdk_conformance", "physical_devices",
     "apple_distribution_and_extensions", "play_integrity_and_android_device", "firebase_app_check",
-    "turnstile", "live_provider", "cloud_deployments.aws_verified", "cloud_deployments.fly_io_verified",
-    "cloud_deployments.cloudflare_containers_verified", "operational_resilience",
+    "turnstile", "live_provider", "cloud_deployments", "operational_resilience",
     "public_registries.documentation_production_verified", "mintlify_production",
   ];
   const forbiddenClaims = ["release_qualified", "fully_evidence_gated", "independently_reviewed"];
-  const globalEvidence = ["cloud_deployments.compose_verified", "cloud_deployments.gcp_cloud_run_verified"];
+  const globalEvidence = [];
   const intent = {
     schema_version: 1,
     kind: "latchway_single_maintainer_release_intent",

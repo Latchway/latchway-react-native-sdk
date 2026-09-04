@@ -80,14 +80,24 @@ and finalizes only an exact remote closure; it never overwrites an asset.
 
 Before any React Native tag or npm mutation, the workflow authenticates the
 public core `v1.0.0` `single_maintainer_v1` record, annotated core tag, candidate
-and deployment attestations, scans, SBOMs, image digest, and the exact Docker
-Compose and Google Cloud Run captures. The locked contract commit must be an
-ancestor of that published core commit. Existing
+attestation, scans, SBOMs, and image digest in the exact registry-only 11-asset
+closure. The signed core record must have `deployment_evidence: {}` and the
+exact `cloud_deployments` deferred entry; deployment archives and claims that
+Compose, Cloud Run, or another target passed are rejected. The locked contract
+commit must be an ancestor of that published core commit. Existing
 `@latchway/react-native@1.0.0` bytes are not sufficient for adoption: npm's
 Sigstore provenance must bind the exact `Latchway/latchway-react-native-sdk`
 repository, `single-maintainer-release.yml`, `main` ref, and source commit, and
-the package signature is audited. AWS, Fly.io, Cloudflare Containers, devices,
-providers, and independent review remain explicitly deferred.
+the package signature is audited. Cloud deployments, devices, providers, and
+independent review remain explicitly deferred.
+
+This selected profile has no prepublication Administration-token job or
+`single-maintainer-v1-administration` environment. The tag may therefore be
+created before GitHub proves the repository's immutable-release setting; that
+is an explicit assurance reduction, not evidence that the setting passed. The
+final publisher still requires an unchanged release ETag, exact asset and tag
+closure, `immutable: true`, and successful release and per-asset attestation
+verification before it reports success.
 
 ## Cross-repository order
 

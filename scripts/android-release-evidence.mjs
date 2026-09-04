@@ -20,9 +20,7 @@ export const SINGLE_MAINTAINER_ANDROID_DEFERRED_EVIDENCE = Object.freeze([
   "firebase_app_check",
   "turnstile",
   "live_provider",
-  "cloud_deployments.aws_verified",
-  "cloud_deployments.fly_io_verified",
-  "cloud_deployments.cloudflare_containers_verified",
+  "cloud_deployments",
   "operational_resilience",
   "public_registries.documentation_production_verified",
   "mintlify_production",
@@ -34,10 +32,7 @@ const SINGLE_MAINTAINER_ANDROID_FORBIDDEN_CLAIMS = Object.freeze([
   "independently_reviewed",
 ]);
 
-const SINGLE_MAINTAINER_ANDROID_REQUIRED_GLOBAL_EVIDENCE = Object.freeze([
-  "cloud_deployments.compose_verified",
-  "cloud_deployments.gcp_cloud_run_verified",
-]);
+const SINGLE_MAINTAINER_ANDROID_REQUIRED_GLOBAL_EVIDENCE = Object.freeze([]);
 
 const SINGLE_MAINTAINER_ANDROID_DOWNSTREAM_GATES = Object.freeze([
   "complete_local_release_tests_before_tag",

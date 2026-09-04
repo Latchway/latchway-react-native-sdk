@@ -11,7 +11,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/Latchway/latchway-ios-sdk.git",
-            revision: "92a394acbc00d1af6d258372f22b11ddae8e1750"
+            revision: "b5104113158fda509e244631eb4939acf45157a3"
         ),
     ],
     targets: [
