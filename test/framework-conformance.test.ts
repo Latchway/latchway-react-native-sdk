@@ -24,7 +24,7 @@ import {
   createFrameworkConsumers,
   runFrameworkConsumerSmoke,
 } from "../example/src/framework-consumers.js";
-import { createLatchwayClient, type LatchwayClient } from "../src/index.js";
+import { createLatchwayClient, SDK_VERSION, type LatchwayClient } from "../src/index.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 const FEATURE = "habit_assistant";
@@ -139,7 +139,7 @@ describe("React Native framework conformance", () => {
     expect(rootPackage.devDependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
     expect(examplePackage.dependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
     expect(gateway.configureInputs[0]).toMatchObject({
-      sdkVersion: "1.0.0",
+      sdkVersion: SDK_VERSION,
       frameworkID: fixture.registry.id,
       frameworkVersion: fixture.registry.react_native.latest,
     });

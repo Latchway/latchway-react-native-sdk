@@ -1,4 +1,4 @@
-name: Publish React Native SDK v1.0.0
+name: Publish React Native SDK v1.1.0
 
 on:
   workflow_dispatch:
@@ -8,19 +8,19 @@ permissions:
   id-token: write
 
 concurrency:
-  group: latchway-react-native-v1.0.0-publication
+  group: latchway-react-native-v1.1.0-publication
   cancel-in-progress: false
 
 env:
   NODE_VERSION: 24.19.0
   NPM_VERSION: 11.6.2
   PNPM_VERSION: 10.15.0
-  RELEASE_TAG: v1.0.0
-  RELEASE_VERSION: 1.0.0
+  RELEASE_TAG: v1.1.0
+  RELEASE_VERSION: 1.1.0
 
 jobs:
   publish:
-    name: Pack, publish, and release v1.0.0
+    name: Pack, publish, and release v1.1.0
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -41,12 +41,12 @@ jobs:
         run: |
           npm install --global "npm@$NPM_VERSION"
           pnpm install --frozen-lockfile
-      - name: Build and pack v1.0.0
+      - name: Build and pack v1.1.0
         run: |
           pnpm build
           mkdir -p "$RUNNER_TEMP/release"
           pnpm pack --pack-destination "$RUNNER_TEMP/release"
-      - name: Publish v1.0.0 with trusted npm publishing
+      - name: Publish v1.1.0 with trusted npm publishing
         run: >-
           npm publish
           "$RUNNER_TEMP/release/latchway-react-native-$RELEASE_VERSION.tgz"
@@ -60,4 +60,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Latchway React Native SDK $RELEASE_VERSION" \
-            --notes "Latchway React Native SDK $RELEASE_VERSION."
+            --notes "React Native SDK $RELEASE_VERSION: explicit Hermes compatibility bootstrap, optional Babel helper, standard Metro package resolution and npm-only LatchwayChat with LangChain tools. Native client/App Attest/Android dependencies stay 1.0.0. See CHANGELOG.md and docs/langchain.md for setup and evidence boundaries."

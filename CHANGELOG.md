@@ -7,6 +7,31 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-07
+
+### Added
+
+- Explicit `@latchway/react-native/polyfills` bootstrap for Hermes async symbols,
+  streaming UTF-8 decoding, web streams, URL and abort compatibility. Complete
+  existing globals are retained; the ordinary SDK import does not install it.
+- Optional `withLatchwayBabel` configuration helper for LangChain class and
+  export-namespace compatibility without depending on LangChain at runtime.
+- Standalone npm-only LatchwayChat with Firebase authentication, temporary
+  multi-turn LangChain weather tools, direct fetch, cancellation and diagnostics.
+- Isolated runtime regressions and a LangChain quickstart.
+
+### Fixed
+
+- Metro now resolves the published built JavaScript entry without a custom
+  `.js`-to-TypeScript resolver. Native Codegen retains its original TS schema.
+
+### Compatibility
+
+- Shared client, iOS App Attest and Android SDK dependencies remain 1.0.0;
+  the native authentication/credential boundary and wire protocol are unchanged.
+- Supported baseline remains React Native 0.82 / New Architecture. Android
+  physical Play Integrity evidence is deferred, not inferred from a build.
+
 ## [1.0.0] - 2026-09-01
 
 ### Changed

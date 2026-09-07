@@ -2,7 +2,14 @@
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-> **Release status:** `1.0.0` is the intended stable source candidate, but has not yet been published. Use a workspace dependency or the archive produced by `pnpm pack:check`; do not assume an npm or native artifact exists until the release is announced.
+Version 1.1.0 adds an optional [LangChain quickstart](docs/langchain.md), runtime
+bootstrap and Babel helper, with standard Metro resolution. Native SDK
+dependencies remain 1.0.0 from CocoaPods and Maven Central.
+
+For a standalone npm-only consumer with Firebase login, LangChain weather tools,
+streaming chat and direct-fetch Settings, see
+[LatchwayChat](Examples/LatchwayChat/README.md). The existing `example/` remains
+the separate workspace/conformance application.
 
 ## Requirements
 

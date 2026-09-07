@@ -1,14 +1,14 @@
 {
   "name": "@latchway/react-native",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Hardware-backed React Native client for the Latchway AI gateway",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./lib/index.js",
   "module": "./lib/index.js",
   "types": "./lib/index.d.ts",
-  "react-native": "./src/index.ts",
-  "sideEffects": false,
+  "react-native": "./lib/index.js",
+  "sideEffects": ["./lib/polyfills.js", "./lib/runtime-symbols.js"],
   "packageManager": "pnpm@10.15.0",
   "engines": {
     "node": ">=24.19.0",
@@ -28,6 +28,8 @@
     "ios",
     "lib",
     "src",
+    "babel.cjs",
+    "babel.d.cts",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
@@ -41,9 +43,20 @@
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
-      "react-native": "./src/index.ts",
+      "react-native": "./lib/index.js",
       "import": "./lib/index.js",
       "default": "./lib/index.js"
+    },
+    "./polyfills": {
+      "types": "./lib/polyfills.d.ts",
+      "react-native": "./lib/polyfills.js",
+      "import": "./lib/polyfills.js",
+      "default": "./lib/polyfills.js"
+    },
+    "./babel": {
+      "types": "./babel.d.cts",
+      "require": "./babel.cjs",
+      "default": "./babel.cjs"
     },
     "./testing": {
       "types": "./lib/testing.d.ts",
@@ -54,7 +67,7 @@
   },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
-    "check": "pnpm verify:contracts && pnpm verify:compatibility && pnpm lint && pnpm typecheck && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm example:bundle:check && pnpm native:boundary",
+    "check": "pnpm verify:contracts && pnpm verify:compatibility && pnpm lint && pnpm typecheck && pnpm test:runtime && pnpm test && pnpm codegen:check && pnpm build && pnpm example:check && pnpm example:bundle:check && pnpm native:boundary",
     "codegen:check": "node scripts/verify-codegen.mjs",
     "docs:bundle": "python3 scripts/build_docs_bundle.py",
     "example:check": "tsc -p tsconfig.example.json --noEmit",
@@ -72,6 +85,7 @@
     "consumer:check": "node scripts/verify-consumer.mjs",
     "test": "vitest run && node --test scripts/test-npm-release-evidence.mjs scripts/test-android-release-evidence.mjs scripts/test-ci-lock-output.mjs scripts/test-package-archive.mjs && python3 -m unittest scripts/test_build_docs_bundle.py scripts/test_maintainer_release.py scripts/test_public_core_release.py && python3 scripts/test-dependency-vulnerability-scan.py",
     "test:watch": "vitest",
+    "test:runtime": "node --test scripts/test-runtime.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:bundle": "node scripts/verify-contract-bundle.mjs",
     "verify:compatibility": "node scripts/verify-compatibility.mjs",
@@ -79,7 +93,11 @@
     "verify:reproducible": "node scripts/verify-reproducible.mjs"
   },
   "dependencies": {
+    "@babel/plugin-transform-export-namespace-from": "7.29.7",
     "@latchway/client": "1.0.0",
+    "react-native-get-random-values": "1.11.0",
+    "react-native-url-polyfill": "2.0.0",
+    "text-encoding": "0.7.0",
     "web-streams-polyfill": "4.3.0"
   },
   "peerDependencies": {
@@ -96,6 +114,7 @@
     "@react-native/gradle-plugin": "0.82.0",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
+    "@types/text-encoding": "0.0.40",
     "ai": "7.0.85",
     "eslint": "10.9.1",
     "globals": "17.11.0",
