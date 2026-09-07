@@ -7,6 +7,28 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-07
+
+### Fixed
+
+- The deprecated opt-in bootstrap now rejects React Native's partial URL
+  implementation when it appends a slash to Responses or Chat Completions
+  paths. Both it and the app-owned LatchwayChat bootstrap preserve complete
+  host globals and exact gateway destinations without weakening the allowlist.
+- Added regression coverage using the actual pinned RN URL implementation.
+- Updated LangChain setup links to the corrected versioned example and
+  documented native/RN shared-identity configuration on server 1.0.3.
+
+### Upgrade
+
+- Recopy the app-owned runtime files if the host previously copied the 1.1.1
+  example; npm cannot update application-owned copies. Deprecated helper users
+  still explicitly install their optional peers as described for 1.1.1.
+- Required dependencies remain only the shared client and private streams
+  fallback. iOS/Android pins remain 1.0.0, with no native or wire changes.
+- No fresh physical-device, Play Integrity or production distribution proof
+  is claimed by this patch.
+
 ## [1.1.1] - 2026-09-07
 
 ### Changed

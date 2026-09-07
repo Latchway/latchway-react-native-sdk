@@ -19,8 +19,15 @@ import { TextDecoder, TextEncoder } from "text-encoding";
 function hasWorkingURL(): boolean {
   try {
     const url = new globalThis.URL("child?q=hello%20world", "https://example.invalid/root/");
-    return url.href === "https://example.invalid/root/child?q=hello%20world" &&
+    const routes = ["/v1/responses", "/v1/chat/completions"];
+    // RN's partial URL can parse queries but append a slash to API paths.
+    // Read searchParams before href: access must not change serialization.
+    return routes.every((path) => {
+      const route = new globalThis.URL(`https://example.invalid${path}`);
+      return route.href === `https://example.invalid${path}` && route.pathname === path;
+    }) &&
       url.searchParams.get("q") === "hello world" &&
+      url.href === "https://example.invalid/root/child?q=hello%20world" &&
       new globalThis.URLSearchParams({ q: "hello world" }).get("q") === "hello world";
   } catch {
     return false;

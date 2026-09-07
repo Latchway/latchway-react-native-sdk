@@ -12,11 +12,12 @@ import {TextDecoder, TextEncoder} from 'text-encoding';
 function hasWorkingURL(): boolean {
   try {
     const url = new globalThis.URL('child?q=hello%20world', 'https://example.invalid/root/');
-    const route = new globalThis.URL('https://example.invalid/v1/responses');
     // RN's partial URL passes query parsing but adds '/' to absolute API paths.
     // Reading searchParams must not change serialization either.
-    return route.href === 'https://example.invalid/v1/responses' &&
-      route.pathname === '/v1/responses' &&
+    return ['/v1/responses', '/v1/chat/completions'].every(path => {
+      const route = new globalThis.URL(`https://example.invalid${path}`);
+      return route.href === `https://example.invalid${path}` && route.pathname === path;
+    }) &&
       url.searchParams.get('q') === 'hello world' &&
       url.href === 'https://example.invalid/root/child?q=hello%20world' &&
       new globalThis.URLSearchParams({q: 'hello world'}).get('q') === 'hello world';

@@ -1,6 +1,6 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.1.1` for native authenticated transport and
+Use `@latchway/react-native@1.1.2` for native authenticated transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
@@ -10,7 +10,7 @@ DPoP and refresh credentials stay native.
 The tested baseline is React Native 0.82 / React 19.1, New Architecture:
 
 ```sh
-npm install --save-exact @latchway/react-native@1.1.1 @latchway/langchain@1.1.0 \
+npm install --save-exact @latchway/react-native@1.1.2 @latchway/langchain@1.1.0 \
   @latchway/client@1.0.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
@@ -40,8 +40,8 @@ cd ios && pod install && cd ..
 
 Copy both app-owned files into `src/runtime/`:
 
-- [symbols.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.1/Examples/LatchwayChat/src/runtime/symbols.ts)
-- [polyfills.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.1/Examples/LatchwayChat/src/runtime/polyfills.ts)
+- [symbols.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.2/Examples/LatchwayChat/src/runtime/symbols.ts)
+- [polyfills.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.2/Examples/LatchwayChat/src/runtime/polyfills.ts)
 
 Keep the symbols module import first inside the bootstrap. Remove imports for
 implementations you already supply; an unused static import still requires its
@@ -87,6 +87,11 @@ Classes must still be constructed with
 
 ## Upgrading from 1.1.0
 
+For an existing 1.1.1 application, upgrade to 1.1.2 and recopy both runtime files
+linked above. The corrected probe checks exact Responses and Chat Completions
+paths; the older app-owned copy is not replaced by an npm package update.
+Do not fix a trailing-slash rejection by widening the SDK destination allowlist.
+
 1.1.1 removes four convenience packages from required dependencies. This
 changes installation behavior even though the core APIs are unchanged: helper
 users must act before updating. Prefer the application-owned setup above; the
@@ -101,7 +106,7 @@ npm install --save-exact react-native-get-random-values@1.11.0 \
   react-native-url-polyfill@2.0.0 text-encoding@0.7.0
 # Required only if you use @latchway/react-native/babel:
 npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
-npm install --save-exact @latchway/react-native@1.1.1
+npm install --save-exact @latchway/react-native@1.1.2
 cd ios && pod install && cd ..
 ```
 
@@ -120,6 +125,15 @@ Do not rely on another package incidentally installing them. No companion
 package, setup CLI or global fetch patch is needed.
 
 ## Create a model
+
+On gateway 1.0.3+, one directly App Attest-verified `ios` / `react_native_ios`
+main-app root pair can share a bundle, and one directly Play Integrity-verified
+`android` / `react_native_android` app-root pair can share a package. Configure
+each platform explicitly with its own root and required attestation policy.
+This does not enable all platforms automatically, merge installations, or grant
+another quota allowance. Firebase authentication remains separate from native
+attestation. Use a Play-distributed physical Android build for real Integrity
+verification; do not replace it with a debug bypass or Firebase App Check.
 
 Create `latchway` using the ordinary SDK configuration and your current user's
 identity-token callback. Then pass that client directly—no transport wrapper:

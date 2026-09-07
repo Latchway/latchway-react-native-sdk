@@ -2,7 +2,8 @@
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-Version 1.1.1 keeps the base SDK small: only `@latchway/client` and a private
+Version 1.1.2 fixes exact API URL handling in the optional bootstrap and example,
+and keeps the base SDK small: only `@latchway/client` and a private
 `web-streams-polyfill` fallback are required runtime dependencies. Babel and
 global polyfills are application-owned; follow the [LangChain quickstart](docs/langchain.md)
 only if using that integration. Native SDK dependencies remain 1.0.0 from
@@ -13,6 +14,12 @@ entrypoints, but their dependencies are no longer installed automatically. Apps
 using either must follow the [1.1.1 migration](docs/langchain.md#upgrading-from-110).
 This is a dependency-installation change, not a zero-action patch for helper users.
 Ordinary SDK imports and native authentication APIs are unchanged.
+
+**Upgrading from 1.1.1:** update the package and recopy the app-owned runtime
+files linked in the LangChain guide. Upgrading npm alone cannot update files
+already copied into your host app. Server 1.0.3 allows native and React Native
+roots to share their signed iOS bundle or Android package without relaxing
+attestation or platform-specific root selection.
 
 For a standalone npm-only consumer with Firebase login, LangChain weather tools,
 streaming chat and direct-fetch Settings, see

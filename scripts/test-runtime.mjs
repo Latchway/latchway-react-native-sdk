@@ -65,6 +65,45 @@ test("replaces incomplete URL implementations only", () => {
   assert.equal(new env.URL("/chat", "https://example.invalid").pathname, "/chat");
 });
 
+test("both bootstraps repair the actual RN partial URL without widening destination guards", () => {
+  const babel = require("@babel/core");
+  function rnURL(name) {
+    const filename = new URL(`../node_modules/react-native/Libraries/Blob/${name}.js`, import.meta.url);
+    const code = babel.transformSync(readFileSync(filename, "utf8"), {
+      filename: filename.pathname, configFile: false, babelrc: false,
+      presets: [require.resolve("@react-native/babel-preset")],
+    }).code;
+    const module = { exports: {} };
+    const globals = name === "URL" ? { URLSearchParams: rnURL("URLSearchParams").URLSearchParams } : {};
+    runInNewContext(`(function(require,module,exports){${code}\n})`, globals)(
+      (id) => id === "./NativeBlobModule" ? { __esModule: true, default: null } :
+        id === "./URLSearchParams" ? rnURL("URLSearchParams") : require(id),
+      module, module.exports,
+    );
+    return module.exports;
+  }
+  const native = rnURL("URL");
+  const paths = ["/v1/responses", "/v1/chat/completions"];
+  for (const path of paths) {
+    assert.equal(new native.URL(`https://example.invalid${path}`).pathname, `${path}/`);
+  }
+  for (const appOwned of [false, true]) {
+    const fetch = () => {};
+    const env = runtime({ ...native, fetch }, appOwned);
+    assert.equal(env.URL, URL);
+    assert.equal(env.fetch, fetch);
+    for (const path of paths) {
+      const route = new env.URL(`https://example.invalid${path}`);
+      assert.equal(route.pathname, path);
+      assert.equal(route.href, `https://example.invalid${path}`);
+    }
+    const complete = runtime({ URL, URLSearchParams, fetch }, appOwned);
+    assert.equal(complete.URL, URL);
+    assert.equal(complete.URLSearchParams, URLSearchParams);
+    assert.equal(complete.fetch, fetch);
+  }
+});
+
 test("UTF-8 decoding buffers a split multi-byte character across stream chunks", () => {
   const env = runtime();
   const decoder = new env.TextDecoder();
