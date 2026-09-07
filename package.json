@@ -1,6 +1,6 @@
 {
   "name": "@latchway/react-native",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Hardware-backed React Native client for the Latchway AI gateway",
   "license": "Apache-2.0",
   "type": "module",
@@ -93,20 +93,27 @@
     "verify:reproducible": "node scripts/verify-reproducible.mjs"
   },
   "dependencies": {
-    "@babel/plugin-transform-export-namespace-from": "7.29.7",
     "@latchway/client": "1.0.0",
-    "react-native-get-random-values": "1.11.0",
-    "react-native-url-polyfill": "2.0.0",
-    "text-encoding": "0.7.0",
     "web-streams-polyfill": "4.3.0"
   },
   "peerDependencies": {
+    "@babel/plugin-transform-export-namespace-from": "^7.29.7",
     "react": "19.1.x",
-    "react-native": "0.82.x"
+    "react-native": "0.82.x",
+    "react-native-get-random-values": "^1.11.0",
+    "react-native-url-polyfill": "^2.0.0",
+    "text-encoding": "^0.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@babel/plugin-transform-export-namespace-from": { "optional": true },
+    "react-native-get-random-values": { "optional": true },
+    "react-native-url-polyfill": { "optional": true },
+    "text-encoding": { "optional": true }
   },
   "devDependencies": {
     "@ai-sdk/anthropic": "4.0.46",
     "@ai-sdk/openai": "4.0.52",
+    "@babel/plugin-transform-export-namespace-from": "7.29.7",
     "@eslint/js": "10.0.1",
     "@langchain/core": "1.2.9",
     "@langchain/openai": "1.5.10",
@@ -121,6 +128,9 @@
     "openai": "7.8.0",
     "react": "19.1.1",
     "react-native": "0.82.0",
+    "react-native-get-random-values": "1.11.0",
+    "react-native-url-polyfill": "2.0.0",
+    "text-encoding": "0.7.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
     "vitest": "4.1.11",

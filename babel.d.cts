@@ -3,5 +3,8 @@ interface BabelConfiguration {
   plugins?: unknown[];
   [key: string]: unknown;
 }
-/** Preserves existing configuration and adds explicit LangChain compatibility. */
+/**
+ * @deprecated Prefer application-owned Babel configuration in docs/langchain.md.
+ * Requires @babel/plugin-transform-export-namespace-from as an app devDependency.
+ */
 export function withLatchwayBabel(config?: BabelConfiguration): BabelConfiguration;

@@ -1,4 +1,4 @@
-name: Publish React Native SDK v1.1.0
+name: Publish React Native SDK v1.1.1
 
 on:
   workflow_dispatch:
@@ -8,19 +8,19 @@ permissions:
   id-token: write
 
 concurrency:
-  group: latchway-react-native-v1.1.0-publication
+  group: latchway-react-native-v1.1.1-publication
   cancel-in-progress: false
 
 env:
   NODE_VERSION: 24.19.0
   NPM_VERSION: 11.6.2
   PNPM_VERSION: 10.15.0
-  RELEASE_TAG: v1.1.0
-  RELEASE_VERSION: 1.1.0
+  RELEASE_TAG: v1.1.1
+  RELEASE_VERSION: 1.1.1
 
 jobs:
   publish:
-    name: Pack, publish, and release v1.1.0
+    name: Pack, publish, and release v1.1.1
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -41,12 +41,12 @@ jobs:
         run: |
           npm install --global "npm@$NPM_VERSION"
           pnpm install --frozen-lockfile
-      - name: Build and pack v1.1.0
+      - name: Build and pack v1.1.1
         run: |
           pnpm build
           mkdir -p "$RUNNER_TEMP/release"
           pnpm pack --pack-destination "$RUNNER_TEMP/release"
-      - name: Publish v1.1.0 with trusted npm publishing
+      - name: Publish v1.1.1 with trusted npm publishing
         run: >-
           npm publish
           "$RUNNER_TEMP/release/latchway-react-native-$RELEASE_VERSION.tgz"
@@ -60,4 +60,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Latchway React Native SDK $RELEASE_VERSION" \
-            --notes "React Native SDK $RELEASE_VERSION: explicit Hermes compatibility bootstrap, optional Babel helper, standard Metro package resolution and npm-only LatchwayChat with LangChain tools. Native client/App Attest/Android dependencies stay 1.0.0. See CHANGELOG.md and docs/langchain.md for setup and evidence boundaries."
+            --notes "React Native SDK $RELEASE_VERSION: only shared client and private stream fallback remain required runtime dependencies. LangChain runtime/Babel setup is app-owned and documented. Upgrade action: deprecated /polyfills and /babel exports remain, but their convenience dependencies are now optional peers and must be explicitly installed by helper users. See CHANGELOG.md and docs/langchain.md for commands. Core APIs, native client/App Attest/Android dependencies (1.0.0), and wire protocol are unchanged. This release does not claim fresh physical-device verification."

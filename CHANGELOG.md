@@ -7,6 +7,30 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-07
+
+### Changed
+
+- Required runtime dependencies reduced from six to two: `@latchway/client`
+  and the SDK's private `web-streams-polyfill` fallback. The core entry does not
+  install global polyfills, Babel tooling, native randomness or LangChain.
+- LangChain setup is application-owned and documented, with copyable bootstrap
+  files and Babel configuration in LatchwayChat. No companion package is required.
+- The old `/polyfills` and `/babel` entrypoints are deprecated but retained;
+  their four convenience dependencies are optional peers, not auto-installed.
+  Repository devDependencies still pin these for regression tests.
+
+### Upgrade action for 1.1.0 helper users
+
+- Install the documented runtime polyfills and Babel devDependency explicitly
+  before upgrading, or migrate to the app-owned setup in `docs/langchain.md`.
+  A fresh install that still imports `/polyfills` without its peers will fail
+  module resolution; `/babel` reports an actionable missing-plugin error.
+  Existing host globals do not remove static import dependency requirements.
+- This requested patch release changes dependency installation behavior; it is
+  not a zero-action upgrade for helper consumers. Core APIs, native security,
+  shared/native dependency versions and the wire contract are unchanged.
+
 ## [1.1.0] - 2026-09-07
 
 ### Added

@@ -8,22 +8,22 @@ import ts from "typescript";
 const require = createRequire(import.meta.url);
 const { withLatchwayBabel } = require("../babel.cjs");
 const compile = (name) => ts.transpileModule(
-  readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8"),
+  readFileSync(new URL(name.startsWith("../") ? `${name}.ts` : `../src/${name}.ts`, import.meta.url), "utf8"),
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
 const evaluate = (code, context) => runInNewContext(`(function () { ${code}\n })();`, context);
 
 // Isolated VM fixtures model missing Hermes globals; no native security mock
 // participates in production. Symbol must initialize before stream evaluation.
-function runtime(existing = {}) {
+function runtime(existing = {}, appOwned = false) {
   class Signal { aborted = false; }
   const context = {
     exports: {}, Symbol: { for: Symbol.for }, navigator: {}, AbortSignal: Signal,
     ...existing,
   };
   context.require = (name) => {
-    if (name === "./runtime-symbols.js") {
-      evaluate(compile("runtime-symbols"), context);
+    if (name === "./runtime-symbols.js" || name === "./symbols") {
+      evaluate(compile(appOwned ? "../Examples/LatchwayChat/src/runtime/symbols" : "runtime-symbols"), context);
       return {};
     }
     if (name === "react-native-get-random-values") return {};
@@ -35,7 +35,7 @@ function runtime(existing = {}) {
     if (name === "text-encoding") return require(name);
     throw new Error(`Unexpected fixture import: ${name}`);
   };
-  evaluate(compile("polyfills"), context);
+  evaluate(compile(appOwned ? "../Examples/LatchwayChat/src/runtime/polyfills" : "polyfills"), context);
   return context;
 }
 
@@ -103,4 +103,53 @@ test("package exports real built files and marks only explicit bootstrap as side
   assert.deepEqual(pkg.sideEffects, ["./lib/polyfills.js", "./lib/runtime-symbols.js"]);
   assert.equal(pkg.dependencies["@langchain/openai"], undefined);
   assert(!readFileSync(new URL("../src/index.ts", import.meta.url), "utf8").includes("polyfills"));
+});
+
+test("core dependencies stay small and legacy convenience peers are not auto-installed", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["@latchway/client", "web-streams-polyfill"]);
+  for (const name of ["@babel/plugin-transform-export-namespace-from", "react-native-get-random-values",
+    "react-native-url-polyfill", "text-encoding"]) {
+    assert.equal(pkg.dependencies[name], undefined);
+    assert.equal(pkg.optionalDependencies?.[name], undefined);
+    assert.equal(pkg.peerDependenciesMeta[name].optional, true);
+    assert(pkg.peerDependencies[name]);
+    assert(pkg.devDependencies[name], "legacy helpers remain tested with exact dev pins");
+  }
+});
+
+test("legacy Babel helper explains the missing app-owned plugin", () => {
+  const source = readFileSync(new URL("../babel.cjs", import.meta.url), "utf8");
+  const context = { module: { exports: {} }, require: { resolve() { throw new Error("MODULE_NOT_FOUND"); } } };
+  evaluate(source, context);
+  assert.throws(() => context.module.exports.withLatchwayBabel(), /npm install --save-dev/);
+});
+
+test("app-owned runtime preserves globals, symbol ordering, split UTF-8 and cancellation", () => {
+  const existing = { URL, URLSearchParams, navigator: { userAgent: "HostApp" }, fetch: () => {} };
+  const env = runtime(existing, true);
+  for (const [key, value] of Object.entries(existing)) assert.equal(env[key], value, key);
+  const decoder = new env.TextDecoder();
+  const bytes = new env.TextEncoder().encode("Hello 🌦 Việt Nam");
+  assert.equal(decoder.decode(bytes.subarray(0, 8), { stream: true }) +
+    decoder.decode(bytes.subarray(8), { stream: true }) + decoder.decode(), "Hello 🌦 Việt Nam");
+  const signal = new env.AbortSignal();
+  signal.throwIfAborted();
+  signal.aborted = true;
+  signal.reason = new Error("Host cancellation");
+  assert.throws(() => signal.throwIfAborted(), (error) => error === signal.reason);
+  assert.equal(runtime({ URL: function IncompleteURL() { throw new Error("Not implemented"); } }, true).URL, URL);
+});
+
+test("example owns integration dependencies and does not import deprecated helpers", () => {
+  const root = new URL("../Examples/LatchwayChat/", import.meta.url);
+  const pkg = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
+  for (const name of ["react-native-get-random-values", "react-native-url-polyfill", "text-encoding", "web-streams-polyfill"]) {
+    assert(pkg.dependencies[name], name);
+  }
+  assert(pkg.devDependencies["@babel/plugin-transform-export-namespace-from"]);
+  const entry = readFileSync(new URL("index.js", root), "utf8");
+  assert(entry.includes("import './src/runtime/polyfills'"));
+  assert(!entry.includes("@latchway/react-native/polyfills"));
+  assert(!readFileSync(new URL("babel.config.js", root), "utf8").includes("@latchway/react-native/babel"));
 });

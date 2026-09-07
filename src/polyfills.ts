@@ -1,4 +1,9 @@
 /**
+ * @deprecated Prefer application-owned setup from docs/langchain.md. Since
+ * 1.1.1, this entry requires explicitly installed optional peers:
+ * react-native-get-random-values, react-native-url-polyfill, and text-encoding.
+ * The base SDK no longer installs these packages for the host application.
+ *
  * Explicit, opt-in React Native compatibility bootstrap. Import this before
  * LangChain or any SDK/stream dependency. The ordinary SDK entry has no global
  * initialization side effects. Native keys and attestation are never polyfilled.

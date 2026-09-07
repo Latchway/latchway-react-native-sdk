@@ -1,9 +1,17 @@
-/** Opt-in compiler compatibility for LangChain on the supported RN baseline. */
+/** @deprecated Prefer application-owned Babel configuration (docs/langchain.md). */
 function withLatchwayBabel(config = {}) {
   if (config.assumptions?.noClassCalls === false) {
     throw new Error("LangChain on React Native requires assumptions.noClassCalls=true. Remove the conflicting assumption.");
   }
-  const namespacePlugin = require.resolve("@babel/plugin-transform-export-namespace-from");
+  let namespacePlugin;
+  try {
+    namespacePlugin = require.resolve("@babel/plugin-transform-export-namespace-from");
+  } catch (cause) {
+    throw new Error(
+      "@latchway/react-native/babel requires an app-owned devDependency. Run npm install --save-dev @babel/plugin-transform-export-namespace-from@7.29.7, or migrate to the Babel configuration in docs/langchain.md.",
+      { cause },
+    );
+  }
   const plugins = config.plugins ?? [];
   const hasNamespacePlugin = plugins.some((entry) => {
     const plugin = Array.isArray(entry) ? entry[0] : entry;

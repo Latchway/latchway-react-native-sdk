@@ -1,5 +1,29 @@
 # Verification — 2026-09-07
 
+## SDK 1.1.1 dependency split
+
+The React Native SDK now requires only the shared client and private stream
+fallback. The app owns its LangChain runtime polyfills and Babel configuration;
+it no longer imports the SDK's deprecated convenience entrypoints.
+
+Prepublication validation of the installed 1.1.1 archive passed:
+
+- 103 SDK tests, 11 isolated runtime regressions (legacy and app-owned setup),
+  TypeScript/lint, code generation, compatibility and native-boundary checks.
+- Double-pack byte equality, package allowlist and credential scan.
+- Independent default npm and pnpm core-only installs and consumer type checks;
+  neither installed native randomness, URL/encoding polyfills or LangChain.
+- Eight example tests, TypeScript, offline LangChain serialization, both
+  production Metro bundles, signed iOS Debug build with embedded Hermes bundle,
+  and Android Debug build. Example lint has seven existing `no-void` warnings,
+  no errors. The separate workspace consumer's type and Metro checks also pass.
+
+The example's npm lock is advanced to the public 1.1.1 artifact after publication,
+not to a guessed registry integrity. LangChain remains 1.1.0; native SDKs remain
+1.0.0. No device installation, identity revocation, live provider request or
+server change was made for this packaging update. No fresh physical proof is
+claimed; the earlier evidence and dependency-maintenance limitations remain below.
+
 ## SDK 1.1.0 update
 
 The example now consumes the React Native and LangChain 1.1.0 helpers. It uses

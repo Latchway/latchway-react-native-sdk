@@ -17,7 +17,7 @@
   },
   "react_native": {
     "package": "@latchway/react-native",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "baseline": "0.82.0",
     "cli": "20.0.0",
     "react": "19.1.1",

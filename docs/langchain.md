@@ -1,6 +1,6 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.1.0` for native authenticated transport and
+Use `@latchway/react-native@1.1.1` for native authenticated transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
@@ -10,33 +10,62 @@ DPoP and refresh credentials stay native.
 The tested baseline is React Native 0.82 / React 19.1, New Architecture:
 
 ```sh
-npm install --save-exact @latchway/react-native@1.1.0 @latchway/langchain@1.1.0 \
+npm install --save-exact @latchway/react-native@1.1.1 @latchway/langchain@1.1.0 \
   @latchway/client@1.0.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
-cd ios && pod install && cd ..
 ```
 
 Keep the lockfile. LangChain is not a dependency of the base React Native SDK.
+The base has only two required runtime dependencies: `@latchway/client` for
+shared transport/errors and `web-streams-polyfill` for a private native-response
+stream fallback. That fallback does not replace global streams.
 The native dependencies remain the public iOS/Android SDKs 1.0.0. Normal native
 signing, Firebase/other identity and gateway platform policy setup still applies.
 
-## Two explicit setup lines
+## Application-owned runtime and Babel setup
+
+These are LangChain/Hermes compatibility requirements, not Latchway's native
+authentication requirements. If your app already supplies complete URL,
+incremental TextDecoder, streams or secure random values, reuse them and adapt
+the bootstrap. Do not install a second native randomness module unnecessarily.
+The following is the tested bare-RN example configuration, not a requirement
+to adopt these exact polyfill packages in every host:
+
+```sh
+npm install --save-exact react-native-get-random-values@1.11.0 \
+  react-native-url-polyfill@2.0.0 text-encoding@0.7.0 web-streams-polyfill@4.3.0
+npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7 \
+  @types/text-encoding@0.0.40
+cd ios && pod install && cd ..
+```
+
+Copy both app-owned files into `src/runtime/`:
+
+- [symbols.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.1/Examples/LatchwayChat/src/runtime/symbols.ts)
+- [polyfills.ts](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.1/Examples/LatchwayChat/src/runtime/polyfills.ts)
+
+Keep the symbols module import first inside the bootstrap. Remove imports for
+implementations you already supply; an unused static import still requires its
+package to be installed. Use a secure native/Expo random-value implementation,
+never `Math.random`, and run on Hermes rather than legacy remote Chrome debugging.
 
 Put the bootstrap **first** in the application entrypoint, before importing
 React Native, Latchway, LangChain or any stream-dependent application module:
 
 ```js
-import '@latchway/react-native/polyfills';
+import './src/runtime/polyfills';
 import {AppRegistry} from 'react-native';
 import App from './App';
 ```
 
-Use the optional compiler helper in `babel.config.js`:
+Merge the following into your existing `babel.config.js`; retain your current
+presets, plugins and other assumptions. Add the plugin only once:
 
 ```js
-const {withLatchwayBabel} = require('@latchway/react-native/babel');
-module.exports = withLatchwayBabel({
+module.exports = {
   presets: ['module:@react-native/babel-preset'],
-});
+  assumptions: {noClassCalls: true},
+  plugins: ['@babel/plugin-transform-export-namespace-from'],
+};
 ```
 
 Use standard Metro; no resolver override, source alias or local SDK link is
@@ -51,9 +80,44 @@ initialize globals. The decoder currently uses the pinned, deprecated
 `text-encoding@0.7.0` implementation for incremental decoding; this is a known
 maintenance dependency, not a claim of comprehensive runtime compatibility.
 
-The Babel helper enables `noClassCalls` and the export-namespace transform while
-preserving the rest of your config. Classes must still be constructed with
+The Babel configuration enables `noClassCalls` and the export-namespace transform.
+This avoids a premature `instanceof` check before LangChain initializes its fields.
+Classes must still be constructed with
 `new`; LangChain's own type checks are not removed.
+
+## Upgrading from 1.1.0
+
+1.1.1 removes four convenience packages from required dependencies. This
+changes installation behavior even though the core APIs are unchanged: helper
+users must act before updating. Prefer the application-owned setup above; the
+example shows the full migration and does not import either deprecated helper.
+
+For the smallest migration, retain the 1.1.0 imports and declare their packages
+in your **host application's** manifest first:
+
+```sh
+# Required only if you import @latchway/react-native/polyfills:
+npm install --save-exact react-native-get-random-values@1.11.0 \
+  react-native-url-polyfill@2.0.0 text-encoding@0.7.0
+# Required only if you use @latchway/react-native/babel:
+npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
+npm install --save-exact @latchway/react-native@1.1.1
+cd ios && pod install && cd ..
+```
+
+The old `/polyfills` and `/babel` exports remain available but deprecated. Their
+dependencies are marked as **optional peers** so npm does not automatically
+install them for core-only users. They are not `optionalDependencies` (which
+would still normally install). When present, peer versions must satisfy the
+declared ranges; exact example versions are the tested baseline, not a claim
+that all combinations are verified. See [npm's optional-peer behavior](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#peerdependenciesmeta).
+
+The legacy bootstrap still statically imports all three runtime peers, even if
+the app already has compatible globals. Missing peers cause module-resolution
+errors; the Babel helper reports the plugin install command. Existing lockfiles
+may mask missing direct dependencies: verify a clean install and native rebuild.
+Do not rely on another package incidentally installing them. No companion
+package, setup CLI or global fetch patch is needed.
 
 ## Create a model
 

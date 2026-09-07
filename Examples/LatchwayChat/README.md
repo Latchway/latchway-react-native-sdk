@@ -71,15 +71,17 @@ npm run verify:registry
 signing assets are ignored. The exact npm tarball origins and SHA-512 integrities
 are locked in `package-lock.json`. There are no file/workspace/link dependencies.
 Metro uses its standard configuration: the SDK publishes a built JavaScript
-entry, so no custom resolver or source alias is necessary. Babel uses
-`withLatchwayBabel` from `@latchway/react-native/babel`. It avoids a premature
+entry, so no custom resolver or source alias is necessary. The app owns its
+Babel plugin and `noClassCalls` assumption. This avoids a premature
 `instanceof` check before LangChain fields exist and supports export namespaces;
 LangChain's own runtime checks stay intact. Construct classes with `new`.
 
-The first entrypoint import is `@latchway/react-native/polyfills`, which installs
+The first entrypoint import is `./src/runtime/polyfills`, which installs
 Hermes async symbols **before** stream dependencies and provides incremental
-UTF-8, streams, URL, random-value and AbortSignal compatibility. There are no
-copied local polyfill files. See the [SDK quickstart](../../docs/langchain.md).
+UTF-8, streams, URL, random-value and AbortSignal compatibility. The app declares
+these dependencies directly and owns the two files in `src/runtime/`. It does
+not use the SDK's deprecated `/polyfills` or `/babel` helpers. Copy/adapt this
+setup to your host's existing runtime; see the [SDK quickstart](../../docs/langchain.md).
 The OpenAI transitive dependency is pinned to npm 7.8.0, matching the existing
 React Native integration baseline. Registry package contents are unmodified.
 
@@ -196,7 +198,7 @@ quota-boundary, load and comprehensive security verification are separate.
 ### Dependency notes
 
 The SDK compatibility baseline pins React Native 0.82 and its native dependencies.
-Its explicit compatibility bootstrap currently uses the deprecated, pinned
+This app's explicit compatibility bootstrap currently uses the deprecated, pinned
 `text-encoding@0.7.0` for streaming UTF-8; this maintenance limitation is retained
 explicitly, not described as a clean dependency audit.
 npm audit on 2026-09-07 reported nine moderate findings in CLI/dev-server

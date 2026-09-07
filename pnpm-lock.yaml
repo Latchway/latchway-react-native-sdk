@@ -8,21 +8,9 @@ importers:
 
   .:
     dependencies:
-      '@babel/plugin-transform-export-namespace-from':
-        specifier: 7.29.7
-        version: 7.29.7(@babel/core@7.29.7)
       '@latchway/client':
         specifier: 1.0.0
         version: 1.0.0
-      react-native-get-random-values:
-        specifier: 1.11.0
-        version: 1.11.0(react-native@0.82.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@6.0.3))(@react-native/metro-config@0.82.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.1.1))
-      react-native-url-polyfill:
-        specifier: 2.0.0
-        version: 2.0.0(react-native@0.82.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@6.0.3))(@react-native/metro-config@0.82.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.1.1))
-      text-encoding:
-        specifier: 0.7.0
-        version: 0.7.0
       web-streams-polyfill:
         specifier: 4.3.0
         version: 4.3.0
@@ -33,6 +21,9 @@ importers:
       '@ai-sdk/openai':
         specifier: 4.0.52
         version: 4.0.52(zod@4.5.4)
+      '@babel/plugin-transform-export-namespace-from':
+        specifier: 7.29.7
+        version: 7.29.7(@babel/core@7.29.7)
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.9.1)
@@ -75,6 +66,15 @@ importers:
       react-native:
         specifier: 0.82.0
         version: 0.82.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@6.0.3))(@react-native/metro-config@0.82.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.1.1)
+      react-native-get-random-values:
+        specifier: 1.11.0
+        version: 1.11.0(react-native@0.82.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@6.0.3))(@react-native/metro-config@0.82.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.1.1))
+      react-native-url-polyfill:
+        specifier: 2.0.0
+        version: 2.0.0(react-native@0.82.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@6.0.3))(@react-native/metro-config@0.82.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.1.1))
+      text-encoding:
+        specifier: 0.7.0
+        version: 0.7.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3

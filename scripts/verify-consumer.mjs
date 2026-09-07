@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,6 +16,8 @@ import {
 const compatibility = await readJSON("release-compatibility.json");
 const packageJSON = await readJSON("package.json");
 const publishedMode = process.argv.includes("--published");
+const npmMode = process.argv.includes("--npm");
+if (npmMode && !publishedMode) throw new Error("--npm requires --published (registry shared-client dependency).");
 const reactNativeArchive = resolve(option("--react-native-tarball") ??
   `.artifacts/latchway-react-native-${packageJSON.version}.tgz`);
 const defaultClientArchive = new URL(
@@ -56,10 +60,21 @@ try {
   }
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  runPackageManager(pnpmRegistryArguments([
-    "install", "--ignore-scripts", "--lockfile=false", "--prefer-offline",
-  ]), temporary, packageManagerEnvironment);
-  runPackageManager(["exec", "tsc", "-p", "tsconfig.json"], temporary, packageManagerEnvironment);
+  if (npmMode) {
+    // Do not omit optional dependencies: prove default npm installation does
+    // not pull in the legacy helper's optional peers for a core-only host.
+    execFileSync("npm", ["install", "--ignore-scripts", "--no-audit"], {
+      cwd: temporary, env: packageManagerEnvironment, stdio: "inherit",
+    });
+    execFileSync(process.execPath, [join(temporary, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.json"], {
+      cwd: temporary, env: packageManagerEnvironment, stdio: "inherit",
+    });
+  } else {
+    runPackageManager(pnpmRegistryArguments([
+      "install", "--ignore-scripts", "--lockfile=false", "--prefer-offline",
+    ]), temporary, packageManagerEnvironment);
+    runPackageManager(["exec", "tsc", "-p", "tsconfig.json"], temporary, packageManagerEnvironment);
+  }
 
   const installed = JSON.parse(await readFile(
     join(temporary, "node_modules", "@latchway", "react-native", "package.json"),
@@ -69,6 +84,12 @@ try {
   assertEqual(installed.version, compatibility.react_native.version, "installed consumer package version");
   assertEqual(installed.dependencies?.[compatibility.javascript.package], compatibility.javascript.version,
     "installed consumer JavaScript dependency");
+  assert.deepEqual(Object.keys(installed.dependencies).sort(), ["@latchway/client", "web-streams-polyfill"]);
+  const consumerRequire = createRequire(join(temporary, "node_modules/@latchway/react-native/package.json"));
+  for (const name of ["react-native-get-random-values", "react-native-url-polyfill", "text-encoding", "@langchain/openai"]) {
+    assert.throws(() => consumerRequire.resolve(name), { code: "MODULE_NOT_FOUND" }, `${name} leaked into core-only install`);
+  }
+  console.log(`${npmMode ? "npm" : "pnpm"} core-only archive consumer passed: types resolve without native randomness, URL/encoding polyfills or LangChain.`);
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
