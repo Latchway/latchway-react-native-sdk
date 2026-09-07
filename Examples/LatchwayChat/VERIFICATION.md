@@ -18,8 +18,18 @@ Prepublication validation of the installed 1.1.1 archive passed:
   and Android Debug build. Example lint has seven existing `no-void` warnings,
   no errors. The separate workspace consumer's type and Metro checks also pass.
 
-The example's npm lock is advanced to the public 1.1.1 artifact after publication,
-not to a guessed registry integrity. LangChain remains 1.1.0; native SDKs remain
+Publication succeeded through the existing main-only trusted npm workflow:
+[v1.1.1 release](https://github.com/Latchway/latchway-react-native-sdk/releases/tag/v1.1.1),
+source `ecacb55f51bec0dabd211f5324da66460a78902e`,
+[run 34088406885](https://github.com/Latchway/latchway-react-native-sdk/actions/runs/34088406885).
+npm `latest` is 1.1.1 and its metadata contains a SLSA provenance record. All
+109 public archive files, including the manifest, match the tested candidate
+byte-for-byte (the compressed archive hashes differ).
+
+The example's npm lock now uses the actual public registry integrity. A clean
+`npm ci --ignore-scripts` installed 953 packages, with no local SDK links;
+registry checks, TypeScript, eight tests, serialization, lint (the same seven
+warnings) and both Metro bundles passed again. LangChain remains 1.1.0; native SDKs remain
 1.0.0. No device installation, identity revocation, live provider request or
 server change was made for this packaging update. No fresh physical proof is
 claimed; the earlier evidence and dependency-maintenance limitations remain below.

@@ -8,7 +8,7 @@ SDK checkout or the parent pnpm workspace.
 ## What runs where
 
 - Firebase Auth owns sign-up, sign-in, and Firebase session persistence.
-- `@latchway/react-native@1.1.0` owns authenticated transport, via
+- `@latchway/react-native@1.1.1` owns authenticated transport, via
   CocoaPods `Latchway/AppAttest 1.0.0` and Maven Central Android SDKs 1.0.0.
   App Attest, Secure Enclave/Keystore, DPoP and refresh credentials stay native.
 - `@latchway/langchain@1.1.0` creates ChatOpenAI from
