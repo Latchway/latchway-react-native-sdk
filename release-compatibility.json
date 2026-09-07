@@ -17,11 +17,22 @@
   },
   "react_native": {
     "package": "@latchway/react-native",
-    "version": "1.1.2",
+    "version": "1.1.3",
     "baseline": "0.82.0",
+    "supported_range": ">=0.74.0 <1.0.0",
+    "minimum": {
+      "react_native": "0.74.0",
+      "react": "18.2.0",
+      "react_types": "18.2.79",
+      "codegen": "0.74.81",
+      "gradle_plugin": "0.76.9",
+      "gradle": "8.13",
+      "android_gradle_plugin": "8.12.0",
+      "cli": "13.6.9"
+    },
     "cli": "20.0.0",
     "react": "19.1.1",
-    "react_peer": "19.1.x",
+    "react_peer": "^18.2.0 || ^19.0.0",
     "new_architecture": true,
     "node_linker": "hoisted",
     "firebase": {

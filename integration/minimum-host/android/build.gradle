@@ -1,0 +1,39 @@
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 37
+        targetSdkVersion = 34
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.3.21"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.12.0")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"
+
+// Replace only the older build plugin's Kotlin-1.9-specific alignment hook. Keep
+// matching Java/Kotlin targets and normal target compatibility validation.
+subprojects { child ->
+    ["com.android.application", "com.android.library"].each { pluginId ->
+        child.plugins.withId(pluginId) {
+            child.androidComponents.finalizeDsl { androidDsl ->
+                androidDsl.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
+                androidDsl.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
+    }
+    child.plugins.withId("org.jetbrains.kotlin.android") {
+        child.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+}

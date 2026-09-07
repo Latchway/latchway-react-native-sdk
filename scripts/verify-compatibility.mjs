@@ -23,8 +23,10 @@ assertEqual(packageJSON.dependencies?.[compatibility.javascript.package], compat
   "JavaScript runtime dependency");
 assertEqual(packageJSON.devDependencies?.["react-native"], compatibility.react_native.baseline,
   "React Native development baseline");
-const reactNativeLine = `${compatibility.react_native.baseline.split(".").slice(0, 2).join(".")}.x`;
-assertEqual(packageJSON.peerDependencies?.["react-native"], reactNativeLine, "React Native supported line");
+assertEqual(packageJSON.peerDependencies?.["react-native"], compatibility.react_native.supported_range,
+  "React Native supported range");
+assertEqual(compatibility.react_native.minimum.react_native, "0.74.0", "React Native minimum");
+assertEqual(compatibility.react_native.minimum.react, "18.2.0", "React minimum");
 assertEqual(packageJSON.devDependencies?.react, compatibility.react_native.react,
   "React development baseline");
 assertEqual(packageJSON.peerDependencies?.react, compatibility.react_native.react_peer, "React supported line");
@@ -110,8 +112,9 @@ if (!process.argv.includes("--metadata-only")) {
 }
 assertEqual(requireMatch(androidSettings, /id\("org\.jetbrains\.kotlin\.android"\) version "([^"]+)"/u,
   "Android Kotlin compiler"), compatibility.android.kotlin, "Android Kotlin compiler");
-if (!androidBuild.includes(`implementation("com.facebook.react:react-android:${compatibility.react_native.baseline}")`)) {
-  throw new Error("The standalone Android consumer does not resolve the exact React Native baseline.");
+if (!androidBuild.includes('implementation("com.facebook.react:react-android:$hostReactNativeVersion")') ||
+    !androidBuild.includes("require.resolve('react-native/package.json')")) {
+  throw new Error("The Android consumer must resolve React Native from the installed host package.");
 }
 assertEqual(Number(requireMatch(androidBuild, /minSdk\s*=\s*(\d+)/u, "Android minimum SDK")),
   compatibility.android.minimum_sdk, "Android minimum SDK");

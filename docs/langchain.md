@@ -1,16 +1,20 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.1.2` for native authenticated transport and
+Use `@latchway/react-native@1.1.3` for native authenticated transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
 
 ## Install
 
-The tested baseline is React Native 0.82 / React 19.1, New Architecture:
+The complete LangChain example is tested on React Native 0.82 / React 19.1,
+New Architecture. Starting in 1.1.3, the base SDK's expanded minimum is RN 0.74 /
+React 18.2; see [compatibility](react-native-compatibility.md). This does not
+require downgrading the example or guarantee every third-party dependency on
+the minimum host.
 
 ```sh
-npm install --save-exact @latchway/react-native@1.1.2 @latchway/langchain@1.1.0 \
+npm install --save-exact @latchway/react-native@1.1.3 @latchway/langchain@1.1.0 \
   @latchway/client@1.0.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
@@ -87,7 +91,7 @@ Classes must still be constructed with
 
 ## Upgrading from 1.1.0
 
-For an existing 1.1.1 application, upgrade to 1.1.2 and recopy both runtime files
+For an existing 1.1.1 application, upgrade to 1.1.3 and recopy both runtime files
 linked above. The corrected probe checks exact Responses and Chat Completions
 paths; the older app-owned copy is not replaced by an npm package update.
 Do not fix a trailing-slash rejection by widening the SDK destination allowlist.
@@ -106,7 +110,7 @@ npm install --save-exact react-native-get-random-values@1.11.0 \
   react-native-url-polyfill@2.0.0 text-encoding@0.7.0
 # Required only if you use @latchway/react-native/babel:
 npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
-npm install --save-exact @latchway/react-native@1.1.2
+npm install --save-exact @latchway/react-native@1.1.3
 cd ios && pod install && cd ..
 ```
 

@@ -1,0 +1,40 @@
+// App-project adapter for RN 0.74's native runtime with the modern build-only
+// Gradle plugin needed by Latchway's published Kotlin/API-37 dependencies.
+// Apply after com.facebook.react in android/app/build.gradle. This does not
+// modify node_modules sources, module definitions, or native security behavior.
+def hostVersions = providers.exec {
+    workingDir(rootDir)
+    commandLine("node", "--print", "JSON.stringify([require('react-native/package.json').version, require('@react-native/gradle-plugin/package.json').version])")
+}.standardOutput.asText.get().trim()
+def versions = new groovy.json.JsonSlurper().parseText(hostVersions)
+if (!(versions[0] ==~ /0\.74\.\d+/) || versions[1] != '0.76.9') {
+    throw new GradleException("Latchway's RN 0.74 adapter requires a 0.74.x runtime and @react-native/gradle-plugin 0.76.9. See docs/react-native-compatibility.md.")
+}
+if (findProperty('newArchEnabled')?.toString() != 'true') {
+    throw new GradleException("Latchway requires newArchEnabled=true.")
+}
+
+// RN 0.74's CMake/OnLoad still consume rncli names. Keep one autolinking
+// discovery pass and translate only its generated filenames/provider names.
+def adaptAutolinking = tasks.register('adaptLatchwayAutolinkingForRN074', Sync) {
+    dependsOn('generateAutolinkingNewArchitectureFiles')
+    from(layout.buildDirectory.dir('generated/autolinking/src/main/jni'))
+    into(layout.buildDirectory.dir('generated/rncli/src/main/jni'))
+    include('autolinking.h', 'autolinking.cpp', 'Android-autolinking.cmake')
+    rename('autolinking.h', 'rncli.h')
+    rename('autolinking.cpp', 'rncli.cpp')
+    rename('Android-autolinking.cmake', 'Android-rncli.cmake')
+    filter { String line ->
+        line.replace('"autolinking.h"', '"rncli.h"')
+            .replace('autolinking_ModuleProvider', 'rncli_ModuleProvider')
+            .replace('autolinking_cxxModuleProvider', 'rncli_cxxModuleProvider')
+            .replace('autolinking_registerProviders', 'rncli_registerProviders')
+            .replace('set(REACTNATIVE_MERGED_SO true)', 'set(REACTNATIVE_MERGED_SO false)')
+    }
+}
+tasks.named('preBuild').configure { dependsOn(adaptAutolinking) }
+tasks.configureEach { task ->
+    if (task.name.startsWith('configureCMake') || task.name.startsWith('buildCMake')) {
+        task.dependsOn(adaptAutolinking)
+    }
+}

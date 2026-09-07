@@ -1,5 +1,9 @@
 # Native installation
 
+For React Native 0.74–0.81 hosts, first follow the
+[minimum-version toolchain and New Architecture setup](react-native-compatibility.md).
+The expanded peer range starts in 1.1.3; native SDK versions remain unchanged.
+
 ## iOS
 
 Configure `apple.rootKeychainAccessGroup` with the fully resolved private app-ID
@@ -140,8 +144,12 @@ Local paths belong only in the host Podfile. They are absent from the published 
 ## Android
 
 The library pins the native 1.0.0 Maven coordinates. Those AARs publish Kotlin
-2.3 metadata and require compile SDK 37; the React Native 0.82 host therefore
-pins Kotlin 2.3.21 while retaining RN's supported consumer AGP 8.12 baseline.
+2.3 metadata and require compile SDK 37; both the RN 0.74 minimum fixture and
+the RN 0.82 example therefore use Kotlin 2.3.21, AGP 8.12.0 and Gradle 8.13.
+The minimum fixture uses an explicit newer build-only React Native Gradle
+plugin and settings-based autolinking; follow its complete compatibility recipe.
+React Native and Codegen themselves resolve from the consuming app, not a
+library-local 0.82 installation.
 Play Integrity requires the decimal Google Cloud project number in
 `android.playIntegrityCloudProjectNumber`; JavaScript never receives or
 supplies the resulting integrity token.

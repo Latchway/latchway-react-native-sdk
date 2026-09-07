@@ -7,6 +7,26 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-09-07
+
+### Changed
+
+- Expanded the React Native peer range to `>=0.74.0 <1.0.0` and React to 18.2 / 19.x.
+  New Architecture remains required; React must match the selected RN release.
+  The peer range admits newer 0.x releases without claiming they have all been
+  tested; current validation covers RN 0.74.0 and 0.82.0.
+- Android now resolves React Native, Codegen and the React Android artifact
+  from the consuming app instead of assuming library-local dependencies or
+  pinning every consumer to 0.82. Native Latchway dependencies remain 1.0.0.
+- Added an opt-in, version-guarded Android 0.74 build adapter for the newer
+  Gradle plugin required by the native dependencies. It translates generated
+  autolinking names without modifying installed React Native source or adding
+  runtime dependencies; older hosts must follow the compatibility recipe.
+- Added a strict, packed-package React Native 0.74.0 / React 18.2.0 host with
+  public API type checks, Codegen, Metro bundles and optional native builds.
+  Documented the newer Kotlin/Android and Swift toolchains required by the
+  native SDKs. No physical attestation evidence is inferred from these builds.
+
 ## [1.1.2] - 2026-09-07
 
 ### Fixed

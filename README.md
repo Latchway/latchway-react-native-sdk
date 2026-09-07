@@ -2,8 +2,9 @@
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-Version 1.1.2 fixes exact API URL handling in the optional bootstrap and example,
-and keeps the base SDK small: only `@latchway/client` and a private
+Version 1.1.3 supports a minimum host of React Native 0.74 / React 18.2 with
+New Architecture and host-aligned native dependencies. It retains exact API URL
+handling and keeps the base SDK small: only `@latchway/client` and a private
 `web-streams-polyfill` fallback are required runtime dependencies. Babel and
 global polyfills are application-owned; follow the [LangChain quickstart](docs/langchain.md)
 only if using that integration. Native SDK dependencies remain 1.0.0 from
@@ -28,10 +29,20 @@ the separate workspace/conformance application.
 
 ## Requirements
 
-- React Native 0.82.x with the New Architecture enabled
+- React Native `>=0.74.0 <1.0.0` with the New Architecture enabled; React 18.2 minimum,
+  paired with the React version required by the chosen React Native release
 - iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.0.0
 - Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.0.0 artifacts
 - Node 24.19.0 and pnpm 10.15.0 for repository development
+
+Starting in 1.1.3, the minimum host is React Native 0.74.0 with
+React 18.2.0. Older React Native app templates need native toolchain updates;
+changing the two JavaScript versions alone is insufficient. See
+[React Native compatibility](docs/react-native-compatibility.md) for the exact
+settings, checks, and distinction between the SDK and the Firebase/LangChain
+example. The repository's main development/example baseline remains 0.82.
+The broader peer range permits newer 0.x releases; it does not imply every
+minor release has been tested. Current validation covers 0.74.0 and 0.82.0.
 
 The repository example additionally pins React Native Firebase 25.1.0, Firebase
 Apple SDK 12.15.0, and Firebase Android BoM 34.15.0. These are example identity

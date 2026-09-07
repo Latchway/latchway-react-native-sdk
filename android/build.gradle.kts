@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -13,10 +14,28 @@ kotlin {
 group = "dev.latchway"
 version = "1.0.0"
 
+// Resolve from the consuming build, not this library's node_modules. npm and
+// pnpm can hoist React Native and Codegen; the host owns both versions.
+val hostReactNativeManifest = file(providers.exec {
+    workingDir(rootDir)
+    commandLine("node", "--print", "require.resolve('react-native/package.json')")
+}.standardOutput.asText.get().trim())
+val hostReactNativeDirectory = hostReactNativeManifest.parentFile
+val hostReactNativeVersion =
+    (JsonSlurper().parse(hostReactNativeManifest) as Map<*, *>)["version"] as String
+val hostCodegenDirectory = file(providers.exec {
+    workingDir(rootDir)
+    commandLine(
+        "node", "--print",
+        "require.resolve('@react-native/codegen/package.json', {paths: [process.argv[1]]})",
+        hostReactNativeDirectory.absolutePath,
+    )
+}.standardOutput.asText.get().trim()).parentFile
+
 react {
     root.set(file(".."))
-    reactNativeDir.set(file("../node_modules/react-native"))
-    codegenDir.set(file("../node_modules/@react-native/codegen"))
+    reactNativeDir.set(hostReactNativeDirectory)
+    codegenDir.set(hostCodegenDirectory)
     libraryName.set("LatchwayReactNativeSpec")
     codegenJavaPackageName.set("dev.latchway.reactnative")
 }
@@ -50,9 +69,9 @@ android {
 }
 
 dependencies {
-    // A real host's React plugin forces this to the installed 0.82.x patch. The
-    // exact baseline keeps standalone package-consumer builds deterministic.
-    implementation("com.facebook.react:react-android:0.82.0")
+    // Also use the host version in standalone library builds, where no app
+    // plugin is present to align react-android automatically.
+    implementation("com.facebook.react:react-android:$hostReactNativeVersion")
     implementation("dev.latchway:latchway-okhttp:1.0.0")
     implementation("dev.latchway:latchway-play-integrity:1.0.0")
 
