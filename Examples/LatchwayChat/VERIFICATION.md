@@ -1,5 +1,34 @@
 # Verification — 2026-09-07
 
+## Physical follow-up: application URL compatibility fix
+
+Launching the released packages was not sufficient evidence: the user's first
+chat failed. Redacted diagnostics isolated an OpenAI-wrapped
+`transport_destination_not_allowed` error before native dispatch. React Native
+0.82's partial URL implementation passed the app's query-only capability probe
+but changed `/v1/responses` to `/v1/responses/`. The SDK route guard correctly
+rejected the changed path; it was not disabled or widened.
+
+The app-owned bootstrap now verifies absolute paths and stable query
+serialization. Tests execute the actual installed React Native URL class to
+reproduce the old false positive and confirm replacement with the complete
+implementation. Working host URL implementations are still retained.
+
+The corrected Debug example was installed on the same physical iPhone 16 Pro
+and ran one fixed LangChain question with its existing Firebase identity. The
+answer rendered successfully; the screen showed App Attest verified and Secure
+Enclave. Gateway metadata corroborated one successful, directly attested
+Responses request, one HTTP 200 upstream attempt and 1,530 total tokens at
+06:27:32 UTC. No account creation, sign-out, installation revocation, server
+change or npm publication occurred. The app remains installed and signed in.
+
+Thirteen example tests, TypeScript, offline adapter serialization, 11 SDK runtime
+checks, the signed iOS build and Android production Metro bundle passed. Lint
+has eight `no-void` warnings and no errors. This follow-up verifies a real text
+turn, not a new weather-tool/multi-turn or physical Android proof. The npm SDK
+remains 1.1.1; this correction is in the app-owned bootstrap, not a new release
+of the SDK's deprecated compatibility helper.
+
 ## SDK 1.1.1 dependency split
 
 The React Native SDK now requires only the shared client and private stream

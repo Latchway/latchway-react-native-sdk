@@ -45,6 +45,7 @@ export async function langchainTurn(
   signal: AbortSignal,
   onText: (text: string) => void,
   onTool: (event: ToolEvent) => void,
+  onStage: (stage: string) => void = () => {},
 ): Promise<TurnResult> {
   let toolCalls = 0;
   const requestIDs: string[] = [];
@@ -54,6 +55,7 @@ export async function langchainTurn(
     fetchFor: (feature: string) => {
       const authenticatedFetch = client.fetchFor(feature);
       return async (input: RequestInfo | URL, init?: RequestInit) => {
+        onStage('gateway-dispatch');
         const response = await authenticatedFetch(input, init);
         const id = response.headers.get('X-Latchway-Request-ID');
         if (id) requestIDs.push(id);
@@ -61,6 +63,7 @@ export async function langchainTurn(
       };
     },
   };
+  onStage('tool-construction');
   const weather = tool(
     async args => {
       if (++toolCalls > 6) throw new Error('Weather lookup limit reached.');
@@ -85,12 +88,15 @@ export async function langchainTurn(
     },
   );
 
+  onStage('model-construction');
   const rawModel = createLatchwayResponsesModel({
     latchway: transport,
     feature: config.langchainFeature,
     ...modelOptions,
   });
+  onStage('tool-binding');
   const model = bindLatchwayTools(rawModel, [weather]);
+  onStage('message-construction');
   const messages: BaseMessage[] = [
     new SystemMessage(knowledge),
     ...history,
@@ -100,7 +106,9 @@ export async function langchainTurn(
   for (let modelCalls = 1; modelCalls <= 4; modelCalls++) {
     signal.throwIfAborted();
     let complete: AIMessageChunk | undefined;
+    onStage('stream-open');
     const stream = await model.stream(messages, { signal });
+    onStage('stream-read');
     for await (const chunk of stream) {
       signal.throwIfAborted();
       complete = complete ? complete.concat(chunk) : chunk;
@@ -110,6 +118,7 @@ export async function langchainTurn(
     }
     if (!complete || complete.invalid_tool_calls?.length)
       throw new Error('Invalid model response.');
+    onStage('message-replay');
     const replay = toLatchwayReplayMessage(complete);
     messages.push(replay);
     additions.push(replay);

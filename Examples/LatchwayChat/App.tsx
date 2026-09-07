@@ -30,6 +30,7 @@ import {
 } from '@latchway/react-native';
 import type { BaseMessage } from '@langchain/core/messages';
 import { config, validateConfig } from './src/config';
+import {diagnosticLocation, knownFailure} from './src/diagnostic';
 import {
   directTurn,
   featureFor,
@@ -50,10 +51,11 @@ const auth = getAuth();
 const proof = __DEV__ ? NativeModules.LatchwayChatProof : undefined;
 
 function errorCode(error: unknown) {
-  const code = (error as { code?: unknown })?.code;
-  return typeof code === 'string' && /^[a-zA-Z0-9_/-]{1,100}$/.test(code)
-    ? code
-    : error instanceof Error
+  const details = error as {code?: unknown; error?: {code?: unknown}; cause?: {code?: unknown}};
+  for (const code of [details?.code, details?.error?.code, details?.cause?.code]) {
+    if (typeof code === 'string' && /^[a-zA-Z0-9_/-]{1,100}$/.test(code)) return code;
+  }
+  return error instanceof Error
     ? error.name
     : 'request_failed';
 }
@@ -139,6 +141,7 @@ function ChatApp() {
   const abort = useRef<AbortController | undefined>(undefined);
   const running = useRef(false);
   const proofStarted = useRef(false);
+  const diagnosticStarted = useRef(false);
   const sequence = useRef(0);
   const scroll = useRef<ScrollView>(null);
 
@@ -287,8 +290,10 @@ function ChatApp() {
       );
     const onTool = (event: ToolEvent) =>
       setTools(old => [...old.slice(-11), event]);
+    let stage = 'connection';
     try {
       const sdk = await connection();
+      stage = selected === 'langchain' ? 'langchain' : 'direct-fetch';
       const result =
         selected === 'langchain'
           ? await langchainTurn(
@@ -298,6 +303,7 @@ function ChatApp() {
               controller.signal,
               onText,
               onTool,
+              value => { stage = value; },
             )
           : await directTurn(
               sdk,
@@ -323,10 +329,18 @@ function ChatApp() {
         ),
       );
       await inspect(selected).catch(() => setError('Answer completed. Connection details could not refresh; retry them in Settings.'));
+      proof?.recordDiagnostic?.({status: 'passed', stage: 'complete',
+        sdkVersion: '1.1.1', modelCalls: result.modelCalls, toolCalls: result.toolCalls,
+        requestIDs: result.requestIDs, finishedAt: new Date().toISOString()});
       return result;
     } catch (e) {
       controller.abort();
-      setError(friendly(e));
+      setError(friendly(e) + ' Stage: ' + stage + '.');
+      const status = (e as {status?: unknown})?.status;
+      proof?.recordDiagnostic?.({status: 'failed', stage, errorCode: knownFailure(e) ?? errorCode(e),
+        ...(typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+          ? {httpStatus: status} : {}),
+        errorSite: diagnosticLocation(e), finishedAt: new Date().toISOString()});
       setBubbles(old =>
         old.map(item =>
           item.id === assistantID
@@ -465,6 +479,19 @@ function ChatApp() {
     // Opt-in launch automation, exactly once; uses the same send/auth/native SDK paths.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!proof?.diagnoseEnabled || proof?.enabled || loading || diagnosticStarted.current) return;
+    diagnosticStarted.current = true;
+    if (!user) {
+      proof?.recordDiagnostic?.({status: 'blocked', stage: 'sign-in-required'});
+      return;
+    }
+    // One explicit Debug launch probe with the current identity. Never signs out,
+    // creates an account, resets an installation or replays a failed user prompt.
+    void send('In one sentence, explain how Latchway protects provider keys.', 'langchain').catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user]);
 
   const allowance = quota?.limits.find(item => item.metric === 'total_tokens');
   const sendDraft = () => {

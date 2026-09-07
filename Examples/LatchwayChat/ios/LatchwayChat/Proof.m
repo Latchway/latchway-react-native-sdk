@@ -7,13 +7,20 @@
 RCT_EXPORT_MODULE()
 + (BOOL)requiresMainQueueSetup { return NO; }
 - (NSDictionary *)constantsToExport {
-  return @{@"enabled": @([NSProcessInfo.processInfo.arguments containsObject:@"--verify-latchway-chat"])};
+  return @{@"enabled": @([NSProcessInfo.processInfo.arguments containsObject:@"--verify-latchway-chat"]),
+    @"diagnoseEnabled": @([NSProcessInfo.processInfo.arguments containsObject:@"--diagnose-latchway-chat"])};
 }
 RCT_EXPORT_METHOD(record:(NSDictionary *)value) {
+  [self writeReceipt:value filename:@"latchway-chat-proof.json"];
+}
+RCT_EXPORT_METHOD(recordDiagnostic:(NSDictionary *)value) {
+  [self writeReceipt:value filename:@"latchway-chat-diagnostic.json"];
+}
+- (void)writeReceipt:(NSDictionary *)value filename:(NSString *)filename {
   NSSet *allowed = [NSSet setWithArray:@[@"status", @"stage", @"firebaseUID", @"signup",
     @"signin", @"firstTurn", @"followup", @"toolCalls", @"modelCalls", @"direct",
     @"installationID", @"trustLevel", @"keyStorage", @"platform", @"sdkVersion",
-    @"nativeSDKVersion", @"quotaUsed", @"requestIDs", @"errorCode", @"errorSite", @"finishedAt"]];
+    @"nativeSDKVersion", @"quotaUsed", @"requestIDs", @"errorCode", @"errorSite", @"httpStatus", @"finishedAt"]];
   NSMutableDictionary *receipt = [NSMutableDictionary dictionary];
   for (NSString *key in value) {
     id field = value[key];
@@ -28,7 +35,7 @@ RCT_EXPORT_METHOD(record:(NSDictionary *)value) {
   }
   NSData *data = [NSJSONSerialization dataWithJSONObject:receipt options:NSJSONWritingPrettyPrinted error:nil];
   NSURL *dir = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
-  [data writeToURL:[dir URLByAppendingPathComponent:@"latchway-chat-proof.json"] options:NSDataWritingAtomic error:nil];
+  [data writeToURL:[dir URLByAppendingPathComponent:filename] options:NSDataWritingAtomic error:nil];
   NSLog(@"LatchwayChat proof status=%@ stage=%@", receipt[@"status"], receipt[@"stage"]);
 }
 @end

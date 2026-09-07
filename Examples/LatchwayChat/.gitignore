@@ -70,6 +70,8 @@ GoogleService-Info.plist
 google-services.json
 src/config.local.json
 verification-results/
+latchway-chat-diagnostic.json
+latchway-chat-proof.json
 
 # Yarn
 .yarn/*

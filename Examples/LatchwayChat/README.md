@@ -82,6 +82,10 @@ UTF-8, streams, URL, random-value and AbortSignal compatibility. The app declare
 these dependencies directly and owns the two files in `src/runtime/`. It does
 not use the SDK's deprecated `/polyfills` or `/babel` helpers. Copy/adapt this
 setup to your host's existing runtime; see the [SDK quickstart](../../docs/langchain.md).
+The URL capability check must include an absolute API path without a query and
+stable serialization after reading `searchParams`. RN's partial URL passes a
+query-only check but adds a trailing slash to `/v1/responses`; the native client
+correctly refuses that different destination. Do not relax the SDK route guard.
 The OpenAI transitive dependency is pinned to npm 7.8.0, matching the existing
 React Native integration baseline. Registry package contents are unmodified.
 
@@ -196,6 +200,20 @@ server-side or production-distribution evidence. Physical Android, extension,
 quota-boundary, load and comprehensive security verification are separate.
 
 ### Dependency notes
+
+For a non-resetting iOS Debug diagnosis, launch with `--diagnose-latchway-chat`.
+It requires an existing Firebase sign-in and sends one fixed Latchway question
+through the normal LangChain chat path. It never creates an account, signs out,
+revokes an installation or replays a failed user prompt. It consumes normal
+provider quota if dispatched. Do not combine it with the resetting
+`--verify-latchway-chat` mode.
+
+Debug chat attempts also write `Documents/latchway-chat-diagnostic.json`, separate
+from the full proof receipt. Only status, fixed stage, bounded code locations,
+validated HTTP status, error code, request IDs and counters are recorded—no
+exception messages, source URLs, prompts, replies or credentials. The native
+receipt module is absent from Release. The UI exposes nested error codes and
+the failure stage instead of hiding every wrapped SDK exception behind `Error`.
 
 The SDK compatibility baseline pins React Native 0.82 and its native dependencies.
 This app's explicit compatibility bootstrap currently uses the deprecated, pinned
