@@ -1,0 +1,2 @@
+# Preserve the upstream Windows launcher convention while normalizing the index.
+android/gradlew.bat text eol=crlf

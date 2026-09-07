@@ -1,0 +1,79 @@
+# Verification — 2026-09-07
+
+## SDK 1.1.0 update
+
+The example now consumes the React Native and LangChain 1.1.0 helpers. It uses
+standard Metro, the SDK's explicit bootstrap/Babel helper, stateless Responses,
+tool binding and completed-message replay; copied compatibility files were removed.
+
+Prepublication checks used installed npm-format release archives, not SDK source
+links: TypeScript, lint, eight example tests, request-serialization regression,
+both production Metro bundles, signed iOS Debug build (embedded Hermes bundle)
+and Android Debug build passed. SDK checks passed 137 JavaScript tests, 103 React
+Native tests, seven runtime regressions, code generation/native-boundary and
+compatibility checks. The React Native package passed double-pack equality,
+archive allowlist and credential scanning.
+
+Publication completed through the existing main-only GitHub trusted publishers.
+Both npm 1.1.0 packages have provenance records. The example lockfile was
+regenerated from npm and `npm ci` performed a clean registry install; version,
+integrity/no-local-link checks, TypeScript, lint, eight tests, serialization and
+both standard Metro bundles passed again. All 109 React Native and eight
+LangChain packaged files are byte-identical to the locally tested candidates
+(the compressed archive hashes differ; file contents and manifests do not).
+
+- [React Native v1.1.0](https://github.com/Latchway/latchway-react-native-sdk/releases/tag/v1.1.0),
+  source `8fbd1ad5fc9cc98129e06ff909125bc1367b5e1f`.
+- [LangChain v1.1.0](https://github.com/Latchway/latchway-js/releases/tag/langchain-v1.1.0),
+  source `7ced923b29ef1942942139677275a20e71984e0c`.
+
+The previously verified iPhone 16 Pro was disconnected during this update.
+No new 1.1.0 physical-device claim is made, no other paired phone was used, and
+the user's existing signed-in installation was not revoked or replaced.
+Android physical Play Integrity remains deferred. The earlier live 1.0.0
+baseline below is retained as separate evidence, not relabeled as 1.1.0.
+
+## Earlier physical baseline — SDKs 1.0.0
+
+Completed on a physical iPhone 16 Pro running iOS 27, development-signed.
+The application remains installed and signed in for interactive use.
+
+- Real Firebase email/password account creation, sign-out and sign-in passed.
+- Native diagnostics reported react_native_ios, app_verified trust and
+  secure_enclave key storage. Signed entitlements contain development App Attest
+  and the required private root Keychain group.
+- LangChain streamed two conversation turns: Singapore weather, then Ho Chi Minh
+  City with prior-turn context. Two real Open-Meteo weather lookups and four model
+  requests completed.
+- The direct-fetch streaming mode also completed a separate Latchway question.
+- Read-only Admin API corroboration found all five proof requests successful,
+  directly attested, with exactly one HTTP 200 OpenRouter attempt each.
+  LangChain consumed 7,793 total tokens; direct fetch consumed 1,424 (9,217 total).
+  Subsequent manual user conversation is excluded from those proof totals.
+- TypeScript, ESLint, eight unit/regression tests, the published LangChain
+  serialization regression, registry-resolution checks and both native Debug
+  builds passed.
+
+Runtime packages: React Native 0.82.0; React 19.1.1; @latchway/react-native,
+@latchway/client and @latchway/langchain 1.0.0; @langchain/core 1.2.9;
+@langchain/openai 1.5.10; OpenAI 7.8.0; React Native Firebase 25.1.0.
+Native dependencies resolve from public CocoaPods/Maven Central, not local SDK
+paths. No registry package was modified, and no server check was disabled.
+
+The live gateway tested here identifies itself as 1.0.2-dev.fm110.3, contract
+1.0.0/protocol2. No server deployment or migration was performed during this
+example task. Habitify's two environments and the Swift demo's active revision
+were independently checked unchanged.
+
+The native SDK labels requests react-native-fetch even when its transport is
+called by LangChain. Framework attribution is not forged in JavaScript.
+
+Private metadata receipts, request IDs, disposable application/account IDs and
+cleanup instructions are retained outside Git in the operator's verification
+resources. No password, identity/session token, DPoP proof, raw attestation,
+provider key, or chat transcript is stored in those receipts.
+
+This is development-device integration evidence, not production distribution,
+Android physical/Play Integrity, extension, load, quota-boundary or comprehensive
+security certification. Android compiled but was not physically verified.
+See README for the known moderate tooling dependency audit findings.

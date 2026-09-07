@@ -1,0 +1,10 @@
+{
+  "baseURL": "https://gateway.example.com",
+  "applicationID": "app_REPLACE_WITH_YOUR_APPLICATION_ID",
+  "environment": "development",
+  "appleTeamID": "YOUR_TEAM_ID",
+  "appleBundleID": "dev.latchway",
+  "langchainFeature": "latchway-foundation-models",
+  "directFeature": "latchway-chat",
+  "androidPlayIntegrityProjectNumber": ""
+}
