@@ -1,6 +1,34 @@
 # Verification — 2026-09-07
 
-## Physical follow-up: application URL compatibility fix
+## SDK 1.1.2 publication follow-up
+
+The example now consumes public npm `@latchway/react-native@1.1.2`, with the
+registry tarball/integrity lock and no local SDK link. Native dependencies remain
+1.0.0, the shared client remains 1.0.0 and LangChain remains 1.1.0. The published
+package fixes its optional legacy bootstrap too; the example continues to own
+its runtime setup. The package release commit is
+`2074393673503338321fb39d6724e145f0738fc7` and
+[publication run](https://github.com/Latchway/latchway-react-native-sdk/actions/runs/34099973778)
+succeeded. npm and GitHub archive bytes match, with SHA-256
+`563cee9471e452b13a8cd3f1c57d7cb295ed79788b38511c9246070ae441588e`.
+
+Registry checks, TypeScript, all 13 example tests and offline LangChain
+serialization passed after the npm update.
+`pod install` using installed CocoaPods 1.16.2 also refreshed the RN pod to 1.1.2
+while retaining `Latchway/AppAttest` 1.0.0; the Bundler environment lacked the
+CocoaPods gem. No native binary was rebuilt. Lint retains the eight existing
+`no-void` warnings, with no errors. The example's dependency audit reports nine
+moderate advisories in the existing RN CLI/transitive tooling graph, no high or
+critical findings; no forced dependency upgrades were applied. The SDK's full
+`pnpm check` still fails on historical release-policy tests for previously removed
+CI files. SDK runtime/unit/type/lint, codegen, both Metro bundles, native-boundary
+and deterministic archive checks passed separately; this is not a clean full gate.
+
+No device was rebuilt, installed, signed out or contacted for a live chat during
+this follow-up. Earlier iPhone evidence below remains bound to its earlier build;
+physical Play-distributed Android verification remains pending.
+
+## Historical physical follow-up: application URL compatibility fix
 
 Launching the released packages was not sufficient evidence: the user's first
 chat failed. Redacted diagnostics isolated an OpenAI-wrapped

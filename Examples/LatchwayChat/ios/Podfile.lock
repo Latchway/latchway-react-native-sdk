@@ -57,7 +57,7 @@ PODS:
   - Latchway/AppAttest (1.0.0):
     - Latchway/Core (= 1.0.0)
   - Latchway/Core (1.0.0)
-  - LatchwayReactNative (1.1.1):
+  - LatchwayReactNative (1.1.2):
     - boost
     - DoubleConversion
     - fast_float
@@ -2825,7 +2825,7 @@ SPEC CHECKSUMS:
   GTMSessionFetcher: a6d2b2aa203485893d4511ff64642dc811f7c09f
   hermes-engine: 8642d8f14a548ab718ec112e9bebdfdd154138b5
   Latchway: e9da6e5da18bf63df81bed61bf5462958248487a
-  LatchwayReactNative: 4b638304c1b96982a0986a37ef5412eb193007ef
+  LatchwayReactNative: 83e2b3415d237a6719104e6e9044db15d6492810
   RCT-Folly: 846fda9475e61ec7bcbf8a3fe81edfcaeb090669
   RCTDeprecation: 22bf66112da540a7d40e536366ddd8557934fca1
   RCTRequired: a0ed4dc41b35f79fbb6d8ba320e06882a8c792cf
