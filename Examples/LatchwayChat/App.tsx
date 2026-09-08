@@ -298,7 +298,7 @@ function ChatApp() {
       );
       await inspect(selected).catch(() => setError('Answer completed. Connection details could not refresh; retry them in Settings.'));
       proof?.recordDiagnostic?.({status: 'passed', stage: 'complete',
-        sdkVersion: SDK_VERSION, sourceCandidate: 'unreleased-shared-native',
+        sdkVersion: SDK_VERSION, sourceCandidate: 'shared-native-supplied-identity',
         modelCalls: result.modelCalls, toolCalls: result.toolCalls,
         requestIDs: result.requestIDs, finishedAt: new Date().toISOString()});
       return result;

@@ -108,6 +108,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("dev.latchway:latchway-okhttp:1.1.0")
+    // The optional Kotlin host uses the application's own Firebase Auth.
+    // Match @react-native-firebase/app 25.1.0, not an SDK-owned auth adapter.
+    implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
+    implementation("com.google.firebase:firebase-auth")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     if (hermesEnabled.toBoolean()) {

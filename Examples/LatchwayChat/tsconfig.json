@@ -2,8 +2,7 @@
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
     "lib": ["es2022", "dom", "dom.iterable"],
-    "skipLibCheck": true,
-    "paths": {"@latchway/react-native": ["../../src/index.ts"]}
+    "skipLibCheck": true
   },
   "include": ["**/*.ts", "**/*.tsx"],
   "exclude": ["**/node_modules", "**/Pods"]

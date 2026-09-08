@@ -75,13 +75,13 @@ private object EmbeddedAccountOwner {
             if (identityKey() != observedIdentity) { epoch++; call?.cancel(); request?.cancel() }
             scope.launch { transitions.withLock { runCatching { reconcile() } } }
         }
-        auth.addIdTokenListener {
+        auth.addIdTokenListener(FirebaseAuth.IdTokenListener {
             val captured = account
             val observedEpoch = epoch
             scope.launch { transitions.withLock {
                 if (captured != null && observedEpoch == epoch) runCatching { captured.updateIdToken { token() } }
             } }
-        }
+        })
     }
     private fun identityKey(): String? = auth.currentUser?.let { "${it.tenantId.orEmpty()}:${it.uid}" }
     suspend fun reconcile() {

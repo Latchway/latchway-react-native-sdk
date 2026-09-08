@@ -1,26 +1,29 @@
 # LatchwayChat · React Native
 
-## Current source: shared-account development example
+## Published shared-account example
 
-This checkout now exercises the **unreleased shared native app APIs**. It is
-not compatible with the historical npm/native pins on its own. The separately
-authorized verification work upgraded the Habitify VPS to the shared development
-runtime and opted the disposable RN environment into shared iOS callers; the real
-Habitify Development/Production policies remain unchanged.
-The historical registry baseline below is retained as provenance, not current
-shared-account setup instructions. Use the released SDK tag for that old demo.
+This app consumes **published npm packages**: `@latchway/react-native` 1.2.0,
+`@latchway/client` 1.1.0 and `@latchway/langchain` 1.1.0. Their native pins are
+CocoaPods Latchway 1.2.0 and Maven Central Android 1.1.0. Use gateway 1.1.1 or
+newer, including the schema-31 identity issuance-time fix. Normal Metro,
+TypeScript and autolinking resolve installed packages, not sibling SDK source.
+
+The example owns Firebase login and supplies its ID token through `signIn`,
+`restore` and `updateIdToken`. Either RN or native may configure first; matching
+public settings reuse the existing native account. There is no permanent JS
+identity owner, Firebase SDK dependency inside Latchway or mandatory bootstrap.
 
 There are three runnable surfaces in one application:
 
-- Standalone React Native: Firebase login/sign-up, explicit account activation,
+- Standalone React Native: Firebase login/sign-up, explicit Latchway sign-in,
   LangChain + weather or direct fetch, offline Latchway logout, then Firebase
   sign-out. `Resume chat` is explicit login intent; mounting a screen is not.
 - Embedded iOS: launch with `--latchway-embedded` to open the Swift host first.
   Sign in natively, send a native chat request, and open the RN LangChain screen.
-  The host configures the registry before RN starts and owns the sole Firebase
-  identity authority. Back navigation disposes the RN surface, not the account.
+  The host supplies its application-owned Firebase token. RN reuses the shared
+  native account. Back navigation disposes the RN surface, not the account.
 - Embedded Android: launch `dev.latchway/com.latchwaychat.SharedNativeHostActivity`
-  in the development build. The Kotlin host owns auth and app activation, with
+  in the explicit development build. The Kotlin host supplies identity, with
   separate native and RN chat actions. Android's Back button closes RN only.
 
 The SDK remains independent of Firebase and LangChain. These are **app-owned
@@ -33,7 +36,31 @@ wrapper created by a same-account token refresh, but rejects sign-out, tenant
 changes and observed A→B→A transitions. JavaScript object identity is not a
 stable Firebase account identifier; the gateway still authenticates the token.
 
-### Build the source candidate
+### Normal registry build
+
+From this directory, keep `LATCHWAY_SHARED_NATIVE_SOURCE`,
+`LATCHWAY_NATIVE_REPOSITORY` and `LATCHWAY_NATIVE_VERSION` unset. Preserve your
+existing `src/config.local.json` and Firebase public client configuration:
+
+```sh
+npm ci
+cp src/config.local.json ios/LatchwayChat/SharedNativeConfig.json
+mkdir -p android/app/src/main/assets
+cp src/config.local.json android/app/src/main/assets/SharedNativeConfig.json
+npm run typecheck
+npm run verify:registry -- --javascript-only
+pod install --project-directory=ios --repo-update
+npm run verify:registry
+npm start
+```
+
+The copies above bundle the same public example configuration for the optional
+native host screens; they do not bootstrap Latchway or copy credentials.
+The JavaScript-only verification explicitly skips CocoaPods; run the complete
+check after installing Pods. Never link a second SPM/native SDK alongside the
+one supplied by the npm package. Standard signing/App Attest/Play setup remains.
+
+### Optional SDK source development
 
 Keep the native repositories as siblings of this repository. Install this app's
 locked npm dependencies and supply `src/config.local.json` plus the correct
@@ -71,9 +98,10 @@ npm run android
 
 The explicit development repository exclusively resolves `dev.latchway` to
 `1.1.0-dev` for this app and must never be used as release evidence. It overrides
-the bridge's historical published 1.0.0 pins only in this private example build.
-The candidate versions and publication order are in
-`../../release-candidate.shared-native.json`; released lock claims are unchanged.
+the bridge's published 1.1.0 pins only in this private example build.
+The release-line versions and source-build scope are recorded in
+`../../release-candidate.shared-native.json`; this override does not change the
+normal registry lockfiles.
 
 Use an explicitly configured development environment with protocol 3 and
 required native host attestation policy allowing both native and `react-native`
@@ -86,23 +114,21 @@ Attest/Play Integrity still applies; simulator compilation is not attestation.
 1. Sign in as A, send from native and RN, and record only redacted request IDs.
    Confirm server request records share A's installation/user quota scope and
    distinguish native/RN callers. Do not print or compare credentials.
-2. Close and reopen RN. Native chat must still work; no new activation occurs.
+2. Close and reopen RN. Native chat must still work; no new sign-in occurs.
 3. Start an RN weather turn, return to native and sign out. Late text/tools must
    not reappear, native and RN old clients must fail, and offline local cleanup
    must finish without an identity callback or installation revocation.
-4. Sign in as B, explicitly activate, and use fresh chat/model handles. No A
+4. Sign in as B through `app.signIn` and use fresh chat/model handles. No A
    history remains. Verify B's principal and quota in the server database.
 5. Sign out and back in as A. A's existing daily usage is unchanged. Repeat with
    Firebase changing accounts outside the chat and with JS paused/reloaded.
 
-Restart the application process before switching standalone/embedded hosting
-modes. Matching configuration deliberately does not replace the first identity
-owner; opening a native host after standalone JS setup is not ownership transfer.
-
-Standalone Fast Refresh does not silently replace a dead JS identity owner.
-Restart the app process, or deliberately use `transferIdentityAuthority` with a
-captured current owner ID followed by explicit activation. Normal surface remount
-must not transfer ownership. Embedded native-owned auth keeps working without JS.
+Standalone and embedded callers use the same supplied-identity registration;
+there is no authority transfer. Native can continue using a fresh verified token
+after JS stops. The application must report token updates and logout. Expiry
+suspends work until a same-account token update; process restart needs identity
+restoration, which cannot undo persisted logout. Restart when switching this
+demo's launch surfaces so its application-level UI/auth listeners are rebuilt.
 
 Automated lifecycle/transport tests and compile results are recorded in
 [`SHARED_NATIVE_VERIFICATION.md`](./SHARED_NATIVE_VERIFICATION.md), separately
@@ -110,7 +136,7 @@ from physical App Attest, Play-distributed Android, cross-process extensions and
 live principal/quota evidence. Existing `VERIFICATION.md` receipts describe the
 historical released demo, not this new shared-account implementation.
 
-## Historical registry baseline (before shared-account migration)
+## Features
 
 A standalone consumer example: Firebase email/password authentication, temporary
 chat about Latchway, LangChain streaming with a real weather tool, and a direct
@@ -120,8 +146,8 @@ SDK checkout or the parent pnpm workspace.
 ## What runs where
 
 - Firebase Auth owns sign-up, sign-in, and Firebase session persistence.
-- `@latchway/react-native@1.1.2` owns authenticated transport, via
-  CocoaPods `Latchway/AppAttest 1.0.0` and Maven Central Android SDKs 1.0.0.
+- `@latchway/react-native@1.2.0` owns authenticated transport, via
+  CocoaPods `Latchway/AppAttest 1.2.0` and Maven Central Android SDKs 1.1.0.
   App Attest, Secure Enclave/Keystore, DPoP and refresh credentials stay native.
 - `@latchway/langchain@1.1.0` creates ChatOpenAI from
   `@langchain/openai@1.5.10`, with a feature-bound Latchway fetch. Its stateless
@@ -146,14 +172,15 @@ Android: JDK 17+, SDK 37, NDK 27.1.12297006; Kotlin 2.3.21 matches the published
 native SDK metadata.
 
 The gateway must support rich Responses tool inputs and trusted input accounting
-(server 1.0.2 or later). Configure:
+(server 1.1.1 or later). Configure:
 
 1. A disposable application and Development environment.
 2. Firebase identity provider `firebase` with your Firebase project ID; enable
    Email/Password in Firebase Authentication.
-3. A `react_native_ios` root Component Definition for the Apple bundle ID, with
+3. An `ios` root Component Definition for the Apple bundle ID, with
    direct App Attest, plus a required App Attest policy matching team, bundle,
-   signing category and development environment.
+   signing category and development environment, plus explicit
+   `sharedNativeCallers: ["ios", "react-native"]` on that policy.
 4. Feature `latchway-foundation-models` with `openai_responses` routing and a
    compatible trusted input accounting profile. The name is shared with the
    Swift example, but this client uses LangChain, not Apple's Foundation Models.
@@ -164,7 +191,8 @@ The gateway must support rich Responses tool inputs and trusted input accounting
 
 Only the chosen platforms need configuration. The supplied local verification
 deployment enables React Native iOS only. For Android, add a
-`react_native_android` component, real Play Integrity policy, signing certificate
+`android` component, real Play Integrity policy with
+`sharedNativeCallers: ["android", "react-native"]`, signing certificate
 SHA-256, project number and server verifier credentials. It fails closed if the
 project number is missing; it does not use debug attestation.
 
@@ -261,8 +289,9 @@ Weather results show tool activity and source attribution.
 Settings switches LangChain / direct fetch and starts a fresh conversation.
 Direct fetch supports streamed text chat, not tools. Settings also exposes only
 redacted SDK/native version, trust, request ID and server quota data. Sign out
-revokes the active Latchway installation before signing out of Firebase.
-If revocation fails, identity stays available for a deliberate retry.
+locally retires the captured Latchway account before application-owned Firebase
+sign-out. It is offline-capable, not installation revocation, and does not reset
+the user's quota. Cleanup failures remain fenced for a deliberate retry.
 
 History is in memory only. New conversation, mode switch, sign-out and restart
 clear it. Completed turns, including tool messages, are retained as bounded units
@@ -301,7 +330,7 @@ checks observed App Attest/Secure Enclave trust, and writes a metadata-only
 Release builds. It never records prompts, replies, passwords or tokens.
 
 This launch mode makes real provider requests and consumes the disposable
-application's quota. It revokes a previous installation for this example before
+application's quota. It locally retires the previous example account before
 creating the new test identity. The random password is not logged or saved by
 the harness; Firebase keeps its normal session, leaving the app signed in.
 Use Sign out and create an account with your own chosen password for personal use.
@@ -331,7 +360,8 @@ exception messages, source URLs, prompts, replies or credentials. The native
 receipt module is absent from Release. The UI exposes nested error codes and
 the failure stage instead of hiding every wrapped SDK exception behind `Error`.
 
-The SDK compatibility baseline pins React Native 0.82 and its native dependencies.
+This example pins React Native 0.82 and its native dependencies; the SDK also
+supports the documented RN 0.74 / React 18.2 New Architecture minimum host.
 This app's explicit compatibility bootstrap currently uses the deprecated, pinned
 `text-encoding@0.7.0` for streaming UTF-8; this maintenance limitation is retained
 explicitly, not described as a clean dependency audit.
@@ -343,7 +373,8 @@ native SDK or alter registry package contents to conceal incompatibilities.
 
 ## Cleanup
 
-Sign out/revoke this disposable installation, then remove only this example's
+Sign out of the disposable account; separately revoke the installation through
+the operator API if desired. Then remove only this example's
 Firebase test UID and Latchway application/environment if no longer needed.
 Do not delete the shared Firebase project, Apple bundle identity, gateway,
 database, Habitify app configurations or the shared upstream credential.

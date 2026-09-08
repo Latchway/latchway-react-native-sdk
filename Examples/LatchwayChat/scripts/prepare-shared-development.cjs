@@ -105,7 +105,7 @@ const sdk = path.resolve(app, '../..');
 const ios = path.resolve(sdk, '../latchway-ios-sdk');
 const overlay = path.join(app, '.latchway-development');
 if (process.env.LATCHWAY_SHARED_NATIVE_SOURCE !== '1') {
-  throw new Error('Set LATCHWAY_SHARED_NATIVE_SOURCE=1 explicitly. Shared APIs are not in the released npm/native pins.');
+  throw new Error('Set LATCHWAY_SHARED_NATIVE_SOURCE=1 explicitly for local SDK development. Normal shared-app setup uses the released npm/native packages without this overlay.');
 }
 const manifest = JSON.parse(fs.readFileSync(path.join(sdk, 'package.json'), 'utf8'));
 const spec = fs.readFileSync(path.join(ios, 'Latchway.podspec'), 'utf8');
