@@ -126,7 +126,7 @@ it does not log out the shared account. Other teams need only attach to the app.
 
 Keep LangChain and any runtime polyfills in the consuming app. Pass the client
 to the existing feature-bound adapter; the server selects the upstream/model.
-See [the LangChain guide](langchain.md). Account changes should abort streams,
+See [the LangChain guide](https://docs.latchway.dev/clients/react-native/framework-integrations). Account changes should abort streams,
 tool execution and UI updates and clear in-memory chat history. The SDK handles
 native account isolation; it does not own your screen's state.
 
