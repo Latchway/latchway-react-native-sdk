@@ -1,4 +1,9 @@
-# Shared native apps — unreleased SDK source
+# Shared native apps — legacy authority integration
+
+For version1.2.0 use [developer-supplied identity](supplied-identity.md). It works
+in either initialization order without a native bootstrap or Firebase dependency.
+The authority-based integration below is retained as migration/history context;
+it is not the recommended new integration.
 
 This is not an instruction for the current npm package or native release pins.
 The development bridge requires both updated native SDKs and server protocol 3 /
@@ -17,8 +22,17 @@ import { Latchway } from '@latchway/react-native';
 
 const app = await Latchway.getApp('production');
 const state = await app.snapshot();
-if (state.state !== 'active') throw new Error('Sign in through the native host.');
+if (state.state !== 'active' || !state.generationID) throw new Error('Sign in through the native host.');
 const client = await app.makeClient();
+try {
+  const after = await app.snapshot();
+  if (after.state !== 'active' || after.generationID !== state.generationID) {
+    throw new Error('Account changed while attaching the surface.');
+  }
+} catch (error) {
+  await client.dispose();
+  throw error;
+}
 // Supply client to the existing feature-bound LangChain adapter.
 // On screen teardown: abort this screen's tools/streams, then client.dispose().
 ```
@@ -35,19 +49,20 @@ not one reusable request proof.
 The app's auth integration may configure an explicit JS-owned authority:
 
 ```ts
+// App-owned helper from Examples/LatchwayChat/src/firebase-identity-snapshot.ts.
+// Register these observers once for the identity owner's lifetime, not per screen.
+const snapshots = new FirebaseIdentitySnapshots(() => ({
+  appName: selectedAuth.app.name, issuer,
+  tenant: selectedAuth.tenantId ?? null, user: selectedAuth.currentUser,
+}), user => getTokenFor(user));
+onAuthStateChanged(selectedAuth, user => snapshots.observe(user));
+onIdTokenChanged(selectedAuth, user => snapshots.observe(user));
+
 const app = await Latchway.configure({
   baseURL, applicationID, environment,
-  identity: { name: 'firebase-production', issuer },
-  getIdentitySnapshot: async () => {
-    const user = selectedAuth.currentUser;
-    if (!user) return null;
-    const subject = user.uid;
-    const token = await getTokenFor(user);
-    if (selectedAuth.currentUser !== user || user.uid !== subject) {
-      throw new Error('Identity changed while obtaining the token.');
-    }
-    return { issuer, subject, token };
-  },
+  identity: { name: 'firebase-production', issuer,
+    tenant: selectedAuth.tenantId ?? undefined },
+  getIdentitySnapshot: () => snapshots.snapshot(),
   // Supply your actual Apple or Android security options on first setup.
   ...platformSecurity,
 }, 'production');
@@ -58,6 +73,12 @@ const client = await app.makeClient();
 
 If using Firebase tenants, include and recheck the selected tenant in both the
 authority reference and snapshot. Keep auth ownership outside screen effects.
+Import the observers from the host's RNFirebase Auth integration and copy the
+application-owned helper; it is not an SDK export. It compares logical identity
+plus an observed transition epoch. Do not compare Firebase User object references:
+ordinary same-account token refresh can replace the wrapper. The separate host
+auth controller must still serialize account changes/logout and fence UI work;
+these token-pairing observers never activate or log out an account by themselves.
 Native requests fail closed when a JS-owned authority cannot answer; logout
 still works while JS authentication is unavailable. Native background consumers
 should choose native-owned auth up front.
@@ -85,6 +106,11 @@ its initial snapshot and monotonic revisions avoid a subscribe race. UI events
 are supplementary to native fencing. On external auth changes, retire the old
 captured generation before accepting the next one. On RN unmount call disposal
 only; the native host's sign-out action owns full account logout.
+Use a separate `getApp()` wrapper exclusively for observation: other commands
+advance a wrapper's cached revision, so do not assume an event repeats every
+snapshot returned by those commands. Reconcile attachment snapshots immediately,
+fence UI/tools before awaiting cleanup and check the current generation plus an
+application-owned transition epoch before committing a response or tool result.
 
 Fast Refresh does not transfer authentication ownership. For deliberate JS
 owner replacement use `app.transferIdentityAuthority` with the captured
@@ -128,6 +154,9 @@ an unbound old session for whichever account signs in next.
 
 `Examples/LatchwayChat` now provides standalone and native-first Swift/Kotlin
 hosts, temporary native/RN chat surfaces, source-only resolution and a two-account
-exercise. Its historical device receipts still describe the old released path.
+exercise. `SHARED_NATIVE_VERIFICATION.md` records a scoped standalone iPhone
+LangChain/App Attest success on the shared source candidate. Older receipts
+describe the historical released path. The new standalone check does not prove
+native/RN co-embedding, two-account behavior, Android or extensions on real devices.
 Do not treat compile/bridge tests or a draft lock as package publication, physical
 device proof, Play distribution evidence or immediate remote logout.

@@ -4,11 +4,11 @@ import { isCanonicalRequestID } from "./request-id.js";
 import { assertNoCredentialFields } from "./native-output.js";
 
 export type LatchwayLifecycleCode = "app_not_configured" | "configuration_conflict" |
-  "identity_authority_required" | "identity_unavailable" | "account_changed" |
+  "identity_authority_required" | "identity_unavailable" | "identity_refresh_required" | "account_changed" |
   "client_logged_out" | "cleanup_required" | "client_disposed" | "native_version_incompatible";
 
 const lifecycleCodes: ReadonlySet<string> = new Set([
-  "app_not_configured", "configuration_conflict", "identity_authority_required", "identity_unavailable",
+  "app_not_configured", "configuration_conflict", "identity_authority_required", "identity_unavailable", "identity_refresh_required",
   "account_changed", "client_logged_out", "cleanup_required", "client_disposed", "native_version_incompatible",
 ]);
 
@@ -23,6 +23,16 @@ export class LatchwayLifecycleError extends Error {
 }
 
 const knownCodeMap = {
+  app_not_configured: true,
+  configuration_conflict: true,
+  identity_authority_required: true,
+  identity_unavailable: true,
+  identity_refresh_required: true,
+  account_changed: true,
+  client_logged_out: true,
+  cleanup_required: true,
+  client_disposed: true,
+  native_version_incompatible: true,
   request_invalid: true,
   identity_token_missing: true,
   identity_token_invalid: true,

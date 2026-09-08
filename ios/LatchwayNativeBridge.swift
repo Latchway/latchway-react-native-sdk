@@ -39,6 +39,15 @@ typealias NativeComponentFactory = @Sendable (NativeComponentConfiguration, Nati
 public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
     private let store: LatchwayBridgeStore
 
+    deinit {
+        let store = store
+        Task { await store.invalidate() }
+    }
+
+    @objc public func invalidate() {
+        Task { await store.invalidate() }
+    }
+
     @objc(appCommandWithJSON:resolve:reject:)
     public func appCommand(json: String, resolve: @escaping LatchwayResolveString, reject: @escaping LatchwayReject) {
         Task {
@@ -395,14 +404,38 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
     }
 }
 
-private actor LatchwayBridgeStore {
+actor LatchwayBridgeStore {
     private let makeClient: NativeClientFactory
     private let makeComponent: NativeComponentFactory
     private var clients: [String: any NativeClientOperating] = [:]
     private var componentClients: [String: any NativeComponentOperating] = [:]
     private var cancellations: [String: @Sendable () -> Void] = [:]
+    private var identityBindings: [UUID: LatchwayApp] = [:]
+    private var identityTickets: [UUID: LatchwayApp] = [:]
+    private var invalidated = false
+
+    func invalidate() async {
+        guard !invalidated else { return }
+        invalidated = true
+        let pending = Array(cancellations.values)
+        cancellations.removeAll()
+        let bindings = identityBindings
+        identityBindings.removeAll()
+        let tickets = identityTickets
+        identityTickets.removeAll()
+        let roots = Array(clients.values)
+        let components = Array(componentClients.values)
+        clients.removeAll()
+        componentClients.removeAll()
+        for cancel in pending { cancel() }
+        for (id, app) in tickets { try? await app.cancelIdentity(ticketID: id) }
+        for (id, app) in bindings { await app.releaseIdentityBinding(id) }
+        for client in roots { await client.close() }
+        for component in components { await component.close() }
+    }
 
     func appCommand(_ encoded: String) async throws -> String {
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         guard encoded.utf8.count <= 131_072,
               let data = encoded.data(using: .utf8),
               let input = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -456,6 +489,18 @@ private actor LatchwayBridgeStore {
             var options = LatchwayAppOptions(baseURL: url, applicationID: applicationID, environment: environment,
                 rootKeychainAccessGroup: apple?["rootKeychainAccessGroup"] as? String, identity: reference,
                 identityProvider: input["identityProvider"] as? String)
+            if let mode = input["identityMode"] as? String {
+                guard mode == "supplied" || mode == "authority" else { throw LatchwayLifecycleError.configurationConflict }
+                if mode == "supplied" {
+                    guard let identity, let providerID = identity["providerID"], let issuer = identity["issuer"],
+                          let audience = identity["audience"], input["authorityInstanceID"] == nil else {
+                        throw LatchwayLifecycleError.configurationConflict
+                    }
+                    options.identity = nil
+                    options.suppliedIdentity = .init(providerID: providerID, issuer: issuer,
+                        audience: audience, tenantID: identity["tenantID"])
+                }
+            }
             if let value = apple?["sharedKeychainAccessGroups"] {
                 guard let groups = value as? [String] else { throw LatchwayLifecycleError.configurationConflict }
                 options.componentKeychainAccessGroups = groups
@@ -489,7 +534,7 @@ private actor LatchwayBridgeStore {
                 broker = await NativeIdentityBrokers.shared.register(id)
             } else { broker = nil }
             let factory: LatchwayAccountAttestationFactory?
-            if let root = options.rootKeychainAccessGroup, broker != nil {
+            if let root = options.rootKeychainAccessGroup, broker != nil || options.suppliedIdentity != nil {
                 factory = { LatchwayAppAttestProvider(rootKeychainAccessGroup: root, storageNamespace: $0) }
             } else { factory = nil }
             do {
@@ -503,8 +548,61 @@ private actor LatchwayBridgeStore {
         } else {
             app = try await LatchwayAppRegistry.shared.getApp(name, fromReactNative: true)
         }
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         switch operation {
         case "get", "configure", "snapshot": break
+        case "claimIdentityBinding":
+            let bindingID = UUID()
+            try await app.claimIdentityBinding(bindingID)
+            guard !invalidated else {
+                await app.releaseIdentityBinding(bindingID)
+                throw LatchwayLifecycleError.disposed
+            }
+            identityBindings[bindingID] = app
+            return try jsonString(["bindingID": bindingID.uuidString])
+        case "releaseIdentityBinding":
+            guard let encoded = input["bindingID"] as? String, let bindingID = UUID(uuidString: encoded),
+                  identityBindings[bindingID] === app else { throw LatchwayLifecycleError.configurationConflict }
+            identityBindings.removeValue(forKey: bindingID)
+            await app.releaseIdentityBinding(bindingID)
+        case "beginIdentity":
+            guard let value = input["intent"] as? String, let intent = LatchwayIdentityIntent(rawValue: value) else {
+                throw LatchwayError.invalidRequest("Invalid identity intent")
+            }
+            let generationID: UUID?
+            if let encoded = input["generationID"] as? String {
+                guard let id = UUID(uuidString: encoded) else { throw LatchwayError.invalidRequest("Invalid account handle") }
+                generationID = id
+            } else { generationID = nil }
+            let bindingID: UUID?
+            if let encoded = input["bindingID"] as? String {
+                guard let id = UUID(uuidString: encoded), identityBindings[id] === app else {
+                    throw LatchwayLifecycleError.configurationConflict
+                }
+                bindingID = id
+            } else { bindingID = nil }
+            let ticket = try await app.beginIdentity(intent: intent, generationID: generationID, bindingID: bindingID)
+            guard !invalidated else {
+                try? await app.cancelIdentity(ticketID: ticket)
+                throw LatchwayLifecycleError.disposed
+            }
+            identityTickets[ticket] = app
+            return try jsonString(["ticketID": ticket.uuidString])
+        case "completeIdentity":
+            guard let encoded = input["ticketID"] as? String, let ticket = UUID(uuidString: encoded),
+                  let idToken = input["idToken"] as? String, identityTickets[ticket] === app else {
+                throw LatchwayError.invalidRequest("Invalid identity operation")
+            }
+            _ = try await app.completeIdentity(ticketID: ticket, idToken: idToken, runtime: .reactNativeIOS)
+            identityTickets.removeValue(forKey: ticket)
+        case "cancelIdentity":
+            guard let encoded = input["ticketID"] as? String, let ticket = UUID(uuidString: encoded) else {
+                throw LatchwayError.invalidRequest("Invalid identity operation")
+            }
+            if identityTickets[ticket] === app {
+                identityTickets.removeValue(forKey: ticket)
+                try await app.cancelIdentity(ticketID: ticket)
+            }
         case "activate": _ = try await app.activate()
         case "transferIdentityAuthority":
             guard let expected = input["expectedAuthorityInstanceID"] as? String, let expectedID = UUID(uuidString: expected),
@@ -554,15 +652,24 @@ private actor LatchwayBridgeStore {
                   matches(sdkVersion, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$") else {
                 throw LatchwayError.invalidRequest("Invalid caller SDK version")
             }
-            let client = try await app.makeClient(runtime: .reactNativeIOS, sdkVersion: sdkVersion)
+            let expectedGeneration: UUID?
+            if let encoded = input["generationID"] as? String {
+                guard let value = UUID(uuidString: encoded) else { throw LatchwayError.invalidRequest("Invalid account handle") }
+                expectedGeneration = value
+            } else { expectedGeneration = nil }
+            let client = try await app.makeClient(runtime: .reactNativeIOS, sdkVersion: sdkVersion,
+                                                 generationID: expectedGeneration)
+            guard !invalidated else { await client.close(); throw LatchwayLifecycleError.disposed }
             let context = NativeClientContext(sharedClient: client, baseURL: app.baseURL)
             guard clients[id] == nil else { await client.close(); throw LatchwayLifecycleError.configurationConflict }
             clients[id] = context
         default: throw LatchwayError.invalidRequest("Unknown native app command")
         }
         let snapshot = await app.snapshot()
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         return try jsonString(compact([
-            "nativeAppABI": 1, "contractVersion": "1.1.0", "protocolVersion": 3,
+            "nativeAppABI": 2, "contractVersion": "1.1.0", "protocolVersion": 3,
+            "identityMode": app.identityMode,
             "nativeSDKVersion": LatchwayVersion.sdk, "platform": "react_native_ios",
             "componentKeychainAccessGroups": app.componentKeychainAccessGroups,
             "baseURL": app.baseURL.absoluteString, "applicationID": app.applicationID, "environment": app.environment,
@@ -580,6 +687,7 @@ private actor LatchwayBridgeStore {
     }
 
     func configure(clientID: String, encoded: String) throws -> String {
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         guard clients[clientID] == nil, componentClients[clientID] == nil else {
             throw LatchwayError.invalidConfiguration("client identifier is already configured")
         }
@@ -599,6 +707,7 @@ private actor LatchwayBridgeStore {
         encodedConfiguration: String,
         encodedComponent: String
     ) throws -> String {
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         guard clients[clientID] == nil, componentClients[clientID] == nil else {
             throw LatchwayError.invalidConfiguration("client identifier is already configured")
         }
@@ -625,6 +734,7 @@ private actor LatchwayBridgeStore {
         operationID: String,
         operation: @escaping @Sendable (any NativeClientOperating) async throws -> T
     ) async throws -> T {
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         guard let context = clients[clientID] else { throw LatchwayError.invalidConfiguration("client is not configured") }
         let key = "\(clientID)|\(operationID)"
         guard cancellations[key] == nil else { throw LatchwayError.invalidRequest("operation identifier is already active") }
@@ -639,6 +749,7 @@ private actor LatchwayBridgeStore {
         operationID: String,
         operation: @escaping @Sendable (any NativeComponentOperating) async throws -> T
     ) async throws -> T {
+        guard !invalidated else { throw LatchwayLifecycleError.disposed }
         guard let context = componentClients[clientID] else {
             throw LatchwayError.invalidConfiguration("component client is not configured")
         }
@@ -1198,6 +1309,9 @@ private actor NativeResponseHandle {
             guard !closed else { throw LatchwayError.cancelled }
             iterator = activeIterator
             return result
+        } catch let error as LatchwayLifecycleError {
+            closeNow()
+            throw error
         } catch let error as LatchwayError {
             closeNow()
             throw error
@@ -1707,6 +1821,8 @@ private struct NativeFailure {
             case .configurationConflict: "configuration_conflict"
             case .identityAuthorityRequired: "identity_authority_required"
             case .identityUnavailable: "identity_unavailable"
+            case .identityRefreshRequired: "identity_refresh_required"
+            case .identityVerificationUnsupported: "protocol_version_unsupported"
             case .accountChanged: "account_changed"
             case .loggedOut: "client_logged_out"
             case .cleanupRequired: "cleanup_required"

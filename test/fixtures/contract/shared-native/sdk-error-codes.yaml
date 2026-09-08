@@ -17,6 +17,10 @@ codes:
     title: Current identity unavailable
     surfaces: [ios, android, react_native]
     guidance: Restore the configured auth owner and obtain a consistent current-account snapshot. A missing JavaScript runtime must not authorize from cached credentials.
+  identity_refresh_required:
+    title: Fresh identity token required
+    surfaces: [ios, android, javascript, react_native]
+    guidance: Supply a fresh same-account ID token through the captured account handle. Protected work is temporarily suspended until gateway verification succeeds; expiry alone does not log out or retire the account. Do not reuse cached Latchway credentials to bypass this guard.
   account_changed:
     title: Client account changed
     surfaces: [ios, android, react_native]

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- API 34 is the explicit library consumer compatibility baseline. This
+         ignores only the newer-compile-SDK advisory, not dependency/security checks. -->
+    <issue id="GradleDependency">
+        <ignore path="build.gradle.kts" regexp="A newer version of compileSdkVersion than 34 is available: .*" />
+    </issue>
+</lint>

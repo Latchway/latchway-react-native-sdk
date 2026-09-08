@@ -179,7 +179,7 @@ describe("shared native app wrapper contract (mock bridge)", () => {
   it.each([
     { rawUserID: "private-user" }, { token: "private-token" }, { baseURL: "https://user:password@example.test" },
     { baseURL: "https://gateway.example.test/prefix?secret=value" }, { revision: -1 },
-    { state: "active" }, { generationID: null }, { appInstanceID: "not-an-opaque-uuid" }, { nativeAppABI: 2 },
+    { state: "active" }, { generationID: null }, { appInstanceID: "not-an-opaque-uuid" }, { nativeAppABI: 3 },
     { componentKeychainAccessGroups: ["TEAM.group", "TEAM.group"] }, { componentKeychainAccessGroups: ["*"] },
   ])("rejects incompatible or oversharing native snapshots: %j", async (changes) => {
     const f = fixture();

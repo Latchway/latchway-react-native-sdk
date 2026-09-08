@@ -107,9 +107,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation("dev.latchway:latchway-firebase-auth:1.0.0")
-    implementation("dev.latchway:latchway-okhttp:1.0.0")
-    implementation("dev.latchway:latchway-play-integrity:1.0.0")
+    implementation("dev.latchway:latchway-okhttp:1.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     if (hermesEnabled.toBoolean()) {

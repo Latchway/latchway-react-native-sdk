@@ -11,6 +11,10 @@
 
 RCT_EXPORT_MODULE(NativeLatchway)
 
+- (void)invalidate {
+  [_bridge invalidate];
+}
+
 - (void)appCommand:(NSString *)commandJSON
            resolve:(RCTPromiseResolveBlock)resolve
             reject:(RCTPromiseRejectBlock)reject {

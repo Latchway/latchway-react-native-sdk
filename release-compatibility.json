@@ -2,22 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "schema_version": 1,
   "contract": {
-    "version": "1.0.0",
-    "wire_protocol": 2,
+    "version": "1.1.0",
+    "wire_protocol": 3,
     "repository": "https://github.com/Latchway/latchway.git",
-    "core_commit": "d260e3d7485e9e1487b5e03922b79c7089d94ce2",
-    "bundle_sha256": "4866aec1ff70e78d70f07847448161c2b59970fe102d95393b051444536d29a4",
+    "core_commit": "0a60cbef57d904664430e235e1e165fea14f610b",
+    "bundle_sha256": "deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293",
     "fixtures": {
       "attestation-binding-v1.json": "aaadef1172dffc3e600029e03259ff636a969cd4f925544fdccfb2c704b03659",
       "component-attestation-binding-v2.json": "8411308998cdffccf286892b94a6c759cbcf63b92e4727144d3a755dcd7c13d4",
       "dpop-v1.json": "b639e22dcd1c1a18e1292a044d96ec043c3be1e0271aacd6904bca39253bc5d4",
       "installation-family-v2.json": "7ea657c5ca1de6d0ab1507b6187a1a6920fcf7486a6c6da178727df0efc5257d",
-      "protocol-version.json": "4a6cf9f271bc9e83648eacf05f250f8fab24fc215d292a5a721148578f7372b1"
+      "protocol-version.json": "c8f32d02af792dcec2e92ea1dc5816b85ccf8214f31c9c334cfafc38aa078932"
     }
   },
   "react_native": {
     "package": "@latchway/react-native",
-    "version": "1.1.3",
+    "version": "1.2.0",
     "baseline": "0.82.0",
     "supported_range": ">=0.74.0 <1.0.0",
     "minimum": {
@@ -43,15 +43,15 @@
   },
   "javascript": {
     "package": "@latchway/client",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "repository": "https://github.com/Latchway/latchway-js.git",
-    "source_commit": "6705a35478c99a7fb70c53e467fec6d0c3141ea0"
+    "source_commit": "1672ec3b53456a82bba8da46b8c7196491f6e7b8"
   },
   "ios": {
     "pod": "Latchway/AppAttest",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "repository": "https://github.com/Latchway/latchway-ios-sdk.git",
-    "source_commit": "b5104113158fda509e244631eb4939acf45157a3",
+    "source_commit": "465e8fb9890fc337f9c266ee8dd70607bd2c0474",
     "minimum_platform": "15.0"
   },
   "android": {
@@ -60,12 +60,13 @@
       "latchway-okhttp",
       "latchway-play-integrity"
     ],
-    "version": "1.0.0",
+    "version": "1.1.0",
     "repository": "https://github.com/Latchway/latchway-android.git",
-    "source_commit": "1081ac5337ad8ec9eb9ce587bc432bec588cc1c6",
+    "source_commit": "8cccf9e1e887e3d8959d1642f5ea6e8c39654d1d",
     "minimum_sdk": 24,
-    "compile_sdk": 37,
-    "sdk_platform_version": "37.0",
+    "compile_sdk": 34,
+    "example_compile_sdk": 37,
+    "sdk_platform_version": "34",
     "build_tools_version": "36.0.0",
     "ndk_version": "27.1.12297006",
     "publisher_android_gradle_plugin": "9.3.2",

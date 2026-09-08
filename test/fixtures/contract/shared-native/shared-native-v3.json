@@ -1,7 +1,7 @@
 {
   "contract_version": "1.1.0",
   "wire_protocol": 3,
-  "status": "draft",
+  "status": "released",
   "caller_header": "X-Latchway-Caller",
   "shared_sdk": "native",
   "declarations": [

@@ -1,17 +1,18 @@
 # Latchway React Native SDK
 
-Development source also contains the unreleased [shared native app APIs](docs/shared-native-apps.md).
-They need updated native dependencies and server policy; the published versions below do not contain them.
+Version 1.2.0 adds [shared accounts with developer-supplied identity](docs/supplied-identity.md).
+Native or RN can configure first. No Firebase dependency, auth authority setup
+or native-team Latchway bootstrap is required in the new integration.
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-Version 1.1.3 supports a minimum host of React Native 0.74 / React 18.2 with
+Version 1.2.0 supports a minimum host of React Native 0.74 / React 18.2 with
 New Architecture and host-aligned native dependencies. It retains exact API URL
 handling and keeps the base SDK small: only `@latchway/client` and a private
 `web-streams-polyfill` fallback are required runtime dependencies. Babel and
 global polyfills are application-owned; follow the [LangChain quickstart](docs/langchain.md)
-only if using that integration. Native SDK dependencies remain 1.0.0 from
-CocoaPods and Maven Central.
+only if using that integration. Native SDK dependencies are iOS 1.2.0 and
+Android 1.1.0. Shared apps require server 1.1.1+ with explicit host caller policy.
 
 **Upgrading from 1.1.0:** `/polyfills` and `/babel` remain as deprecated opt-in
 entrypoints, but their dependencies are no longer installed automatically. Apps
@@ -34,8 +35,8 @@ the separate workspace/conformance application.
 
 - React Native `>=0.74.0 <1.0.0` with the New Architecture enabled; React 18.2 minimum,
   paired with the React version required by the chosen React Native release
-- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.0.0
-- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.0.0 artifacts
+- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.2.0
+- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.1.0 artifacts
 - Node 24.19.0 and pnpm 10.15.0 for repository development
 
 Starting in 1.1.3, the minimum host is React Native 0.74.0 with
@@ -54,7 +55,25 @@ package. Repository installs use pnpm's hoisted linker because React Native's
 CocoaPods static-framework exclusions require conventional `node_modules`
 paths.
 
-## Usage
+## Recommended usage
+
+```ts
+import {Latchway, firebaseProject} from '@latchway/react-native';
+
+const app = await Latchway.configure({
+  baseURL, applicationID, environment,
+  identity: firebaseProject({projectID}),
+  ...platformSecurity,
+});
+const account = await app.signIn({getIdToken: () => yourAuth.getIdToken()});
+const client = await account.makeClient();
+```
+
+Your application supplies and refreshes the ID token; no Firebase SDK is imported
+by Latchway. For native-first attachment, use `app.makeClient()` without signing
+in again. See [configure, refresh, logout and LangChain](docs/supplied-identity.md).
+
+## Legacy constructor usage
 
 ```ts
 import { createLatchwayClient } from "@latchway/react-native";
@@ -303,21 +322,17 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-The final version 1 source candidate consumes released contract checkpoint `1.0.0`,
-current wire protocol `2` (with wire `1` retained in the core compatibility
-window), core commit `d260e3d7485e9e1487b5e03922b79c7089d94ce2`, and
-bundle SHA-256
-`4866aec1ff70e78d70f07847448161c2b59970fe102d95393b051444536d29a4`.
-Core plus all four SDK locks and fixtures are synchronized. This is source
-compatibility evidence, not a claim that the npm package or native dependencies
-have been published. All gates read `release-compatibility.json` and
-`contract.lock`, so later compatible releases do not require rewriting CI.
+Version 1.2.0 consumes released contract `1.1.0`: shared apps use wire `3`,
+legacy constructors retain wire `2`, and the server supports `[1, 2, 3]`.
+Core commit `0a60cbef57d904664430e235e1e165fea14f610b` fixes the bundle SHA-256
+`deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293`.
+Exact dependency releases and source revisions are recorded in
+`release-compatibility.json` and `contract.lock`.
 `pnpm verify:contracts` checks the active lock and vendored canonical fixtures
 byte-for-byte, including the installation-family and component-attestation
-binding v2 fixtures. The
-promotion-dispatched release workflow still refuses
-publication until exact native registry, provenance, physical-device, and
-immutable-release evidence passes.
+binding v2 fixtures. The current publication workflow builds and publishes;
+these local verification commands are not mandatory CI gates. A successful
+publish does not imply physical-device or cloud verification.
 
 ## License
 

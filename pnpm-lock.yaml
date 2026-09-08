@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@latchway/client':
-        specifier: 1.0.0
-        version: 1.0.0
+        specifier: 1.1.0
+        version: 1.1.0
       web-streams-polyfill:
         specifier: 4.3.0
         version: 4.3.0
@@ -991,8 +991,8 @@ packages:
     peerDependencies:
       '@langchain/core': ^1.2.9
 
-  '@latchway/client@1.0.0':
-    resolution: {integrity: sha512-8bhUIYriQZwGoPcNdyqG5Mm5g/+rC5Zn4Z4JN+jiiBHdz46bWA3ZcidMrdta4nQ++28gUjd12CHcZ0ZK8u31UQ==}
+  '@latchway/client@1.1.0':
+    resolution: {integrity: sha512-FTp57+UQ2lBmnjvrBewSn0atxIiadLeEFvfcN/E95O3unuaONiCvX2gYiWT4cLpHSACudzZZ69IzJ48YRsIsiA==}
     engines: {node: '>=24.19.0', pnpm: 10.15.0}
 
   '@nodelib/fs.scandir@2.1.5':
@@ -4559,7 +4559,7 @@ snapshots:
       - undici
       - ws
 
-  '@latchway/client@1.0.0': {}
+  '@latchway/client@1.1.0': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

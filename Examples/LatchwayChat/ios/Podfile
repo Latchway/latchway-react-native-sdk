@@ -22,7 +22,6 @@ end
 target 'LatchwayChat' do
   if ENV['LATCHWAY_SHARED_NATIVE_SOURCE'] == '1'
     pod 'Latchway/AppAttest', :path => '../../../../latchway-ios-sdk'
-    pod 'Latchway/FirebaseAuth', :path => '../../../../latchway-ios-sdk'
   end
   config = use_native_modules!
 

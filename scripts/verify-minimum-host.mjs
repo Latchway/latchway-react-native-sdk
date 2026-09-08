@@ -12,6 +12,9 @@ const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const lock = JSON.parse(await readFile(join(root, "release-compatibility.json"), "utf8"));
 const minimum = lock.react_native.minimum;
 const sharedDevelopment = process.argv.includes("--shared-native-development");
+const sourceCandidate = sharedDevelopment
+  ? JSON.parse(await readFile(join(root, "release-candidate.shared-native.json"), "utf8"))
+  : null;
 const archiveArgument = process.argv.indexOf("--tarball");
 if (archiveArgument !== -1 && !process.argv[archiveArgument + 1]?.endsWith(".tgz")) {
   throw new Error("--tarball requires an existing npm archive path.");
@@ -90,7 +93,11 @@ try {
       const repository = process.env.LATCHWAY_NATIVE_REPOSITORY;
       assert.ok(repository, "Android source verification requires LATCHWAY_NATIVE_REPOSITORY");
       const gradle = join(directory, "android/build.gradle");
-      await writeFile(gradle, (await readFile(gradle, "utf8")) + `\nallprojects {
+      assert.equal(sourceCandidate.android_source_build.compile_sdk, 34);
+      const sourceBuild = (await readFile(gradle, "utf8"))
+        .replace(/compileSdkVersion = 37/u, "compileSdkVersion = 34");
+      assert.match(sourceBuild, /compileSdkVersion = 34/u);
+      await writeFile(gradle, sourceBuild + `\nallprojects {
         configurations.configureEach { resolutionStrategy.eachDependency {
           if (requested.group == 'dev.latchway' && requested.name in ['latchway-core', 'latchway-okhttp', 'latchway-play-integrity', 'latchway-firebase-auth', 'latchway-bom']) useVersion('1.1.0-dev')
         } }

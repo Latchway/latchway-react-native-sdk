@@ -11,8 +11,10 @@ import type {
 export { errorFromResponse, LatchwayError } from "@latchway/client";
 export { LatchwayLifecycleError } from "./errors.js";
 export type { LatchwayLifecycleCode } from "./errors.js";
-export { Latchway, LatchwayApp, configureLatchwayApp, getLatchwayApp } from "./app.js";
-export type { LatchwayAppOptions, LatchwayAppSnapshot, LatchwayIdentitySnapshot } from "./app.js";
+export { Latchway, LatchwayApp, LatchwayAccount, configureLatchwayApp, getLatchwayApp } from "./app.js";
+export type { LatchwayAppOptions, LatchwayAppSnapshot, LatchwayIdentitySnapshot, LatchwayTokenInput } from "./app.js";
+export { firebaseProject, jwtIdentity, bindLatchwayAuth } from "./identity.js";
+export type { LatchwayIdentityConfiguration, LatchwayAuthEvent, LatchwayAuthBinding } from "./identity.js";
 export {
   CONTRACT_VERSION,
   PROTOCOL_VERSION,

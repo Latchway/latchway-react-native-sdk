@@ -137,7 +137,9 @@ describe("JavaScript security boundary", () => {
     expect(ios).not.toMatch(/\b(?:NSLog|print|os_log)\s*\(|\b(?:os\.)?Logger\b|\bOSLog\b/gu);
 
     const rejectionStart = ios.indexOf("private static func reject(_ error: Error");
-    const rejectionEnd = ios.indexOf("\nprivate actor LatchwayBridgeStore", rejectionStart);
+    const rejectionEnd = ios.indexOf("\nactor LatchwayBridgeStore", rejectionStart);
+    expect(rejectionStart).toBeGreaterThanOrEqual(0);
+    expect(rejectionEnd).toBeGreaterThan(rejectionStart);
     const rejectionEnvelope = ios.slice(rejectionStart, rejectionEnd);
     expect(rejectionEnvelope).toContain('"operationID": failure.operationID as Any');
     expect(rejectionEnvelope).not.toMatch(/identityToken|accessToken|refreshToken|attestationEvidence|privateKey/gu);

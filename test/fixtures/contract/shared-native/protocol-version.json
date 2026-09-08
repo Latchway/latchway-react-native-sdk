@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "manifest_version": 1,
   "contract_version": "1.1.0",
-  "contract_status": "draft",
+  "contract_status": "released",
+  "released_at": "2026-09-08T10:54:39Z",
   "wire_protocol": {
     "current": 3,
     "supported": [1, 2, 3],
@@ -77,5 +78,13 @@
     "protocol_version": "X-Latchway-Protocol-Version",
     "request_id": "X-Latchway-Request-ID"
   },
-  "sdk_kinds": ["ios", "android", "javascript", "react-native", "native"]
+  "sdk_kinds": ["ios", "android", "javascript", "react-native", "native"],
+  "capabilities": {
+    "supplied_identity_v1": {
+      "minimum_protocol": 3,
+      "identity_verification_endpoint": "/client/v1/sessions/identity",
+      "authorization": "active_refresh_token_and_dpop",
+      "rotates_credentials": false
+    }
+  }
 }

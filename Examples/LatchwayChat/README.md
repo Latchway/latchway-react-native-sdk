@@ -3,8 +3,10 @@
 ## Current source: shared-account development example
 
 This checkout now exercises the **unreleased shared native app APIs**. It is
-not compatible with the historical npm/native pins on its own, and no existing
-live gateway or application policy has been upgraded by this example change.
+not compatible with the historical npm/native pins on its own. The separately
+authorized verification work upgraded the Habitify VPS to the shared development
+runtime and opted the disposable RN environment into shared iOS callers; the real
+Habitify Development/Production policies remain unchanged.
 The historical registry baseline below is retained as provenance, not current
 shared-account setup instructions. Use the released SDK tag for that old demo.
 
@@ -73,7 +75,7 @@ the bridge's historical published 1.0.0 pins only in this private example build.
 The candidate versions and publication order are in
 `../../release-candidate.shared-native.json`; released lock claims are unchanged.
 
-Use a separately configured development server with protocol 3 and explicit
+Use an explicitly configured development environment with protocol 3 and
 required native host attestation policy allowing both native and `react-native`
 callers. Native iOS/Android root definitions must match that policy. The legacy
 React-Native-only root configuration below cannot be silently adopted. Real App

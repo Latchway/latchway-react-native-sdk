@@ -1,15 +1,17 @@
 {
   "contract_version": "1.1.0",
   "wire_protocol": 3,
-  "status": "draft",
-  "core_release": null,
-  "core_base_commit": "132ad9acfec67387684518bf05303aeec5d0e2e1",
-  "bundle_sha256": "2641510c65ef687db4ece266f7afb1f761b98c02be60247e49697ca9c6b91705",
+  "status": "released",
+  "core_release": "v1.1.0",
+  "core_commit": "0a60cbef57d904664430e235e1e165fea14f610b",
+  "bundle_sha256": "deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293",
   "minimum_server_version": "1.1.0",
-  "maximum_tested_server_version": "1.1.0-dev",
+  "maximum_tested_server_version": "1.1.0",
   "files": {
-    "test/fixtures/contract/shared-native/protocol-version.json": "637099445e79ec5431f34889eb4d49b2c0d011a0c4e70b688b7a44857f4b2cc5",
-    "test/fixtures/contract/shared-native/shared-native-v3.json": "9e05184dd42c8b747cd93bd93c9cc0bb25c0cfcd856c4df728ba6e467c76ae7a",
-    "test/fixtures/contract/shared-native/sdk-error-codes.yaml": "b1c40067048219b8ccb9fd02bba17f6aaba3a0d3ed073e67d08764f9c1f43704"
+    "test/fixtures/contract/shared-native/protocol-version.json": "c8f32d02af792dcec2e92ea1dc5816b85ccf8214f31c9c334cfafc38aa078932",
+    "test/fixtures/contract/shared-native/shared-native-v3.json": "adb5de4788794a9fe8707f005e1038347d26ec18b96fbc5e41bb34125ba04c4a",
+    "test/fixtures/contract/shared-native/sdk-error-codes.yaml": "37c235450badeac051a943be7bd1a926ff83f51bae8e51f5f7370011e0d3711a",
+    "test/fixtures/contract/shared-native/supplied-identity-v1.json": "d6c547f85ba7b7fa130089f977d7314f69c85b3a68f8530beb8cb3dfb6d008e8",
+    "test/fixtures/contract/shared-native/client.openapi.yaml": "763206fb4f4c903b599792baf46d6bc99394cffe66f3cb072aa1f7ef3d968f2c"
   }
 }

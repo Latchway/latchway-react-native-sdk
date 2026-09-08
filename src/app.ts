@@ -4,13 +4,20 @@ import { nativeModule, type NativeLatchwayModule } from "./native/bridge.js";
 import { assertNoCredentialFields } from "./native-output.js";
 import type { AndroidSecurityOptions, AppleSecurityOptions, LatchwayClient, ReactNativeIOSComponent, ReactNativePlatform } from "./types.js";
 import { SDK_VERSION } from "./version.js";
-import { fromNativeError, LatchwayLifecycleError } from "./errors.js";
+import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
+import { validateIdentityConfiguration, type LatchwayIdentityConfiguration } from "./identity.js";
+
+export interface LegacyIdentityReference { name: string; issuer: string; tenant?: string }
+
+/** Application-owned token acquisition; never retained as a shared JS provider. */
+export type LatchwayTokenInput = ({ idToken: string; getIdToken?: never } |
+  { getIdToken: () => Promise<string>; idToken?: never }) & { signal?: AbortSignal };
 
 export interface LatchwayAppOptions {
   baseURL: string;
   applicationID: string;
   environment: string;
-  identity?: { name: string; issuer: string; tenant?: string };
+  identity?: LatchwayIdentityConfiguration | LegacyIdentityReference;
   identityProvider?: string;
   apple?: Partial<AppleSecurityOptions> & {
     /** Authorized delegated-component groups, distinct from the private root. */
@@ -36,11 +43,12 @@ export interface LatchwayAppSnapshot {
   authorityInstanceID: string;
   generationID?: string;
   revision: number;
-  state: "inactive" | "active" | "retiring" | "loggedOut";
+  state: "inactive" | "active" | "refreshRequired" | "retiring" | "loggedOut";
 }
 
 interface AppDescriptor extends LatchwayAppSnapshot {
-  nativeAppABI: 1;
+  nativeAppABI: 1 | 2;
+  identityMode?: "supplied" | "authority";
   contractVersion: "1.1.0";
   protocolVersion: 3;
   baseURL: string;
@@ -85,6 +93,97 @@ export class LatchwayApp {
     return this.accept(await command(this.module, { operation: "activate", name: this.name }));
   }
 
+  /** Verify an application's ID token and join/create its shared native account. */
+  async signIn(input: LatchwayTokenInput): Promise<LatchwayAccount> {
+    return this.identityOperation("signIn", input);
+  }
+
+  /** Restore existing auth without overriding a durable Latchway logout. */
+  async restore(input: LatchwayTokenInput): Promise<LatchwayAccount> {
+    return this.identityOperation("restore", input);
+  }
+
+  /** Attach without signing in, acquiring a token, or changing account ownership. */
+  async currentAccount(): Promise<LatchwayAccount | null> {
+    this.requireSuppliedIdentity();
+    const snapshot = await this.snapshot();
+    return snapshot.generationID !== undefined && ["active", "refreshRequired"].includes(snapshot.state)
+      ? new LatchwayAccount(this, snapshot.generationID) : null;
+  }
+
+  /** @internal Account handles call this with their captured generation. */
+  async identityOperation(intent: "signIn" | "restore" | "update", input: LatchwayTokenInput,
+    generationID?: string, bindingID?: string): Promise<LatchwayAccount> {
+    this.requireSuppliedIdentity();
+    if (input.signal?.aborted) throw abortError();
+    if ((typeof input.idToken === "string") === (typeof input.getIdToken === "function")) {
+      throw new LatchwayError("client_configuration_invalid", "Supply either idToken or getIdToken.");
+    }
+    // Capture native state before invoking application code. Cancellation during
+    // begin is handled immediately when the opaque native ticket arrives.
+    const ticketID = await beginIdentity(this.module, { operation: "beginIdentity", name: this.name, intent,
+      ...(generationID === undefined ? {} : { generationID }),
+      ...(bindingID === undefined ? {} : { bindingID }) });
+    let cancellation: Promise<void> | undefined;
+    const cancel = (): Promise<void> => {
+      cancellation ??= command(this.module, { operation: "cancelIdentity", name: this.name, ticketID })
+        .then(value => { this.accept(value); });
+      return cancellation;
+    };
+    let rejectCancellation: (reason: unknown) => void = () => undefined;
+    const cancelled = new Promise<never>((_, reject) => { rejectCancellation = reject; });
+    const onAbort = (): void => { void cancel().then(() => rejectCancellation(abortError()), rejectCancellation); };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      if (input.signal?.aborted) { await cancel(); throw abortError(); }
+      const work = (async (): Promise<LatchwayAccount> => {
+        let idToken: string;
+        try { idToken = input.getIdToken === undefined ? input.idToken : await input.getIdToken(); }
+        catch { throw new LatchwayLifecycleError("identity_unavailable", "The application could not supply an ID token."); }
+        if (input.signal?.aborted) throw abortError();
+        if (typeof idToken !== "string" || idToken.length === 0 || idToken.length > 65_536 || /\s/u.test(idToken)) {
+          throw new LatchwayError("identity_token_invalid", "The application supplied an invalid ID token.");
+        }
+        const descriptor = await command(this.module, { operation: "completeIdentity", name: this.name, ticketID, idToken });
+        this.accept(descriptor);
+        if (input.signal?.aborted) throw abortError();
+        if (descriptor.state !== "active" || descriptor.generationID === undefined ||
+            (generationID !== undefined && descriptor.generationID !== generationID) ||
+            this.latest.generationID !== descriptor.generationID || this.latest.state !== "active") {
+          throw new LatchwayLifecycleError("account_changed");
+        }
+        return new LatchwayAccount(this, descriptor.generationID);
+      })();
+      return await Promise.race([work, cancelled]);
+    } catch (error) {
+      // Cancelling invalidates native state, not just this JavaScript promise.
+      await cancel();
+      throw error;
+    } finally {
+      input.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** @internal One native lease prevents competing injected auth subscriptions. */
+  async claimIdentityBinding(): Promise<string> {
+    this.requireSuppliedIdentity();
+    return opaqueHandle(this.module, { operation: "claimIdentityBinding", name: this.name }, "bindingID");
+  }
+
+  /** @internal Release only this binding; never retire the shared account. */
+  async releaseIdentityBinding(bindingID: string): Promise<void> {
+    this.accept(await command(this.module, { operation: "releaseIdentityBinding", name: this.name, bindingID }));
+  }
+
+  private requireSuppliedIdentity(): void {
+    if (this.latest.nativeAppABI !== 2) {
+      throw new LatchwayLifecycleError("native_version_incompatible", "Rebuild with the supplied-identity native SDKs.");
+    }
+    if (this.latest.identityMode !== "supplied") {
+      throw new LatchwayLifecycleError("configuration_conflict", "This app uses a legacy identity authority.");
+    }
+  }
+
   /** Requires a captured generation. Never guesses the current/new account. */
   async logout(generationID: string): Promise<void> {
     this.accept(await command(this.module, { operation: "logout", name: this.name, generationID }));
@@ -95,7 +194,7 @@ export class LatchwayApp {
    * Read a snapshot and supply its owner ID to reject stale competing transfers.
    * Activation is a separate, intentional login action after this completes. */
   async transferIdentityAuthority(options: {
-    identity: NonNullable<LatchwayAppOptions["identity"]>;
+    identity: LegacyIdentityReference;
     getIdentitySnapshot: NonNullable<LatchwayAppOptions["getIdentitySnapshot"]>;
     expectedAuthorityInstanceID: string;
   }): Promise<LatchwayAppSnapshot> {
@@ -113,13 +212,23 @@ export class LatchwayApp {
     return snapshot;
   }
 
-  async makeClient(): Promise<LatchwayClient> {
+  async makeClient(generationID?: string): Promise<LatchwayClient> {
     const clientID = `latchway-app-${wrapperID}-${++nextClient}`;
     try {
-      const descriptor = await command(this.module, { operation: "client", name: this.name, clientID, sdkVersion: SDK_VERSION });
+      const before = await this.snapshot();
+      const capturedGeneration = generationID ?? before.generationID;
+      if (generationID !== undefined && before.generationID !== generationID) throw new LatchwayLifecycleError("account_changed");
+      if (before.state === "refreshRequired") throw new LatchwayLifecycleError("identity_refresh_required");
+      if (before.state !== "active" || capturedGeneration === undefined) throw new LatchwayLifecycleError("client_logged_out");
+      const descriptor = await command(this.module, { operation: "client", name: this.name, clientID, sdkVersion: SDK_VERSION,
+        generationID: capturedGeneration });
       this.accept(descriptor);
       if (descriptor.state !== "active" || descriptor.generationID === undefined) {
         throw new LatchwayLifecycleError("client_logged_out", "Activate the native app account before creating a client.");
+      }
+      const after = await this.snapshot();
+      if (descriptor.generationID !== capturedGeneration || after.generationID !== capturedGeneration || after.state !== "active") {
+        throw new LatchwayLifecycleError("account_changed");
       }
       let released = false;
       const lease = Promise.resolve({
@@ -148,13 +257,17 @@ export class LatchwayApp {
 
   /** Ordered native snapshots. Enforcement never depends on collecting events. */
   async *states(signal?: AbortSignal): AsyncGenerator<LatchwayAppSnapshot> {
-    yield await this.snapshot();
+    const initial = await this.snapshot();
+    let afterRevision = initial.revision;
+    yield initial;
     while (!signal?.aborted) {
-      const afterRevision = this.latest.revision;
       const next = await command(this.module, { operation: "observe", name: this.name, afterRevision });
       if (signal?.aborted) return;
       const accepted = this.accept(next);
-      if (accepted.revision > afterRevision) yield accepted;
+      if (accepted.revision > afterRevision) {
+        afterRevision = accepted.revision;
+        yield accepted;
+      }
     }
   }
 
@@ -167,11 +280,29 @@ export class LatchwayApp {
   }
 }
 
+/** An opaque login handle. Old handles can never refresh or log out a newer user. */
+export class LatchwayAccount {
+  /** @internal Obtain through signIn, restore or currentAccount. */
+  constructor(private readonly app: LatchwayApp, private readonly generationID: string) {}
+  async makeClient(): Promise<LatchwayClient> { return this.app.makeClient(this.generationID); }
+  async updateIdToken(input: LatchwayTokenInput, bindingID?: string): Promise<void> {
+    await this.app.identityOperation("update", input, this.generationID, bindingID);
+  }
+  async logout(): Promise<void> { await this.app.logout(this.generationID); }
+}
+
 /** Matching native configuration is a no-op; omitted settings inherit it. */
 export async function configureLatchwayApp(options: LatchwayAppOptions, name = "[DEFAULT]"): Promise<LatchwayApp> {
   const module = await nativeModule();
   requireAppModule(module);
   const { getIdentitySnapshot, ...publicOptions } = options;
+  const supplied = options.identity !== undefined && "providerID" in options.identity;
+  if (supplied) {
+    validateIdentityConfiguration(options.identity as LatchwayIdentityConfiguration);
+    if (getIdentitySnapshot !== undefined || options.identityProvider !== undefined) {
+      throw new LatchwayLifecycleError("configuration_conflict", "Supplied identity cannot install a legacy token authority.");
+    }
+  }
   let owners = identityOwners.get(module);
   if (owners === undefined) { owners = new Map(); identityOwners.set(module, owners); }
   const ownerKey = identityOwnerKey(options);
@@ -188,6 +319,7 @@ export async function configureLatchwayApp(options: LatchwayAppOptions, name = "
   let descriptor: AppDescriptor;
   try {
     descriptor = await command(module, { ...publicOptions, operation: "configure", name,
+      ...(supplied ? { identityMode: "supplied" } : {}),
       ...(owner === undefined ? {} : { authorityInstanceID: owner.id }) });
   } catch (error) {
     // A failed first initialization must not pin an unregistered JS callback.
@@ -200,8 +332,10 @@ export async function configureLatchwayApp(options: LatchwayAppOptions, name = "
 }
 
 function identityOwnerKey(options: LatchwayAppOptions): string {
+  const identity = options.identity;
   return JSON.stringify([new URL(options.baseURL).href.replace(/\/$/u, ""), options.applicationID,
-    options.environment, options.identity?.name, options.identity?.issuer, options.identity?.tenant]);
+    options.environment, identity !== undefined && "name" in identity ? identity.name : undefined,
+    identity?.issuer, identity !== undefined && "name" in identity ? identity.tenant : undefined]);
 }
 
 function startIdentityOwner(module: NativeLatchwayModule, owner: IdentityOwner): void {
@@ -268,15 +402,16 @@ async function command(module: NativeLatchwayModule, input: Record<string, unkno
        new Set(record.componentKeychainAccessGroups).size !== record.componentKeychainAccessGroups.length ||
        record.componentKeychainAccessGroups.some(group => typeof group !== "string" || group.length > 255 ||
          !/^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9.-]+$/u.test(group)))) throw invalidResponse();
-  if (record.nativeAppABI !== 1 || record.contractVersion !== "1.1.0" || record.protocolVersion !== 3 ||
+  if (![1, 2].includes(record.nativeAppABI as number) || record.contractVersion !== "1.1.0" || record.protocolVersion !== 3 ||
+      record.identityMode !== undefined && !["supplied", "authority"].includes(record.identityMode as string) ||
       !Number.isSafeInteger(record.revision) || (record.revision as number) < 0 ||
-      !["inactive", "active", "retiring", "loggedOut"].includes(record.state as string) ||
+      !["inactive", "active", "refreshRequired", "retiring", "loggedOut"].includes(record.state as string) ||
       !["react_native_ios", "react_native_android"].includes(record.platform as string) ||
       ["baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "authorityInstanceID"]
         .some((key) => typeof record[key] !== "string" || !record[key].length || record[key].length > 2048) ||
       !UUID.test(record.appInstanceID as string) || !UUID.test(record.authorityInstanceID as string) ||
       record.generationID !== undefined && (typeof record.generationID !== "string" || !UUID.test(record.generationID)) ||
-      record.state === "active" && record.generationID === undefined) throw invalidResponse();
+      ["active", "refreshRequired"].includes(record.state as string) && record.generationID === undefined) throw invalidResponse();
   let url: URL;
   try { url = new URL(record.baseURL as string); } catch { throw invalidResponse(); }
   if ((url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) ||
@@ -292,7 +427,23 @@ function requireAppModule(module: NativeLatchwayModule): void {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DESCRIPTOR_KEYS = new Set(["nativeAppABI", "contractVersion", "protocolVersion", "revision", "state", "platform",
-  "baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "authorityInstanceID", "generationID", "componentKeychainAccessGroups"]);
+  "baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "authorityInstanceID", "generationID", "componentKeychainAccessGroups", "identityMode"]);
+
+async function beginIdentity(module: NativeLatchwayModule, input: Record<string, unknown>): Promise<string> {
+  return opaqueHandle(module, input, "ticketID");
+}
+
+async function opaqueHandle(module: NativeLatchwayModule, input: Record<string, unknown>, key: "ticketID" | "bindingID"): Promise<string> {
+  const encoded = await module.appCommand(JSON.stringify(input)).catch((error: unknown) => { throw fromNativeError(error); });
+  if (encoded.length > 128) throw invalidResponse();
+  let value: unknown;
+  try { value = JSON.parse(encoded); } catch { throw invalidResponse(); }
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.keys(value).length !== 1 ||
+      !(key in value)) throw invalidResponse();
+  const handle = (value as Record<string, unknown>)[key];
+  if (typeof handle !== "string" || !UUID.test(handle)) throw invalidResponse();
+  return handle;
+}
 
 function publicSnapshot(value: AppDescriptor): LatchwayAppSnapshot {
   return { appInstanceID: value.appInstanceID, authorityInstanceID: value.authorityInstanceID,

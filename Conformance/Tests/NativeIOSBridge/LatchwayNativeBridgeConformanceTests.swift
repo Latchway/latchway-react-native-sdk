@@ -1,8 +1,32 @@
 import Foundation
+import Latchway
 @testable import LatchwayReactNativeBridge
 import XCTest
 
 final class LatchwayNativeBridgeConformanceTests: XCTestCase {
+    func testRuntimeInvalidationClosesOnlyOwnedLeasesAndRejectsLaterCommands() async throws {
+        let native = RecordingNativeClient()
+        let store = LatchwayBridgeStore(makeClient: { _ in native })
+        _ = try await store.configure(clientID: "owned", encoded: Self.configurationJSON)
+        await store.invalidate()
+        await store.invalidate()
+        let events = await native.events()
+        XCTAssertEqual(events, [.close])
+        do {
+            _ = try await store.configure(clientID: "late", encoded: Self.configurationJSON)
+            XCTFail("Invalidated runtime reopened")
+        } catch { XCTAssertEqual(error as? LatchwayLifecycleError, .disposed) }
+        do {
+            _ = try await store.configureComponent(clientID: "late-component",
+                encodedConfiguration: "{}", encodedComponent: "{}")
+            XCTFail("Invalidated runtime reopened a component")
+        } catch { XCTAssertEqual(error as? LatchwayLifecycleError, .disposed) }
+        do {
+            _ = try await store.appCommand(#"{"operation":"get"}"#)
+            XCTFail("Invalidated runtime accepted a command")
+        } catch { XCTAssertEqual(error as? LatchwayLifecycleError, .disposed) }
+    }
+
     func testFWAUTH101And102PublicBridgeConfiguresAndDispatchesNativeRequest() async throws {
         let native = RecordingNativeClient()
         let bridge = LatchwayNativeBridge(makeClient: { _ in native })
@@ -133,7 +157,7 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         let bridge = LatchwayNativeBridge(makeClient: { _ in native }, makeComponent: { _, _ in component })
         _ = try await configure(bridge)
         let componentJSON = #"{"definitionID":"action","kind":"action_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
-        let configuration = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","appVersion":"1.0.0","sdkVersion":"1.0.0","contractVersion":"1.0.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":["ABCDE12345.dev.latchway.shared"],"softwareKeyFallbackPolicy":"allow"}}"#
+        let configuration = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","appVersion":"1.0.0","sdkVersion":"1.2.0","contractVersion":"1.1.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":["ABCDE12345.dev.latchway.shared"],"softwareKeyFallbackPolicy":"allow"}}"#
         _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
             bridge.configureComponent(clientID: "child", configurationJSON: configuration, componentJSON: componentJSON,
                 resolve: { continuation.resume(returning: $0) },
@@ -236,7 +260,7 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    private static let configurationJSON = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","identityProvider":"custom_jwt","appVersion":"1.0.0","sdkVersion":"1.0.0","frameworkID":"react-native-fetch","frameworkVersion":"0.82.0","contractVersion":"1.0.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"appAttestEnabled":false,"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":[],"softwareKeyFallbackPolicy":"allow"},"android":{"keyPolicy":"strongbox_preferred"}}"#
+    private static let configurationJSON = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","identityProvider":"custom_jwt","appVersion":"1.0.0","sdkVersion":"1.2.0","frameworkID":"react-native-fetch","frameworkVersion":"0.82.0","contractVersion":"1.1.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"appAttestEnabled":false,"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":[],"softwareKeyFallbackPolicy":"allow"},"android":{"keyPolicy":"strongbox_preferred"}}"#
 }
 
 private struct BridgeFailure: Error, @unchecked Sendable {

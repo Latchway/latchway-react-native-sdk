@@ -236,6 +236,37 @@ public class NativeLatchwayModuleTest {
         assertTokenCleared(fake)
     }
 
+    @Test
+    public fun invalidationClosesAClientWhoseFactoryReturnsAfterTheOwnedSnapshot() {
+        val entered = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        val fake = FakeNativeClientOperations()
+        val reactContext: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
+        val module = NativeLatchwayModule(reactContext, NativeClientFactory { configuration, _, _, tokenProvider, _ ->
+            fake.configuration = configuration
+            fake.tokenProvider = tokenProvider
+            entered.countDown()
+            assertTrue(finish.await(10, TimeUnit.SECONDS))
+            fake
+        }) { JavaOnlyMap() }
+        val configured = RecordingPromise()
+        try {
+            module.configure("late-client", nativeConfiguration("https://gateway.example.test"), configured.value)
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            module.invalidate()
+            finish.countDown()
+            assertEquals("cancelled", configured.await().rejection().code)
+            assertTrue(fake.closed)
+            val later = RecordingPromise()
+            module.appCommand(JSONObject().put("operation", "newIdentityAuthority").toString(), later.value)
+            assertEquals("client_disposed", later.await().rejection().code)
+        } finally {
+            finish.countDown()
+            module.invalidate()
+            if (!fake.closed) fake.close()
+        }
+    }
+
     private fun configuredFixture(
         fake: FakeNativeClientOperations,
         baseURL: String = "https://gateway.example.test",

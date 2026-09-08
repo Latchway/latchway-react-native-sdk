@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@latchway/client": "1.0.0",
-    "@latchway/react-native": "1.1.3",
+    "@latchway/client": "1.1.0",
+    "@latchway/react-native": "1.2.0",
     "react": "19.1.1",
     "react-native": "0.82.0"
   },

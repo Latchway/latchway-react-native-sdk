@@ -15,14 +15,13 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 import com.google.firebase.auth.FirebaseAuth
 import dev.latchway.core.KeyPolicy
-import dev.latchway.core.LatchwayIdentityAuthorityReference
-import dev.latchway.firebaseauth.FirebaseIdentityAuthority
+import dev.latchway.core.firebaseProject
 import dev.latchway.okhttp.LatchwayApp
 import dev.latchway.okhttp.LatchwayAppOptions
 import dev.latchway.okhttp.LatchwayAppRegistry
 import dev.latchway.okhttp.LatchwayClient
+import dev.latchway.okhttp.LatchwayAccount
 import dev.latchway.okhttp.latchwayFeature
-import dev.latchway.playintegrity.PlayIntegrityAttestationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +49,7 @@ private object EmbeddedAccountOwner {
     lateinit var app: LatchwayApp
     lateinit var config: JSONObject
     var client: LatchwayClient? = null
+    var account: LatchwayAccount? = null
     var generation: String? = null
     var observedIdentity: String? = null
     var epoch = 0
@@ -65,16 +65,22 @@ private object EmbeddedAccountOwner {
         app = LatchwayAppRegistry.configure(context.applicationContext,
             LatchwayAppOptions(baseUrl = config.getString("baseURL").toHttpUrl(),
                 applicationId = config.getString("applicationID"), environment = config.getString("environment"),
-                identity = LatchwayIdentityAuthorityReference("latchway-chat-firebase", "https://securetoken.google.com/$project"),
+                identity = firebaseProject(project, auth.tenantId),
+                playIntegrityCloudProjectNumber = integrity,
                 keyPolicy = KeyPolicy(preferStrongBox = false, allowSoftwareBacked = false),
-                attestationPolicyId = "play-integrity:$integrity", exposeToReactNative = true),
-            name = "latchway-chat", authority = FirebaseIdentityAuthority(auth),
-            attestationProvider = PlayIntegrityAttestationProvider(context.applicationContext, integrity))
+                exposeToReactNative = true), name = "latchway-chat")
         observedIdentity = identityKey()
         auth.addAuthStateListener {
             // Native identity guards enforce immediately; this observer performs offline cleanup.
             if (identityKey() != observedIdentity) { epoch++; call?.cancel(); request?.cancel() }
             scope.launch { transitions.withLock { runCatching { reconcile() } } }
+        }
+        auth.addIdTokenListener {
+            val captured = account
+            val observedEpoch = epoch
+            scope.launch { transitions.withLock {
+                if (captured != null && observedEpoch == epoch) runCatching { captured.updateIdToken { token() } }
+            } }
         }
     }
     private fun identityKey(): String? = auth.currentUser?.let { "${it.tenantId.orEmpty()}:${it.uid}" }
@@ -88,13 +94,23 @@ private object EmbeddedAccountOwner {
         epoch++; call?.cancel(); request?.cancel()
         val captured = generation ?: app.snapshots.value.generationId
         if (captured != null) app.logout(captured)
-        client?.close(); client = null; generation = null
+        client?.close(); client = null; generation = null; account = null
     }
     suspend fun activate() {
         reconcile()
-        generation = app.activate()
+        val active = app.signIn { token() }
+        account = active
+        generation = app.snapshots.value.generationId
         client?.close()
-        client = app.makeClient()
+        client = active.makeClient()
+    }
+    private suspend fun token(): String {
+        val user = requireNotNull(auth.currentUser)
+        val identity = identityKey()
+        val observedEpoch = epoch
+        val value = requireNotNull(user.getIdToken(false).await().token)
+        check(observedEpoch == epoch && identityKey() == identity)
+        return value
     }
 }
 
@@ -133,7 +149,8 @@ class SharedNativeHostActivity : Activity() {
             screenScope.launch {
                 var previous: String? = null
                 owner.app.snapshots.collect { snapshot ->
-                    if (previous != snapshot.generationId || snapshot.state != dev.latchway.core.LatchwayAppState.ACTIVE) {
+                    if (previous != snapshot.generationId || snapshot.state in setOf(
+                        dev.latchway.core.LatchwayAppState.RETIRING, dev.latchway.core.LatchwayAppState.LOGGED_OUT)) {
                         owner.epoch++; owner.call?.cancel(); owner.request?.cancel(); output.text = ""
                     }
                     previous = snapshot.generationId

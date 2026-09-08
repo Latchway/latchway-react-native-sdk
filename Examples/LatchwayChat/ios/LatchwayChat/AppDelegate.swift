@@ -6,6 +6,9 @@ import FirebaseCore
 #if LATCHWAY_SHARED_NATIVE
 import FirebaseAuth
 import Latchway
+#if canImport(LatchwayAppAttest)
+import LatchwayAppAttest
+#endif
 #endif
 
 @main
@@ -58,7 +61,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
   private let auth = Auth.auth()
   private var app: LatchwayApp?
   private var client: LatchwayClient?
-  private var generation: UUID?
+  private var account: LatchwayAccount?
   private var authKey: String?
   private var authObserver: AuthStateDidChangeListenerHandle?
   private var transition: Task<Void, Never>?
@@ -109,22 +112,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
     config = values
     let rootGroup = team + "." + bundle
-    let selectedAuth = auth
     app = try await LatchwayApp.configure(.init(baseURL: url, applicationID: appID, environment: environment,
       rootKeychainAccessGroup: rootGroup,
-      identity: .init(name: "latchway-chat-firebase", issuer: "https://securetoken.google.com/" + project),
-      exposeToReactNative: true, legacyComponents: []), name: "latchway-chat",
-      authority: FirebaseLatchwayIdentityAuthority(projectID: project,
-        currentUser: { selectedAuth.currentUser }, userID: { $0.uid }, tenantID: { $0.tenantID },
-        identityToken: { try await $0.getIDToken() }),
-      attestationFactory: { LatchwayAppAttestProvider(rootKeychainAccessGroup: rootGroup, storageNamespace: $0) })
+      suppliedIdentity: try .firebaseProject(projectID: project),
+      exposeToReactNative: true, legacyComponents: []), name: "latchway-chat")
     authKey = identityKey()
     if let app {
       observation = Task { [weak self] in
         var previous: UUID?
         for await snapshot in await app.snapshots() {
           guard let self, !Task.isCancelled else { return }
-          if previous != snapshot.generationID || snapshot.state != .active {
+          if previous != snapshot.generationID || snapshot.state == .loggedOut || snapshot.state == .retiring {
             self.epoch += 1; self.requestTask?.cancel(); self.output.text = ""
           }
           previous = snapshot.generationID
@@ -147,16 +145,33 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     epoch += 1; requestTask?.cancel(); output.text = ""
     guard let app else { throw LatchwayLifecycleError.appNotConfigured }
     let snapshot = await app.snapshot()
-    let captured = generation ?? snapshot.generationID
-    if let captured { try await app.logout(generationID: captured) }
-    await client?.close(); client = nil; generation = nil
+    if let account { try await account.logout() }
+    else if let captured = snapshot.generationID { try await app.logout(generationID: captured) }
+    await client?.close(); client = nil; account = nil
   }
   private func activate() async throws {
     guard let app else { throw LatchwayLifecycleError.appNotConfigured }
     try await reconcile()
-    generation = try await app.activate()
-    client = try await app.makeClient()
+    let accepted = try await app.signIn { [weak self] in
+      guard let self else { throw LatchwayLifecycleError.identityUnavailable }
+      return try await self.currentIDToken()
+    }
+    account = accepted
+    client = try await accepted.makeClient()
     output.text = "Shared account active. Native and RN use this same backend."
+  }
+  private func currentIDToken() async throws -> String {
+    guard let user = auth.currentUser else { throw LatchwayLifecycleError.identityUnavailable }
+    let version = epoch, uid = user.uid
+    let token: String = try await withCheckedThrowingContinuation { continuation in
+      user.getIDTokenForcingRefresh(false) { token, error in
+        if let error { continuation.resume(throwing: error) }
+        else if let token { continuation.resume(returning: token) }
+        else { continuation.resume(throwing: LatchwayLifecycleError.identityUnavailable) }
+      }
+    }
+    guard version == epoch, auth.currentUser === user, user.uid == uid else { throw CancellationError() }
+    return token
   }
   @objc private func signIn() { login(create: false) }
   @objc private func signUp() { login(create: true) }
@@ -188,6 +203,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     guard !question.isEmpty, question.count <= 4_000 else { output.text = "Use a prompt of 1–4,000 characters."; return }
     requestTask = Task {
       do {
+        if let account {
+          try await account.updateIdToken { [weak self] in
+            guard let self else { throw LatchwayLifecycleError.identityUnavailable }
+            return try await self.currentIDToken()
+          }
+        }
         var request = URLRequest(url: url); request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": "latchway-managed", "max_tokens": 1024,

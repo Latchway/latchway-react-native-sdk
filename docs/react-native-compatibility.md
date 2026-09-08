@@ -26,6 +26,22 @@ React Native 0.82, React 19.1 and Firebase dependency locks.
 
 ## Android host settings
 
+### Version 1.2.0 setup
+
+The Android 1.1.0 SDK and RN 1.2.0 bridge compile against API
+34, with `minCompileSdk = 34` in their AAR metadata. Android native runtime
+minimum remains 23; the RN bridge runtime minimum remains 24. No Firebase,
+Play Integrity or Kotlin dependency downgrade is part of this change.
+
+The RN package pins native Android `1.1.0`. Historical native `1.0.0` and npm
+`1.1.3` artifacts still have their original API 37 constraint; upgrading the RN
+package and rebuilding the host is required to receive the new baseline.
+
+An app may still need a newer compile SDK for its React Native/Firebase/UI
+dependencies. LatchwayChat retains its own newer compile/target settings;
+this change does not lower app target SDK or
+alter Google Play publishing requirements.
+
 Enable New Architecture and Hermes in `android/gradle.properties`:
 
 ```properties
@@ -34,12 +50,12 @@ hermesEnabled=true
 react.internal.disableJavaVersionAlignment=true
 ```
 
-The native Latchway 1.0.0 artifacts require compile SDK 37 and publish Kotlin
+The native Latchway 1.1.0 artifacts require compile SDK 34 and publish Kotlin
 2.3 metadata. The minimum-version fixture uses checksum-pinned Gradle 8.13,
 Android Gradle Plugin 8.12.0, Kotlin 2.3.21, JDK 17, build tools 36.0.0 and
-NDK 27.1.12297006. It retains compile SDK 37 despite AGP's newer-SDK warning.
+NDK 27.1.12297006. It uses compile SDK 34.
 Use Android API 24 or newer as the minimum device version. The default
-React Native 0.74 template's Kotlin 1.9 / compile SDK 34 settings are not enough.
+React Native 0.74 template's Kotlin 1.9 settings are not enough.
 
 The alignment property above bypasses only the older build plugin's Kotlin-1.9-specific
 automatic target configuration. Pair it with the explicit Java 17
@@ -50,13 +66,12 @@ baseline.
 
 The RN 0.74 fixture uses the official `@react-native/gradle-plugin@0.76.9` as
 a **build-only** development dependency. The original 0.74 Gradle plugin cannot
-compile with Gradle 8.13, while older AGP cannot discover the API 37.0 SDK
-required by the published native dependencies. The newer build plugin does
+compile with Gradle 8.13. The newer build plugin does
 not upgrade the app's React Native runtime or its Codegen: those remain exactly
 0.74.0 and 0.74.81. No React Native source is patched.
 
-Use the fixture's [settings file](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.3/integration/minimum-host/android/settings.gradle)
-and [app build setup](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.3/integration/minimum-host/android/app/build.gradle) to
+Use the fixture's [settings file](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/android/settings.gradle)
+and [app build setup](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/android/app/build.gradle) to
 enable the plugin's settings-based autolinking. Remove the old
 `native_modules.gradle` apply lines; do not run both autolinking mechanisms.
 The library resolves its React Native Maven version and Codegen location from
@@ -88,7 +103,7 @@ Finalize the Java 17 compile options in `androidComponents.finalizeDsl`, as the
 root fixture does. Configuring them only when Kotlin tasks are realized can
 leave AGP's global-synthetics DEX output unregistered for Debug APK packaging.
 
-See the copyable [minimum host build settings](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.3/integration/minimum-host/android/build.gradle).
+See the copyable [minimum host build settings](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/android/build.gradle).
 Retain normal application signing and Play Integrity configuration; the minimum
 host is a compile/registration check, not a Play-distributed test application.
 
@@ -105,7 +120,7 @@ RCT_NEW_ARCH_ENABLED=1 pod install
 ```
 
 For reproducible installation, set `ENV['RCT_NEW_ARCH_ENABLED'] = '1'` in the
-Podfile as well. See the [minimum host Podfile](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.3/integration/minimum-host/ios/Podfile).
+Podfile as well. See the [minimum host Podfile](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/ios/Podfile).
 App Attest entitlements, root-private Keychain access groups and real-device
 verification remain necessary for authenticated production requests.
 
@@ -113,7 +128,7 @@ If the older host is entirely Objective-C, add a Swift file to the application
 target (an `import Foundation` file is sufficient), set Swift language version
 6 and enable `ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES`. This lets Xcode link the
 Swift compatibility libraries needed by the native pods. The fixture's Podfile
-adds its [Swift compilation unit](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.1.3/integration/minimum-host/ios/HelloWorld/SwiftRuntime.swift)
+adds its [Swift compilation unit](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/ios/HelloWorld/SwiftRuntime.swift)
 to the target. Hosts that already contain Swift do not need another dummy file.
 
 ## Verify the minimum locally
@@ -123,12 +138,12 @@ Build and pack this checkout, then run the isolated host:
 ```sh
 pnpm build
 pnpm pack --pack-destination /absolute/path/to/archives
-pnpm compatibility:minimum --tarball /absolute/path/to/archives/latchway-react-native-1.1.3.tgz --keep
+pnpm compatibility:minimum --tarball /absolute/path/to/archives/latchway-react-native-1.2.0.tgz --keep
 ```
 
 The check installs the actual archive with strict npm peer validation, asserts
 that the SDK resolves React 18.2.0 and RN 0.74.0 from the host, type-checks its
-public API, generates all 19 native methods, and bundles both platforms with
+public API, generates all 20 native methods, and bundles both platforms with
 the 0.74 Metro configuration. The RN template and native Latchway dependencies
 come from published packages, not sibling source overrides.
 
@@ -153,9 +168,8 @@ The package's existing Node 24.19+ engine requirement is unchanged.
 
 ## Verification scope
 
-The minimum host has passed strict package installation, public TypeScript API
-checking, all 19 Codegen methods, both Metro bundles, a complete arm64 Android
-Debug APK build, and an unsigned arm64 iOS device-target build with Xcode 27.
-These builds use the released native Latchway 1.0.0 dependencies. The 0.82
-baseline retains passing Android library compilation and both example bundles.
-No new physical-device attestation or gateway end-to-end run is claimed here.
+Run the checks above for the selected release and keep their output as evidence.
+Package/type/Codegen/Metro checks do not imply a native build; native builds do
+not imply physical App Attest or Play Integrity acceptance. Historical 1.1.3
+minimum-host builds used native 1.0.0; do not reuse those receipts as proof of
+the new supplied-identity API.

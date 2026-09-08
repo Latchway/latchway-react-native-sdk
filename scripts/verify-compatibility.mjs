@@ -48,8 +48,12 @@ assertEqual(requireMatch(versionSource, /SDK_VERSION = "([^"]+)"/u, "React Nativ
   compatibility.react_native.version, "React Native SDK version constant");
 assertEqual(requireMatch(versionSource, /CONTRACT_VERSION = "([^"]+)"/u, "React Native contract constant"),
   compatibility.contract.version, "React Native contract constant");
-assertEqual(Number(requireMatch(versionSource, /PROTOCOL_VERSION = (\d+)/u, "React Native protocol constant")),
-  compatibility.contract.wire_protocol, "React Native protocol constant");
+assertEqual(Number(requireMatch(versionSource, /PROTOCOL_VERSION = (\d+)/u, "legacy React Native protocol constant")),
+  2, "legacy React Native protocol constant");
+if (compatibility.contract.wire_protocol !== 3 ||
+    !versionSource.includes("[1, PROTOCOL_VERSION, 3]")) {
+  throw new Error("Shared native apps require wire 3 alongside legacy wire 2 constructors.");
+}
 
 const podspec = await readText("LatchwayReactNative.podspec");
 if (!podspec.includes('tag: "v#{spec.version}"')) {
@@ -124,9 +128,9 @@ assertEqual(requireMatch(androidSettings, /id\("com\.android\.library"\) version
   "Android consumer Gradle plugin"), compatibility.android.consumer_android_gradle_plugin,
   "Android consumer Gradle plugin");
 assertEqual(Number(requireMatch(exampleAndroidBuild, /compileSdkVersion\s*=\s*(\d+)/u,
-  "example Android compile SDK")), compatibility.android.compile_sdk, "example Android compile SDK");
-if (!/^\d+\.\d+$/u.test(compatibility.android.sdk_platform_version)) {
-  throw new Error("Android SDK platform package version must include its published minor component.");
+  "example Android compile SDK")), compatibility.android.example_compile_sdk, "example Android compile SDK");
+if (!/^\d+(?:\.\d+)?$/u.test(compatibility.android.sdk_platform_version)) {
+  throw new Error("Android SDK platform package must be an exact numeric platform name.");
 }
 assertEqual(Number(compatibility.android.sdk_platform_version.split(".")[0]),
   compatibility.android.compile_sdk, "Android SDK platform package major version");

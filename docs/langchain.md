@@ -1,6 +1,6 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.1.3` for native authenticated transport and
+Use `@latchway/react-native@1.2.0` for native authenticated transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
@@ -14,15 +14,15 @@ require downgrading the example or guarantee every third-party dependency on
 the minimum host.
 
 ```sh
-npm install --save-exact @latchway/react-native@1.1.3 @latchway/langchain@1.1.0 \
-  @latchway/client@1.0.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
+npm install --save-exact @latchway/react-native@1.2.0 @latchway/langchain@1.1.0 \
+  @latchway/client@1.1.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
 Keep the lockfile. LangChain is not a dependency of the base React Native SDK.
 The base has only two required runtime dependencies: `@latchway/client` for
 shared transport/errors and `web-streams-polyfill` for a private native-response
 stream fallback. That fallback does not replace global streams.
-The native dependencies remain the public iOS/Android SDKs 1.0.0. Normal native
+The native dependencies are iOS 1.2.0 and Android 1.1.0. Normal native
 signing, Firebase/other identity and gateway platform policy setup still applies.
 
 ## Application-owned runtime and Babel setup
@@ -91,7 +91,7 @@ Classes must still be constructed with
 
 ## Upgrading from 1.1.0
 
-For an existing 1.1.1 application, upgrade to 1.1.3 and recopy both runtime files
+For an existing 1.1.1 application, upgrade to 1.2.0 and recopy both runtime files
 linked above. The corrected probe checks exact Responses and Chat Completions
 paths; the older app-owned copy is not replaced by an npm package update.
 Do not fix a trailing-slash rejection by widening the SDK destination allowlist.
@@ -110,7 +110,7 @@ npm install --save-exact react-native-get-random-values@1.11.0 \
   react-native-url-polyfill@2.0.0 text-encoding@0.7.0
 # Required only if you use @latchway/react-native/babel:
 npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
-npm install --save-exact @latchway/react-native@1.1.3
+npm install --save-exact @latchway/react-native@1.2.0
 cd ios && pod install && cd ..
 ```
 
@@ -130,7 +130,29 @@ package, setup CLI or global fetch patch is needed.
 
 ## Create a model
 
-On gateway 1.0.3+, one directly App Attest-verified `ios` / `react_native_ios`
+For the recommended shared session API, use gateway 1.1.1 or later and follow
+[supplied identity setup](supplied-identity.md). Configure can run first from
+RN or native; neither side must bootstrap the other. Pass an ID token owned by
+your application's auth integration, then obtain `account.makeClient()`:
+
+```ts
+import {Latchway, firebaseProject} from '@latchway/react-native';
+
+const app = await Latchway.configure({
+  baseURL: 'https://gateway.example.com', applicationID: 'your-application-id',
+  environment: 'development', identity: firebaseProject({projectID: 'your-project-id'}),
+  apple: {rootKeychainAccessGroup: 'YOURTEAM.com.example.app'},
+  android: {playIntegrityCloudProjectNumber: '123456789012'},
+});
+const account = await app.signIn({idToken: applicationOwnedIdToken});
+const latchway = await account.makeClient();
+```
+
+Report refreshed tokens with `account.updateIdToken`, and call
+`account.logout()` on sign-out. Disposing a client only closes that surface.
+The metadata helper does not import Firebase or obtain a token for you.
+
+For legacy constructors on gateway 1.0.3+, one directly App Attest-verified `ios` / `react_native_ios`
 main-app root pair can share a bundle, and one directly Play Integrity-verified
 `android` / `react_native_android` app-root pair can share a package. Configure
 each platform explicitly with its own root and required attestation policy.
@@ -139,8 +161,7 @@ another quota allowance. Firebase authentication remains separate from native
 attestation. Use a Play-distributed physical Android build for real Integrity
 verification; do not replace it with a debug bypass or Firebase App Check.
 
-Create `latchway` using the ordinary SDK configuration and your current user's
-identity-token callback. Then pass that client directly—no transport wrapper:
+Pass the client directly—no transport wrapper:
 
 ```ts
 import {createLatchwayResponsesModel} from '@latchway/langchain';

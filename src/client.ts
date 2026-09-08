@@ -826,7 +826,7 @@ function parseDiagnostics(
   if (!hasOnlyKeys(value, [
     "contractVersion", "protocolVersion", "keyStorage", "attestation", "session", "installation", "server",
     "lastErrorCode",
-  ]) || value.contractVersion !== contractVersion || value.protocolVersion !== protocolVersion ||
+  ]) || (value.contractVersion !== contractVersion && (shared || value.contractVersion !== "1.0.0")) || value.protocolVersion !== protocolVersion ||
       typeof value.keyStorage !== "string" || !isRecord(value.attestation) || !isRecord(value.session) ||
       !isRecord(value.installation) || !isRecord(value.server)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native diagnostics.");
@@ -856,7 +856,7 @@ function parseDiagnostics(
   return {
     sdkVersion: SDK_VERSION,
     nativeSDKVersion,
-    contractVersion,
+    contractVersion: value.contractVersion,
     protocolVersion,
     platform,
     keyStorage: value.keyStorage,

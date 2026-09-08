@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and releases will follow Semantic
 Versioning once package publication begins.
 
-## [Unreleased]
+## [1.2.0] - 2026-09-08
+
+- Add developer-supplied `signIn`, `restore`, `currentAccount`, account-scoped
+  token updates and logout. Native and RN can configure first and join the same
+  native account without a Firebase SDK dependency or a permanent JS callback.
+- Add pure identity metadata helpers and an optional injected auth-event binding.
+  Token freshness is gateway-verified; expired identity suspends protected work.
+- Pin JavaScript client 1.1.0, iOS 1.2.0 and Android 1.1.0 to released contract
+  1.1.0. Shared apps use wire 3; legacy constructors retain wire 2 behavior.
+- Lower the Android library compile SDK and AAR minimum compile SDK to 34.
+  Host application target/compile SDK requirements remain independent.
 
 - Add native-owned named app registries, idempotent configuration, explicit
   account activation, generation-bound clients and offline local logout.
@@ -16,10 +26,10 @@ Versioning once package publication begins.
 - Migrate LatchwayChat to account-aware Firebase login/logout and add native-first
   Swift/Kotlin hosts with native chat and an embedded RN LangChain/weather surface.
   Include serialized auth transitions, explicit resume and two-account exercises.
-- Add an explicitly unreleased candidate manifest and example/test-only native
-  source resolution. Shared mode requires server contract 1.1/protocol 3 and
-  explicit host policy; historical published dependency pins are unchanged.
-  Firebase/LangChain stay optional and RN0.74/React18.2 minimum peers are retained.
+- Keep source overrides confined to explicit example/test development mode.
+  Shared mode requires server contract 1.1/protocol 3 and explicit host policy.
+  Firebase/LangChain remain application-owned; RN 0.74 / React 18.2 minimum peers
+  are retained.
 
 ## [1.1.3] - 2026-09-07
 

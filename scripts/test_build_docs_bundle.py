@@ -27,12 +27,23 @@ class DocumentationBundleTests(unittest.TestCase):
         examples = {item["name"]: item["source"] for item in config["examples"]}
         for source in (
             documents["release-notes.md"],
+            documents["quickstart/supplied-identity.md"],
+            examples["LatchwayChat shared native and React Native account integration"],
             examples["React Native physical-device application"],
             examples["OpenAI, Vercel AI, LangChain, and Anthropic consumers"],
         ):
             line_count = len((ROOT / source["file"]).read_text(encoding="utf-8").splitlines())
             self.assertEqual(source["start_line"], 1)
-            self.assertEqual(source["end_line"], line_count)
+            # Omitting the end is the builder's explicit whole-file selection;
+            # release notes must include historical entries as the file grows.
+            self.assertEqual(source.get("end_line", line_count), line_count)
+
+        legacy = documents["quickstart/create-client.tsx"]
+        legacy_lines = (ROOT / legacy["file"]).read_text(encoding="utf-8").splitlines()
+        legacy_region = legacy_lines[legacy["start_line"] - 1:legacy["end_line"]]
+        self.assertTrue(legacy_region[0].startswith("function makeClient()"))
+        self.assertEqual(legacy_region[-1], "}")
+        self.assertIn("createLatchwayClient", "\n".join(legacy_region))
 
         streaming = documents["quickstart/streaming-fetch.tsx"]
         lines = (ROOT / streaming["file"]).read_text(encoding="utf-8").splitlines()
@@ -51,11 +62,11 @@ class DocumentationBundleTests(unittest.TestCase):
             "TypeScript",
         } <= supported)
         package = "\n".join(
-            (ROOT / "package.json").read_text(encoding="utf-8").splitlines()[:54]
+            (ROOT / "package.json").read_text(encoding="utf-8").splitlines()[:70]
         )
         self.assertIn('"./testing"', package)
         self.assertIn('"./package.json"', package)
-        self.assertIn('"version": "1.0.0"', package)
+        self.assertIn('"version": "1.2.0"', package)
 
     def test_bundle_is_reproducible_self_describing_and_checksum_bound(self) -> None:
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
@@ -65,7 +76,7 @@ class DocumentationBundleTests(unittest.TestCase):
                     sys.executable, str(ROOT / "scripts/build_docs_bundle.py"),
                     "--output-dir", output, "--source-date-epoch", "0",
                 ], cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
-                archives.append(Path(output, "docs-bundle-1.0.0.tar.gz"))
+                archives.append(Path(output, "docs-bundle-1.2.0.tar.gz"))
             self.assertEqual(archives[0].read_bytes(), archives[1].read_bytes())
             with tarfile.open(archives[0], "r:gz") as archive:
                 members = archive.getmembers()
@@ -77,7 +88,7 @@ class DocumentationBundleTests(unittest.TestCase):
                 }
             manifest = json.loads(payloads["bundle-manifest.json"])
             self.assertEqual(manifest["schema_version"], MODULE.SCHEMA)
-            self.assertEqual(manifest["release"]["version"], "1.0.0")
+            self.assertEqual(manifest["release"]["version"], "1.2.0")
             self.assertEqual({item["kind"] for item in manifest["files"]} >= {
                 "quickstart", "framework", "release_notes", "supported_versions",
                 "public_symbols", "errors", "examples",
@@ -124,16 +135,29 @@ class DocumentationBundleTests(unittest.TestCase):
                 "NativeLatchwayModule", "configure", "configureComponent", "startRequest",
                 "readResponseChunk", "closeResponse", "rootComponentDiagnostics", "revoke",
                 "revokeFamily", "revokeFamilyWithComponents", "cancel",
+                "Latchway", "LatchwayApp", "LatchwayAccount", "LatchwayTokenInput",
+                "LatchwayIdentityConfiguration", "LatchwayAuthEvent", "LatchwayAuthBinding",
+                "signIn", "restore", "currentAccount", "makeClient", "updateIdToken", "logout",
+                "firebaseProject", "jwtIdentity", "bindLatchwayAuth",
+                "LatchwayLifecycleError", "LatchwayLifecycleCode",
             } <= symbols)
             self.assertTrue({
                 "DefaultLatchwayClient", "DefaultLatchwayComponentClient", "RuntimeConfiguration",
                 "RuntimeComponentConfiguration", "NativeLease", "Spec", "acquire",
                 "acquireComponent",
+                "validateIdentityConfiguration", "identityOperation", "claimIdentityBinding",
+                "releaseIdentityBinding", "AppDescriptor", "IdentityOwner",
             }.isdisjoint(symbols))
             self.assertTrue({row["source"]["file"] for row in catalogs["public-symbols.json"]} <= {
                 "src/index.ts", "src/types.ts", "src/version.ts", "src/testing.ts",
                 "src/native/NativeLatchway.ts",
+                "src/app.ts", "src/identity.ts", "src/errors.ts",
             })
+            supplied = payloads["quickstart/supplied-identity.md"].decode("utf-8")
+            for marker in ("Latchway.configure", "app.signIn", "account.updateIdToken", "account.logout",
+                           "bindLatchwayAuth", "identity_refresh_required"):
+                self.assertIn(marker, supplied)
+            self.assertIn("identity_refresh_required", {row["name"] for row in catalogs["errors.json"]})
             framework = payloads["frameworks/react-native-consumers.ts"].decode("utf-8")
             for marker in (
                 "export interface FrameworkFeatureBindings",
@@ -160,7 +184,7 @@ class DocumentationBundleTests(unittest.TestCase):
                         info.size = len(payload)
                         archive.addfile(info, io.BytesIO(payload))
             with self.assertRaises(MODULE.BundleError):
-                MODULE.verify_archive(malicious, "docs-bundle-1.0.0")
+                MODULE.verify_archive(malicious, "docs-bundle-1.2.0")
 
     def test_provenance_commit_must_equal_the_checked_out_source(self) -> None:
         with tempfile.TemporaryDirectory() as output:

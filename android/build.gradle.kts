@@ -12,7 +12,7 @@ kotlin {
 }
 
 group = "dev.latchway"
-version = "1.0.0"
+version = "1.2.0"
 
 // Resolve from the consuming build, not this library's node_modules. npm and
 // pnpm can hoist React Native and Codegen; the host owns both versions.
@@ -42,11 +42,13 @@ react {
 
 android {
     namespace = "dev.latchway.reactnative"
-    // The exact native 1.0.0 AAR metadata requires API 37 consumers.
-    compileSdk = 37
+    // The shared-native source candidate is compiled against API 34. Hosts
+    // may select a newer API for React Native or their other dependencies.
+    compileSdk = 34
 
     defaultConfig {
         minSdk = 24
+        aarMetadata { minCompileSdk = 34 }
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -72,8 +74,8 @@ dependencies {
     // Also use the host version in standalone library builds, where no app
     // plugin is present to align react-android automatically.
     implementation("com.facebook.react:react-android:$hostReactNativeVersion")
-    implementation("dev.latchway:latchway-okhttp:1.0.0")
-    implementation("dev.latchway:latchway-play-integrity:1.0.0")
+    implementation("dev.latchway:latchway-okhttp:1.1.0")
+    implementation("dev.latchway:latchway-play-integrity:1.1.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

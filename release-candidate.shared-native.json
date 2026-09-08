@@ -1,20 +1,23 @@
 {
-  "status": "unreleased-source-candidate",
-  "publishable": false,
+  "status": "release-line",
   "contract": "1.1.0",
   "wire_protocol": 3,
-  "candidate_versions": {
-    "server": "1.1.0-dev",
-    "javascript": "1.1.0-dev",
-    "ios": "1.2.0-dev",
-    "android": "1.1.0-dev",
-    "react_native": "1.2.0-dev"
+  "release_versions": {
+    "server": "1.1.1",
+    "javascript": "1.1.0",
+    "ios": "1.2.0",
+    "android": "1.1.0",
+    "react_native": "1.2.0"
   },
   "contract_lock": "contract.shared-native.lock.json",
-  "source_resolution": "Use checked-out sibling repositories only in explicit local development builds. No published artifact is claimed to contain this API.",
-  "release_sequence": [
-    "Freeze the tested server contract and its actual immutable release identity.",
-    "Publish tested native packages and JavaScript artifacts, then record their actual source commits and registry evidence.",
-    "Replace the RN native pins and released contract lock with those verified artifacts before publishing RN."
-  ]
+  "android_source_build": {
+    "compile_sdk": 34,
+    "min_compile_sdk": 34,
+    "minimum_sdk": 24,
+    "native_version": "1.1.0",
+    "published_dependency_upgrade_required": false,
+    "scope": "Library source baseline only. App compile/target SDK policies and other dependencies may require a newer SDK."
+  },
+  "source_resolution": "Normal builds use exact registry dependencies. Sibling source overrides remain explicit development-only diagnostics, not publication evidence.",
+  "release_evidence": "Consult the public registry records and immutable GitHub release tags. This metadata alone does not prove publication or physical-device acceptance."
 }
