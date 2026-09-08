@@ -20,6 +20,10 @@ if linkage != nil
 end
 
 target 'LatchwayChat' do
+  if ENV['LATCHWAY_SHARED_NATIVE_SOURCE'] == '1'
+    pod 'Latchway/AppAttest', :path => '../../../../latchway-ios-sdk'
+    pod 'Latchway/FirebaseAuth', :path => '../../../../latchway-ios-sdk'
+  end
   config = use_native_modules!
 
   use_react_native!(
@@ -40,6 +44,16 @@ target 'LatchwayChat' do
         build.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = min_ios_version_supported
         # Xcode 27 diagnoses fmt 11's consteval paths under C++20.
         build.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17' if target.name == 'fmt'
+      end
+    end
+    if ENV['LATCHWAY_SHARED_NATIVE_SOURCE'] == '1'
+      installer.aggregate_targets.map(&:user_project).uniq.each do |project|
+        project.native_targets.each do |target|
+          target.build_configurations.each do |build|
+            build.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS'] = '$(inherited) LATCHWAY_SHARED_NATIVE'
+          end
+        end
+        project.save
       end
     end
   end

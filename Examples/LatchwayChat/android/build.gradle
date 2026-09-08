@@ -20,3 +20,21 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+if (System.getenv('LATCHWAY_SHARED_NATIVE_SOURCE') == '1') {
+    def nativeRepository = System.getenv('LATCHWAY_NATIVE_REPOSITORY')
+    if (!nativeRepository) throw new GradleException('Set LATCHWAY_NATIVE_REPOSITORY to the tested local native publication repository.')
+    allprojects {
+        configurations.configureEach {
+            resolutionStrategy.eachDependency { details ->
+                if (details.requested.group == 'dev.latchway' && details.requested.name in ['latchway-core', 'latchway-okhttp', 'latchway-play-integrity', 'latchway-firebase-auth', 'latchway-bom']) details.useVersion('1.1.0-dev')
+            }
+        }
+        repositories {
+            exclusiveContent {
+                forRepository { maven { url = uri(nativeRepository) } }
+                filter { includeGroup('dev.latchway') }
+            }
+        }
+    }
+}

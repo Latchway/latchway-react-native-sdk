@@ -45,6 +45,7 @@ const REQUEST_ID = "req_framework_case_123";
  * real bridge accepts and pull-streams fixture response bytes back to JS.
  */
 export class NativeFrameworkGateway implements NativeLatchwayModule {
+  async appCommand(): Promise<string> { throw new Error("Shared apps are outside this legacy fixture"); }
   readonly requests: CapturedNativeRequest[] = [];
   readonly cancelCalls: string[] = [];
   readonly closeCalls: string[] = [];

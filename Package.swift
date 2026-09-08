@@ -1,6 +1,12 @@
 // swift-tools-version: 6.2
 
 import PackageDescription
+import Foundation
+
+// This manifest is a development-only bridge test harness (not npm payload).
+let nativeDevelopmentPath = ProcessInfo.processInfo.environment["LATCHWAY_IOS_SDK_PATH"]
+let nativeDependency: Package.Dependency = nativeDevelopmentPath.map { .package(path: $0) }
+    ?? .package(url: "https://github.com/Latchway/latchway-ios-sdk.git", revision: "b5104113158fda509e244631eb4939acf45157a3")
 
 let package = Package(
     name: "LatchwayReactNativeBridgeConformance",
@@ -9,10 +15,7 @@ let package = Package(
         .macOS(.v12),
     ],
     dependencies: [
-        .package(
-            url: "https://github.com/Latchway/latchway-ios-sdk.git",
-            revision: "b5104113158fda509e244631eb4939acf45157a3"
-        ),
+        nativeDependency,
     ],
     targets: [
         .target(

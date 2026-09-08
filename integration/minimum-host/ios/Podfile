@@ -21,7 +21,9 @@ target 'HelloWorld' do
         build.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
       end
     end
-    project = Xcodeproj::Project.open('HelloWorld.xcodeproj')
+    # Edit CocoaPods' own project object. Reopening/saving another object here
+    # is overwritten when CocoaPods later persists its cached project.
+    project = installer.aggregate_targets.find { |target| target.user_project.path.basename.to_s == 'HelloWorld.xcodeproj' }.user_project
     app = project.targets.find { |target| target.name == 'HelloWorld' }
     group = project.main_group.find_subpath('HelloWorld', false)
     file = group.files.find { |item| File.basename(item.path) == 'SwiftRuntime.swift' } || group.new_file('HelloWorld/SwiftRuntime.swift')

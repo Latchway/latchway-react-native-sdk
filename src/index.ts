@@ -9,6 +9,10 @@ import type {
 } from "./types.js";
 
 export { errorFromResponse, LatchwayError } from "@latchway/client";
+export { LatchwayLifecycleError } from "./errors.js";
+export type { LatchwayLifecycleCode } from "./errors.js";
+export { Latchway, LatchwayApp, configureLatchwayApp, getLatchwayApp } from "./app.js";
+export type { LatchwayAppOptions, LatchwayAppSnapshot, LatchwayIdentitySnapshot } from "./app.js";
 export {
   CONTRACT_VERSION,
   PROTOCOL_VERSION,

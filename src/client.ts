@@ -4,7 +4,7 @@ import type { RuntimeConfiguration } from "./config.js";
 import { encodeIOSComponentDescriptor, encodeIOSComponentDescriptors } from "./config.js";
 import { acquire, type NativeLease } from "./coordinator.js";
 import { parseComponentDiagnostics } from "./component-client.js";
-import { abortError, fromNativeError } from "./errors.js";
+import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
 import { assertNoCredentialFields } from "./native-output.js";
 import type {
   LatchwayClient,
@@ -76,6 +76,7 @@ const forbiddenCredentialHeaders = new Set([
   "x-latchway-request-id",
   "x-latchway-sdk",
   "x-latchway-sdk-version",
+  "x-latchway-caller",
 ]);
 
 const forbiddenCredentialQueryNames = new Set([
@@ -136,6 +137,7 @@ const safeResponseHeaderNames = new Set([
 ]);
 
 const nativeControlledHeaders = new Set([
+  "x-latchway-caller",
   "x-latchway-feature",
   "x-latchway-framework",
   "x-latchway-framework-version",
@@ -164,10 +166,12 @@ export class DefaultLatchwayClient implements LatchwayClient {
   readonly ready: Promise<void>;
   private readonly lease: Promise<NativeLease>;
   private disposed = false;
+  private retired = false;
+  private logoutComplete = false;
 
-  constructor(private readonly config: RuntimeConfiguration) {
-    this.gatewayURL = config.baseURL.origin;
-    this.lease = acquire(config);
+  constructor(private readonly config: RuntimeConfiguration, lease?: Promise<NativeLease>) {
+    this.gatewayURL = config.baseURL.href.replace(/\/$/u, "");
+    this.lease = lease ?? acquire(config);
     this.ready = this.lease.then(async (lease) => { await lease.ready; });
   }
 
@@ -200,10 +204,10 @@ export class DefaultLatchwayClient implements LatchwayClient {
     }
 
     const operationID = makeOperationID();
-    const identityToken = await token(this.config.getIdentityToken, signal);
+    const identityToken = await this.identityForOperation(signal);
     const start = lease.module.startRequest(lease.clientID, operationID, identityToken, requestJSON);
     const observedStart = start.then(async (value) => {
-      if (signal.aborted) {
+      if (signal.aborted || this.disposed || this.retired) {
         const responseID = recoverResponseID(value);
         if (responseID !== undefined) await ignoreFailure(lease.module.closeResponse(lease.clientID, responseID));
       }
@@ -258,7 +262,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     const compatibility = await lease.ready;
     const encoded = await this.nativeString("diagnostics");
-    return parseDiagnostics(encoded, compatibility.platform, compatibility.nativeSDKVersion);
+    return parseDiagnostics(encoded, compatibility.platform, compatibility.nativeSDKVersion, this.config.nativeIdentityAuthority === true);
   }
 
   async refresh(): Promise<void> {
@@ -341,6 +345,26 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await lease.release();
   }
 
+  async logout(): Promise<void> {
+    if (this.logoutComplete) return;
+    if (this.disposed) throw new LatchwayLifecycleError("client_disposed", "This Latchway client has been disposed.");
+    this.retired = true;
+    const lease = await this.lease;
+    await lease.ready;
+    if (typeof lease.module.appCommand !== "function") {
+      throw new LatchwayLifecycleError("native_version_incompatible", "Account logout requires the shared native app SDK.");
+    }
+    await lease.module.appCommand(JSON.stringify({ operation: "clientLogout", clientID: lease.clientID }))
+      .catch((error: unknown) => { throw fromNativeError(error); });
+    this.logoutComplete = true;
+  }
+
+  private async identityForOperation(signal?: AbortSignal): Promise<string> {
+    const value = this.config.nativeIdentityAuthority ? "" : await token(this.config.getIdentityToken, signal);
+    this.assertActive();
+    return value;
+  }
+
   private async nativeString(
     method: "quota" | "diagnostics",
     signal?: AbortSignal,
@@ -349,7 +373,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await token(this.config.getIdentityToken, signal);
+    const identityToken = await this.identityForOperation(signal);
     const operation = method === "quota"
       ? lease.module.quota(lease.clientID, operationID, identityToken, argument ?? "")
       : lease.module.diagnostics(lease.clientID, operationID, identityToken);
@@ -360,7 +384,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await token(this.config.getIdentityToken, signal);
+    const identityToken = await this.identityForOperation(signal);
     const operation = method === "refresh"
       ? lease.module.refresh(lease.clientID, operationID, identityToken)
       : method === "revoke"
@@ -377,7 +401,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await token(this.config.getIdentityToken, signal);
+    const identityToken = await this.identityForOperation(signal);
     const operation = method === "prepare"
       ? lease.module.prepareComponents(lease.clientID, operationID, identityToken, encodedDescriptor)
       : method === "replace"
@@ -423,6 +447,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
   }
 
   private assertActive(): void {
+    if (this.retired) throw new LatchwayLifecycleError("client_logged_out", "This account-bound client has been logged out.");
     if (this.disposed) {
       throw new LatchwayError("client_configuration_invalid", "This Latchway client has been disposed.");
     }
@@ -792,13 +817,16 @@ function parseDiagnostics(
   encoded: string,
   platform: "react_native_ios" | "react_native_android",
   nativeSDKVersion: string,
+  shared = false,
 ): ReactNativeDiagnostics {
+  const contractVersion = shared ? "1.1.0" : CONTRACT_VERSION;
+  const protocolVersion = shared ? 3 : PROTOCOL_VERSION;
   const value = parseRecord(encoded, "diagnostics");
   assertNoCredentialFields(value);
   if (!hasOnlyKeys(value, [
     "contractVersion", "protocolVersion", "keyStorage", "attestation", "session", "installation", "server",
     "lastErrorCode",
-  ]) || value.contractVersion !== CONTRACT_VERSION || value.protocolVersion !== PROTOCOL_VERSION ||
+  ]) || value.contractVersion !== contractVersion || value.protocolVersion !== protocolVersion ||
       typeof value.keyStorage !== "string" || !isRecord(value.attestation) || !isRecord(value.session) ||
       !isRecord(value.installation) || !isRecord(value.server)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native diagnostics.");
@@ -828,8 +856,8 @@ function parseDiagnostics(
   return {
     sdkVersion: SDK_VERSION,
     nativeSDKVersion,
-    contractVersion: CONTRACT_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
+    contractVersion,
+    protocolVersion,
     platform,
     keyStorage: value.keyStorage,
     attestation: {

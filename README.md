@@ -1,5 +1,8 @@
 # Latchway React Native SDK
 
+Development source also contains the unreleased [shared native app APIs](docs/shared-native-apps.md).
+They need updated native dependencies and server policy; the published versions below do not contain them.
+
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
 Version 1.1.3 supports a minimum host of React Native 0.74 / React 18.2 with

@@ -1239,6 +1239,7 @@ function decodeBase64(value: string | null | undefined): string | undefined {
 }
 
 class FakeNativeModule {
+  async appCommand(): Promise<string> { throw new Error("Shared apps are outside this legacy fixture"); }
   configureCalls = 0;
   disposeCalls = 0;
   refreshCalls = 0;

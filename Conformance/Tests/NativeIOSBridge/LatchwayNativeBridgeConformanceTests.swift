@@ -111,6 +111,52 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
+    func testLegacyComponentInventoryDoesNotRequireResupplyingInheritedRootCopyGroups() throws {
+        let component = #"{"definitionID":"intent","kind":"app_intent_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
+        // This is the exact decoder used by configure when legacy root-copy
+        // groups are omitted. The native registry owns immutable inheritance.
+        let inventory = try NativeHostComponentInput.decodeLegacyInventory("[\(component)]")
+        XCTAssertEqual(inventory.map(\.keychainAccessGroup), ["ABCDE12345.dev.latchway.shared"])
+        XCTAssertEqual(try NativeHostComponentInput.decodeLegacyInventory("[]"), [])
+        // Current provisioning still requires explicit native-authorized groups.
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeMany("[\(component)]", sharedKeychainAccessGroups: []))
+        XCTAssertEqual(try NativeHostComponentInput.decodeMany("[\(component)]",
+            sharedKeychainAccessGroups: ["ABCDE12345.dev.latchway.shared"]), inventory)
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeLegacyInventory("[\(component),\(component)]"))
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeLegacyInventory(
+            "[\(component.replacingOccurrences(of: "ABCDE12345.dev.latchway.shared", with: "*"))]"))
+    }
+
+    func testDisposingComponentAwaitsItsLeaseCloseAndLeavesRootUsable() async throws {
+        let native = RecordingNativeClient()
+        let component = RecordingNativeComponent()
+        let bridge = LatchwayNativeBridge(makeClient: { _ in native }, makeComponent: { _, _ in component })
+        _ = try await configure(bridge)
+        let componentJSON = #"{"definitionID":"action","kind":"action_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
+        let configuration = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","appVersion":"1.0.0","sdkVersion":"1.0.0","contractVersion":"1.0.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":["ABCDE12345.dev.latchway.shared"],"softwareKeyFallbackPolicy":"allow"}}"#
+        _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            bridge.configureComponent(clientID: "child", configurationJSON: configuration, componentJSON: componentJSON,
+                resolve: { continuation.resume(returning: $0) },
+                reject: { code, message, error in continuation.resume(throwing: BridgeFailure(code: code, message: message, error: error)) })
+        }
+        try await dispose(bridge, clientID: "child")
+        let count = await component.closeCount()
+        XCTAssertEqual(count, 1)
+        try await dispose(bridge, clientID: "child")
+        let repeated = await component.closeCount()
+        XCTAssertEqual(repeated, 1)
+        _ = try await startRequest(bridge, identityToken: "root-still-active", requestJSON: "{}")
+        let events = await native.events()
+        XCTAssertEqual(events, [.start(identityToken: "root-still-active", requestJSON: "{}")])
+    }
+
+    private func dispose(_ bridge: LatchwayNativeBridge, clientID: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            bridge.dispose(clientID: clientID, resolve: { continuation.resume() },
+                reject: { code, message, error in continuation.resume(throwing: BridgeFailure(code: code, message: message, error: error)) })
+        }
+    }
+
     private func configure(_ bridge: LatchwayNativeBridge) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             bridge.configure(
@@ -205,6 +251,7 @@ private actor RecordingNativeClient: NativeClientOperating {
         case refresh(identityToken: String)
         case revokeFamily(identityToken: String)
         case revokeComponent(identityToken: String, componentJSON: String)
+        case close
     }
 
     static let responseMetadata = #"{"responseID":"rsp_fixture","status":200,"statusText":"","headers":[]}"#
@@ -223,7 +270,7 @@ private actor RecordingNativeClient: NativeClientOperating {
     }
 
     func closeResponse(responseID _: String) async {}
-    func close() async {}
+    func close() async { recordedEvents.append(.close) }
     func quota(identityToken _: String, feature _: String) async throws -> String { "{}" }
     func diagnostics(identityToken _: String) async throws -> String { "{}" }
 
@@ -246,4 +293,12 @@ private actor RecordingNativeClient: NativeClientOperating {
     }
 
     func revokeFamily(identityToken _: String, encoded _: String) async throws {}
+}
+
+private actor RecordingNativeComponent: NativeComponentOperating {
+    private var closed = 0
+    func establishDirectAttestation() async throws {}
+    func diagnostics() async throws -> String { "{}" }
+    func close() async { closed += 1 }
+    func closeCount() -> Int { closed }
 }

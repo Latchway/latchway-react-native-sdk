@@ -14,6 +14,7 @@ import {
 } from "./version.js";
 
 export interface RuntimeConfiguration {
+  nativeIdentityAuthority?: boolean;
   baseURL: URL;
   applicationID: string;
   environment: string;
@@ -108,7 +109,7 @@ export function configure(options: LatchwayOptions): RuntimeConfiguration {
     appleSharedKeychainAccessGroups: Array.from(legacySharedKeychainAccessGroups),
     nativeJSON,
     fingerprint: nativeJSON,
-    scope: `${baseURL.origin}|${applicationID}|${environment}`,
+    scope: `${baseURL.href}|${applicationID}|${environment}`,
   };
 }
 

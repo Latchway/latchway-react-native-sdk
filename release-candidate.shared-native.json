@@ -1,0 +1,20 @@
+{
+  "status": "unreleased-source-candidate",
+  "publishable": false,
+  "contract": "1.1.0",
+  "wire_protocol": 3,
+  "candidate_versions": {
+    "server": "1.1.0-dev",
+    "javascript": "1.1.0-dev",
+    "ios": "1.2.0-dev",
+    "android": "1.1.0-dev",
+    "react_native": "1.2.0-dev"
+  },
+  "contract_lock": "contract.shared-native.lock.json",
+  "source_resolution": "Use checked-out sibling repositories only in explicit local development builds. No published artifact is claimed to contain this API.",
+  "release_sequence": [
+    "Freeze the tested server contract and its actual immutable release identity.",
+    "Publish tested native packages and JavaScript artifacts, then record their actual source commits and registry evidence.",
+    "Replace the RN native pins and released contract lock with those verified artifacts before publishing RN."
+  ]
+}

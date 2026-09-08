@@ -75,8 +75,8 @@ export interface QuotaSnapshot {
 export interface ReactNativeDiagnostics {
   sdkVersion: string;
   nativeSDKVersion: string;
-  contractVersion: "1.0.0";
-  protocolVersion: 2;
+  contractVersion: "1.0.0" | "1.1.0";
+  protocolVersion: 2 | 3;
   platform: ReactNativePlatform;
   keyStorage: string;
   attestation: {
@@ -204,6 +204,8 @@ export interface LatchwayComponentClient {
 }
 
 export interface LatchwayClient {
+  /** Offline account retirement. Requires a client created by a native-owned LatchwayApp. */
+  logout(): Promise<void>;
   /** Canonical gateway origin for framework clients that require an explicit base URL. */
   readonly gatewayURL: string;
   /** Resolves after the native runtime proves contract compatibility. */

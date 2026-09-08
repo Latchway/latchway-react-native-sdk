@@ -13,6 +13,50 @@ const compile = (name) => ts.transpileModule(
 ).outputText;
 const evaluate = (code, context) => runInNewContext(`(function () { ${code}\n })();`, context);
 
+test("lazy enforcing lookup escapes Metro's swallowed module-factory error without fallback", () => {
+  const original = new Error("fixture-native-registration-failed");
+  const fatal = [];
+  let lookups = 0;
+  let result;
+  const context = {
+    __DEV__: false, __METRO_GLOBAL_PREFIX__: "", console,
+    ErrorUtils: {reportFatalError: error => fatal.push(error)},
+    registry: {getEnforcing: name => {
+      assert.equal(name, "NativeLatchway");
+      lookups++;
+      if (result === undefined) throw original;
+      return result;
+    }},
+  };
+  const metro = readFileSync(require.resolve("metro-runtime/src/polyfills/require.js"), "utf8");
+  const spec = compile("native/NativeLatchway");
+  const resolver = compile("native/resolve-native-module");
+  const run = code => runInNewContext(code, context);
+  run(`global = globalThis; ${metro}
+    __d(function(global, r, id, ia, module) {
+      module.exports = {TurboModuleRegistry: global.registry};
+    }, 42, []);
+    __d(function(global, r, id, ia, module, exports) {
+      const require = name => { if (name !== "react-native") throw new Error("Unexpected import"); return r(42); };
+      ${spec}
+    }, 1, []);
+    __d(function(global, r, id, ia, module, exports) {
+      const require = name => { if (name !== "react-native") throw new Error("Unexpected import"); return r(42); };
+      ${resolver}
+    }, 2, []);`);
+  assert.equal(run("__r.importAll(1).default"), undefined);
+  assert.deepEqual(fatal, [original]);
+  assert.equal(lookups, 1);
+  const loaded = run("__r.importAll(2)");
+  assert.equal(lookups, 1, "resolver import must not construct a native module");
+  assert.throws(() => loaded.resolveNativeModule(), error => error === original);
+  assert.equal(lookups, 2);
+  assert.equal(fatal.length, 1, "lookup error reaches the caller, not Metro ErrorUtils");
+  result = {configure() {}};
+  assert.equal(loaded.resolveNativeModule(), result);
+  assert.equal(lookups, 3, "a new explicit lookup is possible without retry/fallback");
+});
+
 // Isolated VM fixtures model missing Hermes globals; no native security mock
 // participates in production. Symbol must initialize before stream evaluation.
 function runtime(existing = {}, appOwned = false) {

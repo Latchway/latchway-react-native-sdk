@@ -2,6 +2,7 @@ import type { TurboModule } from "react-native";
 import { TurboModuleRegistry } from "react-native";
 
 export interface Spec extends TurboModule {
+  appCommand(commandJSON: string): Promise<string>;
   configure(clientID: string, configurationJSON: string): Promise<string>;
   configureComponent(
     clientID: string,

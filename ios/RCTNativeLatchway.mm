@@ -11,6 +11,12 @@
 
 RCT_EXPORT_MODULE(NativeLatchway)
 
+- (void)appCommand:(NSString *)commandJSON
+           resolve:(RCTPromiseResolveBlock)resolve
+            reject:(RCTPromiseRejectBlock)reject {
+  [_bridge appCommandWithJSON:commandJSON resolve:resolve reject:reject];
+}
+
 - (instancetype)init {
   if ((self = [super init])) {
     _bridge = [LatchwayNativeBridge new];

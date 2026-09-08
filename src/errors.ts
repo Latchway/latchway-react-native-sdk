@@ -3,6 +3,25 @@ import type { LatchwayErrorCode } from "@latchway/client";
 import { isCanonicalRequestID } from "./request-id.js";
 import { assertNoCredentialFields } from "./native-output.js";
 
+export type LatchwayLifecycleCode = "app_not_configured" | "configuration_conflict" |
+  "identity_authority_required" | "identity_unavailable" | "account_changed" |
+  "client_logged_out" | "cleanup_required" | "client_disposed" | "native_version_incompatible";
+
+const lifecycleCodes: ReadonlySet<string> = new Set([
+  "app_not_configured", "configuration_conflict", "identity_authority_required", "identity_unavailable",
+  "account_changed", "client_logged_out", "cleanup_required", "client_disposed", "native_version_incompatible",
+]);
+
+/** Local native lifecycle failure, distinct from a gateway HTTP problem. */
+export class LatchwayLifecycleError extends Error {
+  readonly code: LatchwayLifecycleCode;
+  constructor(code: LatchwayLifecycleCode, message: string = code) {
+    super(message);
+    this.name = "LatchwayLifecycleError";
+    this.code = code;
+  }
+}
+
 const knownCodeMap = {
   request_invalid: true,
   identity_token_missing: true,
@@ -102,6 +121,9 @@ export function fromNativeError(value: unknown): Error {
   const record = isRecord(value) ? value : {};
   const userInfo = isRecord(record.userInfo) ? record.userInfo : {};
   const rawCode = firstString(record.code, userInfo.code);
+  if (rawCode !== undefined && lifecycleCodes.has(rawCode)) {
+    return new LatchwayLifecycleError(rawCode as LatchwayLifecycleCode);
+  }
   const mapped = rawCode === undefined
     ? "internal_error"
     : localCodeMap[rawCode] ?? (knownCodes.has(rawCode)

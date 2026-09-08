@@ -7,6 +7,20 @@ Versioning once package publication begins.
 
 ## [Unreleased]
 
+- Add native-owned named app registries, idempotent configuration, explicit
+  account activation, generation-bound clients and offline local logout.
+  Matching native/RN setup shares the actual account session and never replaces
+  its identity owner. Deliberate provider transfer uses a captured owner ID.
+- Fence retired handles, late identity/stream responses and stale observation
+  snapshots. Closing a screen or disposing one lease does not log out siblings.
+- Migrate LatchwayChat to account-aware Firebase login/logout and add native-first
+  Swift/Kotlin hosts with native chat and an embedded RN LangChain/weather surface.
+  Include serialized auth transitions, explicit resume and two-account exercises.
+- Add an explicitly unreleased candidate manifest and example/test-only native
+  source resolution. Shared mode requires server contract 1.1/protocol 3 and
+  explicit host policy; historical published dependency pins are unchanged.
+  Firebase/LangChain stay optional and RN0.74/React18.2 minimum peers are retained.
+
 ## [1.1.3] - 2026-09-07
 
 ### Changed

@@ -3,6 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
+    "prepare:shared": "node scripts/prepare-shared-development.cjs",
+    "verify:shared": "node scripts/verify-shared-development.cjs",
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint App.tsx src __tests__ --ext .ts,.tsx,.js",

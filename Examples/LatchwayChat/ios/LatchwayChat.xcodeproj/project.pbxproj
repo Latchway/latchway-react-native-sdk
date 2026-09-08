@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		3BFC03770D00100000000001 /* SharedNativeConfig.json in Resources */ = {isa = PBXBuildFile; fileRef = 3BFC03770D00100000000002 /* SharedNativeConfig.json */; };
 		611EBA52FC14E9E03075DE1E /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = DCC1D9B9124275928A887CDB /* GoogleService-Info.plist */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		7B2EB28025C298DBEF5C353D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
@@ -23,6 +24,7 @@
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = LatchwayChat/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2DF9EAD815DCFCC152FCBCD5 /* Proof.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = Proof.m; path = LatchwayChat/Proof.m; sourceTree = "<group>"; };
 		3B4392A12AC88292D35C810B /* Pods-LatchwayChat.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LatchwayChat.debug.xcconfig"; path = "Target Support Files/Pods-LatchwayChat/Pods-LatchwayChat.debug.xcconfig"; sourceTree = "<group>"; };
+		3BFC03770D00100000000002 /* SharedNativeConfig.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = LatchwayChat/SharedNativeConfig.json; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-LatchwayChat.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LatchwayChat.release.xcconfig"; path = "Target Support Files/Pods-LatchwayChat/Pods-LatchwayChat.release.xcconfig"; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = LatchwayChat/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = LatchwayChat/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -48,6 +50,7 @@
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
+				3BFC03770D00100000000002 /* SharedNativeConfig.json */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -166,6 +169,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
+				3BFC03770D00100000000001 /* SharedNativeConfig.json in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				611EBA52FC14E9E03075DE1E /* GoogleService-Info.plist in Resources */,
 				7B2EB28025C298DBEF5C353D /* PrivacyInfo.xcprivacy in Resources */,
@@ -301,6 +305,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.latchway;
 				PRODUCT_NAME = LatchwayChat;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LATCHWAY_SHARED_NATIVE";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -332,6 +337,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.latchway;
 				PRODUCT_NAME = LatchwayChat;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) LATCHWAY_SHARED_NATIVE";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};

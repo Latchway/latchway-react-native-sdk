@@ -1,0 +1,15 @@
+{
+  "contract_version": "1.1.0",
+  "wire_protocol": 3,
+  "status": "draft",
+  "core_release": null,
+  "core_base_commit": "132ad9acfec67387684518bf05303aeec5d0e2e1",
+  "bundle_sha256": "2641510c65ef687db4ece266f7afb1f761b98c02be60247e49697ca9c6b91705",
+  "minimum_server_version": "1.1.0",
+  "maximum_tested_server_version": "1.1.0-dev",
+  "files": {
+    "test/fixtures/contract/shared-native/protocol-version.json": "637099445e79ec5431f34889eb4d49b2c0d011a0c4e70b688b7a44857f4b2cc5",
+    "test/fixtures/contract/shared-native/shared-native-v3.json": "9e05184dd42c8b747cd93bd93c9cc0bb25c0cfcd856c4df728ba6e467c76ae7a",
+    "test/fixtures/contract/shared-native/sdk-error-codes.yaml": "b1c40067048219b8ccb9fd02bba17f6aaba3a0d3ed073e67d08764f9c1f43704"
+  }
+}

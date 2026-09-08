@@ -1,5 +1,13 @@
 import {diagnosticLocation, errorLocation, knownFailure} from '../src/diagnostic';
 
+test('classifies native bridge failures without persisting exception messages', () => {
+  expect(knownFailure(new TypeError("Cannot read property 'appCommand' of undefined"))).toBe('native_bridge_undefined');
+  expect(knownFailure(new TypeError("Cannot read properties of null (reading 'appCommand')"))).toBe('native_bridge_null');
+  expect(knownFailure(new TypeError('Exception in HostObject::get with private payload'))).toBe('native_bridge_host_object_failure');
+  expect(knownFailure(new TypeError('private upstream message'))).toBeUndefined();
+  expect(knownFailure(new TypeError("Cannot read property 'appCommand' of undefined: private payload"))).toBeUndefined();
+});
+
 test('diagnostics retain code locations but never exception text or source URLs', () => {
   const error = new Error('secret-message');
   error.stack = 'Error: secret-message\nprovider response: hidden\n' +

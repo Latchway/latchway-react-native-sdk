@@ -14,6 +14,18 @@ pluginManagement {
 
 val latchwayNativeRepository = providers.gradleProperty("latchwayNativeRepository").orNull
     ?: providers.environmentVariable("LATCHWAY_NATIVE_REPOSITORY").orNull
+val latchwayNativeVersion = providers.environmentVariable("LATCHWAY_NATIVE_VERSION").orNull
+if (latchwayNativeVersion != null) {
+    require(latchwayNativeRepository != null) { "A native development version requires an explicit local repository." }
+    require(Regex("[0-9]+\\.[0-9]+\\.[0-9]+-dev").matches(latchwayNativeVersion))
+    gradle.beforeProject {
+        configurations.configureEach {
+            resolutionStrategy.eachDependency {
+                if (requested.group == "dev.latchway" && requested.name in setOf("latchway-core", "latchway-okhttp", "latchway-play-integrity", "latchway-firebase-auth", "latchway-bom")) useVersion(latchwayNativeVersion)
+            }
+        }
+    }
+}
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)

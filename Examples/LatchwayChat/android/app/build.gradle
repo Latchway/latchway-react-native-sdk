@@ -88,6 +88,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        manifestPlaceholders.sharedNativeHostEnabled = System.getenv('LATCHWAY_SHARED_NATIVE_SOURCE') == '1' ? 'true' : 'false'
     }
     buildTypes {
         debug {
@@ -106,6 +107,10 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation("dev.latchway:latchway-firebase-auth:1.0.0")
+    implementation("dev.latchway:latchway-okhttp:1.0.0")
+    implementation("dev.latchway:latchway-play-integrity:1.0.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

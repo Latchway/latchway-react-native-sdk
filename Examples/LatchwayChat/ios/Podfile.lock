@@ -54,17 +54,19 @@ PODS:
   - hermes-engine (0.82.0):
     - hermes-engine/Pre-built (= 0.82.0)
   - hermes-engine/Pre-built (0.82.0)
-  - Latchway/AppAttest (1.0.0):
-    - Latchway/Core (= 1.0.0)
-  - Latchway/Core (1.0.0)
-  - LatchwayReactNative (1.1.2):
+  - Latchway/AppAttest (1.1.0):
+    - Latchway/Core (= 1.1.0)
+  - Latchway/Core (1.1.0)
+  - Latchway/FirebaseAuth (1.1.0):
+    - Latchway/Core (= 1.1.0)
+  - LatchwayReactNative (1.1.3):
     - boost
     - DoubleConversion
     - fast_float
     - fmt
     - glog
     - hermes-engine
-    - Latchway/AppAttest (= 1.0.0)
+    - Latchway/AppAttest (= 1.1.0)
     - RCT-Folly
     - RCT-Folly/Fabric
     - RCTRequired
@@ -2559,7 +2561,9 @@ DEPENDENCIES:
   - fmt (from `../node_modules/react-native/third-party-podspecs/fmt.podspec`)
   - glog (from `../node_modules/react-native/third-party-podspecs/glog.podspec`)
   - hermes-engine (from `../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec`)
-  - "LatchwayReactNative (from `../node_modules/@latchway/react-native`)"
+  - Latchway/AppAttest (from `../../../../latchway-ios-sdk`)
+  - Latchway/FirebaseAuth (from `../../../../latchway-ios-sdk`)
+  - LatchwayReactNative (from `../.latchway-development`)
   - RCT-Folly (from `../node_modules/react-native/third-party-podspecs/RCT-Folly.podspec`)
   - RCTDeprecation (from `../node_modules/react-native/ReactApple/Libraries/RCTFoundation/RCTDeprecation`)
   - RCTRequired (from `../node_modules/react-native/Libraries/Required`)
@@ -2644,7 +2648,6 @@ SPEC REPOS:
     - FirebaseCoreInternal
     - GoogleUtilities
     - GTMSessionFetcher
-    - Latchway
     - RecaptchaInterop
     - SocketRocket
 
@@ -2664,8 +2667,10 @@ EXTERNAL SOURCES:
   hermes-engine:
     :podspec: "../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec"
     :tag: hermes-2025-09-01-RNv0.82.0-265ef62ff3eb7289d17e366664ac0da82303e101
+  Latchway:
+    :path: "../../../../latchway-ios-sdk"
   LatchwayReactNative:
-    :path: "../node_modules/@latchway/react-native"
+    :path: "../.latchway-development"
   RCT-Folly:
     :podspec: "../node_modules/react-native/third-party-podspecs/RCT-Folly.podspec"
   RCTDeprecation:
@@ -2824,8 +2829,8 @@ SPEC CHECKSUMS:
   GoogleUtilities: 4e0c2ad9fa0d0d18b5c4df8bf57b461cba35b0bb
   GTMSessionFetcher: a6d2b2aa203485893d4511ff64642dc811f7c09f
   hermes-engine: 8642d8f14a548ab718ec112e9bebdfdd154138b5
-  Latchway: e9da6e5da18bf63df81bed61bf5462958248487a
-  LatchwayReactNative: 83e2b3415d237a6719104e6e9044db15d6492810
+  Latchway: 962fec4cc67a316529839723eb03101e374b8a09
+  LatchwayReactNative: b469c343bba1aa489148a92a8decfe1b05f58058
   RCT-Folly: 846fda9475e61ec7bcbf8a3fe81edfcaeb090669
   RCTDeprecation: 22bf66112da540a7d40e536366ddd8557934fca1
   RCTRequired: a0ed4dc41b35f79fbb6d8ba320e06882a8c792cf
@@ -2899,6 +2904,6 @@ SPEC CHECKSUMS:
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: ce55ebb197c21e22b6700cd36e3f36b7ec26e6f8
 
-PODFILE CHECKSUM: 49781359b652fb9ed7b176cc23c1849d0de9deb8
+PODFILE CHECKSUM: 9ad6ee53b7573998c96f2cd2adb36e48903e1e58
 
 COCOAPODS: 1.16.2

@@ -17,20 +17,21 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   createUserWithEmailAndPassword,
   getAuth,
-  getIdToken,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
 } from '@react-native-firebase/auth';
 import {
-  createLatchwayClient,
   LatchwayClient,
   QuotaSnapshot,
   ReactNativeDiagnostics,
+  SDK_VERSION,
 } from '@latchway/react-native';
 import type { BaseMessage } from '@langchain/core/messages';
 import { config, validateConfig } from './src/config';
+import {accounts, identitySnapshotDiagnostic, reconcileIdentity, signOutLatchway} from './src/latchway-app';
 import {diagnosticLocation, knownFailure} from './src/diagnostic';
+import {runExistingIdentityProbe} from './src/diagnostic-probe';
 import {
   directTurn,
   featureFor,
@@ -133,7 +134,6 @@ function ChatApp() {
   const [quota, setQuota] = useState<QuotaSnapshot>();
   const [proofStatus, setProofStatus] = useState('');
   const client = useRef<LatchwayClient | undefined>(undefined);
-  const identity = useRef<string | undefined>(undefined);
   const histories = useRef<BaseMessage[][]>([]);
   const directHistory = useRef<
     { role: 'user' | 'assistant'; content: string }[]
@@ -145,68 +145,33 @@ function ChatApp() {
   const sequence = useRef(0);
   const scroll = useRef<ScrollView>(null);
 
-  useEffect(
-    () =>
-      onAuthStateChanged(auth, value => {
+  useEffect(() => {
+    const unlisten = accounts.subscribe(() => {
+      abort.current?.abort();
+      client.current = undefined;
+      clearConversation();
+      setDiagnostics(undefined);
+      setQuota(undefined);
+    });
+    const unauth = onAuthStateChanged(auth, value => {
+        void reconcileIdentity().catch(e => setError(friendly(e)));
         setUser(value);
         setLoading(false);
-      }),
-    [],
-  );
+      });
+    return () => { unlisten(); unauth(); };
+  }, []);
   useEffect(
     () => () => {
       abort.current?.abort();
-      void client.current?.dispose();
+      void accounts.disposeSurface().catch(() => {});
     },
     [],
   );
 
   async function connection() {
     validateConfig();
-    const uid = auth.currentUser?.uid;
-    if (!uid) throw new Error('Sign in first.');
-    if (client.current && identity.current !== uid) {
-      await client.current.dispose();
-      client.current = undefined;
-    }
-    if (!client.current) {
-      if (
-        Platform.OS === 'android' &&
-        !config.androidPlayIntegrityProjectNumber
-      ) {
-        throw new Error(
-          'Configure real Android Play Integrity before connecting.',
-        );
-      }
-      identity.current = uid;
-      client.current = createLatchwayClient({
-        baseURL: config.baseURL,
-        applicationID: config.applicationID,
-        environment: config.environment,
-        identityProvider: 'firebase',
-        appVersion: '1',
-        getIdentityToken: async () => {
-          const current = auth.currentUser;
-          if (!current || current.uid !== uid)
-            throw new Error('Identity changed.');
-          return getIdToken(current);
-        },
-        apple: {
-          rootKeychainAccessGroup:
-            config.appleTeamID + '.' + config.appleBundleID,
-          appAttestEnabled: true,
-          softwareKeyFallbackPolicy: 'disallow',
-        },
-        android:
-          Platform.OS === 'android'
-            ? {
-                playIntegrityCloudProjectNumber:
-                  config.androidPlayIntegrityProjectNumber,
-                keyPolicy: 'hardware_backed_required',
-              }
-            : undefined,
-      });
-    }
+    if (!auth.currentUser) throw new Error('Sign in first.');
+    client.current = await accounts.connection();
     await client.current.ready;
     return client.current;
   }
@@ -234,6 +199,8 @@ function ChatApp() {
       if (signup)
         await createUserWithEmailAndPassword(auth, email.trim(), password);
       else await signInWithEmailAndPassword(auth, email.trim(), password);
+      await reconcileIdentity();
+      await accounts.activate();
       setPassword('');
       clearConversation();
     } catch (e) {
@@ -249,12 +216,9 @@ function ChatApp() {
     setBusy(true);
     setError('');
     try {
-      // Revoke while Firebase identity is still available; retain login if revocation fails.
-      if (client.current) {
-        await client.current.revokeCurrentInstallation();
-        await client.current.dispose();
-        client.current = undefined;
-      }
+      // Offline local logout first; Firebase remains application-owned.
+      await signOutLatchway();
+      client.current = undefined;
       await signOut(auth);
       clearConversation();
       setDiagnostics(undefined);
@@ -293,6 +257,9 @@ function ChatApp() {
     let stage = 'connection';
     try {
       const sdk = await connection();
+      const epoch = accounts.capture();
+      const currentText = (text: string) => { if (accounts.isCurrent(epoch)) onText(text); };
+      const currentTool = (event: ToolEvent) => { if (accounts.isCurrent(epoch)) onTool(event); };
       stage = selected === 'langchain' ? 'langchain' : 'direct-fetch';
       const result =
         selected === 'langchain'
@@ -301,8 +268,8 @@ function ChatApp() {
               histories.current.flat(),
               prompt,
               controller.signal,
-              onText,
-              onTool,
+              currentText,
+              currentTool,
               value => { stage = value; },
             )
           : await directTurn(
@@ -310,8 +277,9 @@ function ChatApp() {
               directHistory.current,
               prompt,
               controller.signal,
-              onText,
+              currentText,
             );
+      if (!accounts.isCurrent(epoch)) throw new Error('Account changed; old answer discarded.');
       // Keep complete turns, including tool results, rather than dangling tool-call fragments.
       if (selected === 'langchain')
         histories.current = [...histories.current.slice(-3), result.messages];
@@ -330,14 +298,21 @@ function ChatApp() {
       );
       await inspect(selected).catch(() => setError('Answer completed. Connection details could not refresh; retry them in Settings.'));
       proof?.recordDiagnostic?.({status: 'passed', stage: 'complete',
-        sdkVersion: '1.1.1', modelCalls: result.modelCalls, toolCalls: result.toolCalls,
+        sdkVersion: SDK_VERSION, sourceCandidate: 'unreleased-shared-native',
+        modelCalls: result.modelCalls, toolCalls: result.toolCalls,
         requestIDs: result.requestIDs, finishedAt: new Date().toISOString()});
       return result;
     } catch (e) {
       controller.abort();
       setError(friendly(e) + ' Stage: ' + stage + '.');
       const status = (e as {status?: unknown})?.status;
+      // Read local diagnostics only: do not refresh, query quota or retry a
+      // failed dispatch just to discover the platform attestation failure.
+      const details = await client.current?.diagnostics().catch(() => undefined);
+      if (details) setDiagnostics(details);
       proof?.recordDiagnostic?.({status: 'failed', stage, errorCode: knownFailure(e) ?? errorCode(e),
+        ...(details ? {attestationSupport: details.attestation.support,
+          attestationOperation: details.attestation.lastOperation ?? 'none', keyStorage: details.keyStorage} : {}),
         ...(typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
           ? {httpStatus: status} : {}),
         errorSite: diagnosticLocation(e), finishedAt: new Date().toISOString()});
@@ -383,9 +358,7 @@ function ChatApp() {
     try {
       save('firebase');
       if (auth.currentUser) {
-        const sdk = await connection();
-        await sdk.revokeCurrentInstallation();
-        await sdk.dispose();
+        await signOutLatchway();
         client.current = undefined;
         await signOut(auth);
       }
@@ -400,6 +373,8 @@ function ChatApp() {
       receipt.firebaseUID = account.user.uid;
       await signOut(auth);
       await signInWithEmailAndPassword(auth, address, pass);
+      await reconcileIdentity();
+      await accounts.activate();
       receipt.signin = true;
       save('langchain-first-turn');
       const first = await send(
@@ -483,13 +458,21 @@ function ChatApp() {
   useEffect(() => {
     if (!proof?.diagnoseEnabled || proof?.enabled || loading || diagnosticStarted.current) return;
     diagnosticStarted.current = true;
-    if (!user) {
-      proof?.recordDiagnostic?.({status: 'blocked', stage: 'sign-in-required'});
-      return;
-    }
-    // One explicit Debug launch probe with the current identity. Never signs out,
-    // creates an account, resets an installation or replays a failed user prompt.
-    void send('In one sentence, explain how Latchway protects provider keys.', 'langchain').catch(() => {});
+    // This explicit Debug launch request resumes the existing identity before
+    // send owns a controller. It never signs out Firebase or creates an account.
+    void runExistingIdentityProbe({
+      debug: __DEV__, diagnoseEnabled: Boolean(proof?.diagnoseEnabled),
+      verificationEnabled: Boolean(proof?.enabled), hasIdentity: Boolean(user),
+      reconcileIdentity, activate: () => accounts.activate(), send,
+      reportSignInRequired: () => proof?.recordDiagnostic?.({status: 'blocked', stage: 'sign-in-required'}),
+      reportActivationFailure: failure => {
+        proof?.recordDiagnostic?.({status: 'failed', stage: 'activation',
+          errorCode: knownFailure(failure) ?? errorCode(failure),
+          ...identitySnapshotDiagnostic(),
+          errorSite: diagnosticLocation(failure), finishedAt: new Date().toISOString()});
+        setError(friendly(failure) + ' Stage: activation.');
+      },
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, user]);
 
@@ -615,6 +598,9 @@ function ChatApp() {
                 : '100k tokens / day'}
             </Text>
           </View>
+          <Button title="Resume chat" quiet disabled={busy} onPress={() => {
+            void accounts.activate().then(() => inspect(mode)).catch(e => setError(friendly(e)));
+          }} />
           <ScrollView
             ref={scroll}
             style={styles.messages}
@@ -794,7 +780,7 @@ function ChatApp() {
             {!!error && <Text style={styles.error}>{error}</Text>}
             <Button title="Done" onPress={() => setSettings(false)} />
             <Text style={styles.footer}>
-              No local SDK links. No provider key. No chat database.\nLangChain
+              Unreleased shared-native development build. No provider key or chat database.\nLangChain
               → Latchway → server-selected model.
             </Text>
           </ScrollView>

@@ -20,7 +20,8 @@ RCT_EXPORT_METHOD(recordDiagnostic:(NSDictionary *)value) {
   NSSet *allowed = [NSSet setWithArray:@[@"status", @"stage", @"firebaseUID", @"signup",
     @"signin", @"firstTurn", @"followup", @"toolCalls", @"modelCalls", @"direct",
     @"installationID", @"trustLevel", @"keyStorage", @"platform", @"sdkVersion",
-    @"nativeSDKVersion", @"quotaUsed", @"requestIDs", @"errorCode", @"errorSite", @"httpStatus", @"finishedAt"]];
+    @"nativeSDKVersion", @"quotaUsed", @"requestIDs", @"errorCode", @"errorSite", @"httpStatus", @"finishedAt",
+    @"identityStatus", @"identityAuthCode", @"sourceCandidate", @"attestationSupport", @"attestationOperation"]];
   NSMutableDictionary *receipt = [NSMutableDictionary dictionary];
   for (NSString *key in value) {
     id field = value[key];

@@ -23,6 +23,11 @@ export function knownFailure(error: unknown): string | undefined {
   const candidates = [error, (error as {cause?: unknown})?.cause];
   for (const candidate of candidates) {
     if (!(candidate instanceof Error)) continue;
+    if (candidate instanceof TypeError) {
+      if (["Cannot read property 'appCommand' of undefined", "Cannot read properties of undefined (reading 'appCommand')"].includes(candidate.message)) return 'native_bridge_undefined';
+      if (["Cannot read property 'appCommand' of null", "Cannot read properties of null (reading 'appCommand')"].includes(candidate.message)) return 'native_bridge_null';
+      if (candidate.message.includes('HostObject')) return 'native_bridge_host_object_failure';
+    }
     if (candidate.message === 'Native module not found') return 'native_random_module_missing';
     if (candidate.message.includes('crypto.getRandomValues() not supported')) return 'secure_random_unavailable';
     if (candidate.message.startsWith('It looks like you\'re running in a browser-like environment.')) return 'browser_runtime_rejected';
