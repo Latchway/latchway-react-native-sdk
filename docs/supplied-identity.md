@@ -1,6 +1,6 @@
 # Shared accounts with developer-supplied identity
 
-Release line: React Native 1.2.0, iOS 1.2.0, Android 1.1.0, JavaScript client
+Release line: React Native 1.3.0, iOS 1.3.0, Android 1.2.0, JavaScript client
 1.1.0 and server 1.1.1 or later (contract 1.1.0).
 
 The same integration works in a standalone RN app or an RN screen embedded in
@@ -11,9 +11,12 @@ or embedded-mode switch in this integration.
 
 ## Configure
 
-Install `@latchway/react-native@1.2.0`, install Pods, and rebuild both native apps.
+Install `@latchway/react-native@1.3.0`, install Pods, and rebuild both native apps.
 The native dependencies are pinned to compatible releases. Keep one native SDK
-copy if the host already uses Latchway directly.
+copy if the host already uses Latchway directly. React Native autolinking installs
+the native modules; there is no additional runtime Latchway bootstrap. Signed
+App Attest/Keychain capabilities and Play Integrity configuration are still
+required in the host application.
 
 ```ts
 import {Latchway, firebaseProject} from '@latchway/react-native';
@@ -62,7 +65,7 @@ An already-configured native/RN caller can attach without another login:
 
 ```ts
 const client = await app.makeClient();
-// Or capture the shared account for later token updates/logout:
+// Or capture the shared account for later token updates:
 const account = await app.currentAccount();
 ```
 
@@ -76,14 +79,61 @@ Latchway logout; an accepted new login or explicit user resume action can sign i
 // Same account only. The gateway verifies the replacement before accepting it.
 await account.updateIdToken({getIdToken: () => yourAuth.getIdToken()});
 
-// Logout affects native and RN for this account; no online provider call needed.
-await account.logout();
-// Your serialized application auth flow then signs out its external provider.
+// In the serialized application auth flow, stop UI/tool work first.
+await app.signOut();
+await yourAuth.signOut(); // Your provider is not signed out by Latchway.
 
 // Screen teardown only:
 abortController.abort();
 await client.dispose();
 ```
+
+`app.signOut(): Promise<void>` is the recommended application sign-out API.
+It delegates to the shared native app and works without a current account or
+generation ID: before sign-in returns, after process restart with persisted
+state, or while an earlier cleanup is unfinished. Configure the app after
+process startup first; `getApp()` retrieves only an already-configured app.
+It fences pending identity
+acquisition/refresh and retires the selected app's account across native and RN
+callers. Repeating it after successful cleanup is safe; repeating it after a
+cleanup failure retries that cleanup. A physical Keychain/Keystore or storage
+failure still rejects. Keep protected UI disabled, make storage accessible and
+retry `app.signOut()` before accepting another login. Do not swallow that error
+or fall back to a different account/legacy client.
+
+Sign-out is scoped to this named app on this installation, not every configured
+app or every device. It does not need an identity-token callback or an online
+provider logout. It does not reset quotas or undo already dispatched requests;
+those requests may still be billed. `account.logout()`, generation-targeted
+`app.logout(generationID)` and `client.logout()` remain available for operations
+that deliberately target a captured account generation.
+
+### Native-owned authentication
+
+If the native host owns authentication, its auth controller must notify Latchway
+on every sign-out/account replacement—even if no AI feature has been opened or
+React Native has never mounted. Use the same named app configured by either
+side, serialize the auth transition, and await its native sign-out:
+
+```swift
+// Swift: the shared LatchwayApp, not a newly constructed legacy client.
+try await app.signOut()
+// Then perform the application's external provider sign-out.
+```
+
+```kotlin
+// Kotlin: call the shared LatchwayApp's suspend function from the auth coroutine.
+app.signOut()
+// Then perform the application's external provider sign-out.
+```
+
+Do not depend on a React Native auth listener being alive to perform native
+sign-out. A provider's own sign-out never notifies Latchway automatically. For
+an app with several independent named Latchway apps, its auth owner must sign out
+each app affected by the external account change. See
+[shared native apps](shared-native-apps.md) for attachment and ownership details.
+
+### Cancellation and token freshness
 
 All acquisition operations accept `signal`. Aborting also fences the native
 ticket, including when first sign-in has not returned an account. The native
@@ -121,6 +171,9 @@ rejects a competing subscription, including through another RN wrapper/runtime.
 Dispose the binding when its auth owner ends, not on every screen unmount.
 `await binding.dispose()` cancels pending work and releases the subscription;
 it does not log out the shared account. Other teams need only attach to the app.
+The `signOut` event uses app-level sign-out, including when no account handle
+was returned. `onError` must surface cleanup failures; an event listener does
+not replace awaiting sign-out in the auth owner's serialized transition.
 
 ## LangChain
 

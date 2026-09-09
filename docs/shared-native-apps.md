@@ -1,18 +1,78 @@
-# Shared native apps — legacy authority integration
+# Shared native apps
 
-For version1.2.0 use [developer-supplied identity](supplied-identity.md). It works
-in either initialization order without a native bootstrap or Firebase dependency.
-The authority-based integration below is retained as migration/history context;
-it is not the recommended new integration.
+React Native 1.3.0, iOS 1.3.0 and Android 1.2.0 use the same
+[developer-supplied identity](supplied-identity.md) integration in standalone
+and embedded apps. Either native or RN may configure first. Matching public
+configuration and the same app name reuse one native app, installation,
+account session, signer and refresh coordinator. An omitted optional setting
+inherits an existing registration; an explicitly conflicting setting fails
+with `configuration_conflict` instead of replacing it.
 
-This is not an instruction for the current npm package or native release pins.
-The development bridge requires both updated native SDKs and server protocol 3 /
-contract 1.1.0, with explicit required host-policy `sharedNativeCallers` opt-in.
-Account-scoped component cleanup and migration are implemented in the native
-source. Release packaging and physical/cross-process device acceptance remain
-separate; the historical published native dependencies do not contain these APIs.
+React Native autolinking installs the native implementation. No Firebase SDK
+dependency, runtime native Latchway bootstrap, authority registration or
+embedded-mode switch is required. The signed host still needs its App Attest /
+Play Integrity configuration, and the gateway needs server 1.1.1+, protocol 3 /
+contract 1.1.0 with explicit required-host `sharedNativeCallers` policy opt-in.
 
-## Embedded in a native app
+## Configure from either side
+
+```ts
+import {Latchway, firebaseProject} from '@latchway/react-native';
+
+const app = await Latchway.configure({
+  baseURL, applicationID, environment,
+  identity: firebaseProject({projectID}),
+  ...platformSecurity,
+}, 'production');
+```
+
+The native team may configure the same named app before or after this call;
+neither call replaces an existing session. If the native host has already
+signed in, RN attaches using `app.makeClient()`. If RN owns the accepted login,
+it supplies identity with `app.signIn({getIdToken})` and then makes a client.
+Use `app.restore({getIdToken})` for auth restoration, not unconditional sign-in
+on each screen mount. Configuration and client creation never sign in or undo
+logout. `firebaseProject` only formats public issuer/audience metadata; your
+application owns the provider SDK and token acquisition.
+
+## Application sign-out
+
+In the serialized application auth flow, stop UI/tool work, then:
+
+```ts
+await app.signOut();
+await yourAuth.signOut(); // Application-owned provider logout.
+```
+
+`app.signOut(): Promise<void>` delegates to the configured native shared app. It
+does not need an active account handle or generation ID: it handles pending
+identity work, persisted account state after restart and an unfinished
+retirement. Configure the app first after process startup; `getApp()` only
+retrieves an app already configured in that process. Successful repeated calls
+are safe; after a cleanup failure, call the same method again to retry. Physical
+secure-storage failures still reject. Keep protected work disabled and finish
+cleanup before accepting another login.
+
+The native auth owner must configure/retrieve that same named app and await
+`try await app.signOut()` in Swift or the suspend `app.signOut()` in its Kotlin
+auth coroutine—even when no AI feature has been opened and RN has never
+mounted. Do not rely on an RN listener being alive to retire native state.
+Calling Firebase/another provider's own sign-out alone does not notify Latchway.
+For several independent named apps, sign out each app affected by the account
+change. The operation does not reset per-user quotas, undo already dispatched
+requests or log out other devices.
+
+Unmounting a screen only cancels its UI/tools/streams and calls
+`await client.dispose()`. It must not sign out the account used by sibling
+native/RN screens. See [token refresh, cancellation and native auth ownership](supplied-identity.md#refresh-logout-and-cancellation).
+
+## Legacy authority integration
+
+The explicit authority/generation APIs below remain supported compatibility
+paths, not the recommended setup for new integrations. This additive release
+does not remove their storage migration or authority-transfer behavior.
+
+### Legacy native-owned authority
 
 The host registers and activates a named native app before starting RN. Retrieve
 it without setting up another Firebase Auth instance or identity callback:
@@ -44,7 +104,7 @@ in. Different accounts, environments, gateway prefixes or genuine security
 boundaries remain isolated. Native/RN share one session/refresh chain and signer,
 not one reusable request proof.
 
-## Standalone app
+### Legacy JavaScript-owned authority
 
 The app's auth integration may configure an explicit JS-owned authority:
 
@@ -83,20 +143,22 @@ Native requests fail closed when a JS-owned authority cannot answer; logout
 still works while JS authentication is unavailable. Native background consumers
 should choose native-owned auth up front.
 
-## Sign out versus unmount
+### Generation-targeted logout versus app sign-out
 
-Stop application-owned work and fence old UI/model callbacks. Capture the
-generation from the accepted active snapshot, then:
+Prefer app-level `signOut()` above for the application auth owner's sign-out.
+When intentionally retiring only a captured generation, stop application-owned
+work and fence old UI/model callbacks, then:
 
 ```ts
 if (active.generationID !== undefined) await app.logout(active.generationID);
 await client.dispose();
-await signOutSelectedFirebaseAuth(); // application-owned, not done by Latchway
 ```
 
 `client.logout()` targets its captured generation too. Do not call first-time
 logout after disposal. Successful logout is idempotent; failed cleanup is
-retryable and blocks another activation. Old client/model handles never follow
+retryable and blocks another activation. An old generation-targeted operation
+cannot sign out a newer account; it is not a replacement for app-level sign-out
+in the current auth transition. Old client/model handles never follow
 a new login, including the same UID. Neither configure nor makeClient activates
 an account. Logout does not require network or fetch an identity token, reset
 quota, or revoke the installation. Previously dispatched requests may be billed.
@@ -105,7 +167,7 @@ Observe `app.states(signal)` to clear/disable each surface on generation changes
 its initial snapshot and monotonic revisions avoid a subscribe race. UI events
 are supplementary to native fencing. On external auth changes, retire the old
 captured generation before accepting the next one. On RN unmount call disposal
-only; the native host's sign-out action owns full account logout.
+only; the native host's sign-out action owns app-level sign-out.
 Use a separate `getApp()` wrapper exclusively for observation: other commands
 advance a wrapper's cached revision, so do not assume an event repeats every
 snapshot returned by those commands. Reconcile attachment snapshots immediately,

@@ -69,6 +69,25 @@ interface IdentityOwner {
 }
 const identityOwners = new WeakMap<NativeLatchwayModule, Map<string, Promise<IdentityOwner>>>();
 
+interface PendingIdentity {
+  controller: AbortController;
+  finished: Promise<void>;
+  cleanupFailure?: { reason: unknown };
+}
+interface AppIdentityWork {
+  pending: Set<PendingIdentity>;
+  signOut?: Promise<AppDescriptor>;
+}
+const identityWork = new WeakMap<NativeLatchwayModule, Map<string, AppIdentityWork>>();
+
+function workFor(module: NativeLatchwayModule, appInstanceID: string): AppIdentityWork {
+  let apps = identityWork.get(module);
+  if (apps === undefined) { apps = new Map(); identityWork.set(module, apps); }
+  let work = apps.get(appInstanceID);
+  if (work === undefined) { work = { pending: new Set() }; apps.set(appInstanceID, work); }
+  return work;
+}
+
 /** A wrapper for the process-wide native app, not a JavaScript session owner. */
 export class LatchwayApp {
   readonly name: string;
@@ -103,6 +122,43 @@ export class LatchwayApp {
     return this.identityOperation("restore", input);
   }
 
+  /** Sign out this app's shared native/RN account, including pending sign-in or
+   * interrupted cleanup. Safe to repeat; await before accepting another login.
+   * Does not sign out your authentication provider or reset server-side quotas.
+   * A genuine secure-storage failure remains blocked and can be retried here. */
+  async signOut(): Promise<void> {
+    const minimumMinor = this.latest.platform === "react_native_ios" ? 3 : 2;
+    const version = /^(\d+)\.(\d+)\.(\d+)$/u.exec(this.latest.nativeSDKVersion);
+    if (this.latest.nativeAppABI !== 2 || version === null ||
+        Number(version[1]) < 1 || Number(version[1]) === 1 && Number(version[2]) < minimumMinor) {
+      throw new LatchwayLifecycleError("native_version_incompatible",
+        "App signOut requires iOS SDK 1.3.0 or Android SDK 1.2.0. Reinstall native dependencies and rebuild the app.");
+    }
+    const work = workFor(this.module, this.instanceID);
+    let flight = work.signOut;
+    if (flight === undefined) {
+      const pending = [...work.pending];
+      for (const operation of pending) operation.controller.abort();
+      flight = (async () => {
+        // Native owns the durable barrier. Also settle this runtime's pending
+        // acquisition promises without waiting for an application's token
+        // producer that ignores cancellation. A delayed native ticket must be
+        // cancelled before the caller is told sign-out has completed.
+        const [result] = await Promise.allSettled([
+          command(this.module, { operation: "signOut", name: this.name }),
+          Promise.all(pending.map(operation => operation.finished)),
+        ] as const);
+        if (result.status === "rejected") throw result.reason;
+        const failedCleanup = pending.find(operation => operation.cleanupFailure !== undefined)?.cleanupFailure;
+        if (failedCleanup !== undefined) throw failedCleanup.reason;
+        return result.value;
+      })();
+      work.signOut = flight;
+    }
+    try { this.accept(await flight); }
+    finally { if (work.signOut === flight) delete work.signOut; }
+  }
+
   /** Attach without signing in, acquiring a token, or changing account ownership. */
   async currentAccount(): Promise<LatchwayAccount | null> {
     this.requireSuppliedIdentity();
@@ -114,6 +170,27 @@ export class LatchwayApp {
   /** @internal Account handles call this with their captured generation. */
   async identityOperation(intent: "signIn" | "restore" | "update", input: LatchwayTokenInput,
     generationID?: string, bindingID?: string): Promise<LatchwayAccount> {
+    const work = workFor(this.module, this.instanceID);
+    if (work.signOut !== undefined) throw new LatchwayLifecycleError("cleanup_required");
+    const controller = new AbortController();
+    let finish: () => void = () => undefined;
+    const pending: PendingIdentity = { controller, finished: new Promise(resolve => { finish = resolve; }) };
+    const onAbort = (): void => { controller.abort(); };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    if (input.signal?.aborted) controller.abort();
+    work.pending.add(pending);
+    try {
+      return await this.performIdentityOperation(intent, { ...input, signal: controller.signal }, generationID, bindingID,
+        reason => { pending.cleanupFailure = { reason }; });
+    } finally {
+      input.signal?.removeEventListener("abort", onAbort);
+      work.pending.delete(pending);
+      finish();
+    }
+  }
+
+  private async performIdentityOperation(intent: "signIn" | "restore" | "update", input: LatchwayTokenInput,
+    generationID?: string, bindingID?: string, onCleanupFailure?: (reason: unknown) => void): Promise<LatchwayAccount> {
     this.requireSuppliedIdentity();
     if (input.signal?.aborted) throw abortError();
     if ((typeof input.idToken === "string") === (typeof input.getIdToken === "function")) {
@@ -127,7 +204,8 @@ export class LatchwayApp {
     let cancellation: Promise<void> | undefined;
     const cancel = (): Promise<void> => {
       cancellation ??= command(this.module, { operation: "cancelIdentity", name: this.name, ticketID })
-        .then(value => { this.accept(value); });
+        .then(value => { this.accept(value); })
+        .catch((error: unknown) => { onCleanupFailure?.(error); throw error; });
       return cancellation;
     };
     let rejectCancellation: (reason: unknown) => void = () => undefined;

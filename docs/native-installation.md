@@ -2,18 +2,37 @@
 
 For React Native 0.74–0.81 hosts, first follow the
 [minimum-version toolchain and New Architecture setup](react-native-compatibility.md).
-The expanded peer range starts in 1.1.3; native SDK versions remain unchanged.
+The expanded peer range starts in 1.1.3. React Native SDK 1.3.0 pins iOS 1.3.0
+and Android 1.2.0; upgrading requires installing Pods and rebuilding native apps.
+
+React Native autolinking installs both native bridges. New integrations call
+`Latchway.configure` from either native or RN with matching public configuration;
+no extra runtime native bootstrap, Firebase dependency or authority registration
+is needed. Capabilities/provisioning and the platform security settings below
+are still host build requirements. See [developer-supplied identity](supplied-identity.md).
+If the host also uses a native SDK directly, resolve one matching implementation:
+do not link a separate SwiftPM SDK copy alongside the CocoaPods SDK used by RN.
 
 ## iOS
 
 Configure `apple.rootKeychainAccessGroup` with the fully resolved private app-ID
-group that appears first in the signed root target. List every explicit
+group that appears first in the signed root target. For an existing legacy
+installation, list every explicit
 extension-shared group in `apple.legacySharedKeychainAccessGroups`; the native
 SDK scans only exact root-record coordinates in those groups. Missing,
 wildcard, duplicate, or root-equal groups fail closed, and stale root records
 require an explicit migration.
 
-The podspec pins `Latchway/AppAttest` 1.0.0 and React Native codegen dependencies. Run CocoaPods from the host application after installing the npm package. Enable App Attest for the application identifier and use a real device for conformance; simulators report attestation unsupported.
+The podspec pins `Latchway/AppAttest` 1.3.0 and React Native codegen dependencies.
+Run CocoaPods from the host application after installing the npm package.
+Enable App Attest for the application identifier and use a real device for
+conformance; simulators report attestation unsupported.
+
+The native auth owner awaits `try await app.signOut()` on the shared
+`LatchwayApp` at sign-out, even if no RN or AI screen was opened. This cleans
+current/persisted Latchway account state; it does not call Firebase or another
+identity provider's sign-out. Secure-storage failures still throw and require
+retry through the same API before another login.
 
 The Firebase Authentication example pins React Native Firebase 25.1.0 and
 Firebase Apple SDK 12.15.0 and uses CocoaPods static frameworks. The Latchway
@@ -73,11 +92,13 @@ substituted by a simulator build:
 - a real application identity token plus the exact gateway/core release named
   by the synchronized contract lock.
 
-The root-application bridge constructs the App Attest provider with the exact
+The legacy root-application bridge constructs the App Attest provider with the exact
 `rootKeychainAccessGroup`, `legacySharedKeychainAccessGroups`, and
 `.reactNativeIOS` runtime, then passes the same groups to
 `LatchwayConfiguration`. Keychain, Secure Enclave, session, and accepted App
-Attest key state are runtime-isolated. An extension bridge constructs no App
+Attest key state are runtime-isolated on that compatibility path. The recommended
+shared-app API instead reuses the native app registry across native and RN
+callers. An extension bridge constructs no App
 Attest provider: iOS app extensions cannot call
 `DCAppAttestService.generateKey`, so extension sessions remain independently
 keyed and delegated from the already attested root application.
@@ -143,9 +164,11 @@ Local paths belong only in the host Podfile. They are absent from the published 
 
 ## Android
 
-The library pins the native 1.0.0 Maven coordinates. Those AARs publish Kotlin
-2.3 metadata and require compile SDK 37; both the RN 0.74 minimum fixture and
-the RN 0.82 example therefore use Kotlin 2.3.21, AGP 8.12.0 and Gradle 8.13.
+The library pins the native 1.2.0 Maven coordinates. The library and native AAR
+minimum compile SDK are API 34; minimum Android runtime API remains 24.
+The AARs publish Kotlin 2.3 metadata. The RN 0.74 minimum fixture and RN 0.82
+example use Kotlin 2.3.21, AGP 8.12.0 and Gradle 8.13; the example's newer
+compile/target SDK is a host choice, not the Latchway library minimum.
 The minimum fixture uses an explicit newer build-only React Native Gradle
 plugin and settings-based autolinking; follow its complete compatibility recipe.
 React Native and Codegen themselves resolve from the consuming app, not a
@@ -153,6 +176,12 @@ library-local 0.82 installation.
 Play Integrity requires the decimal Google Cloud project number in
 `android.playIntegrityCloudProjectNumber`; JavaScript never receives or
 supplies the resulting integrity token.
+
+The native auth owner calls the shared `LatchwayApp`'s suspend `app.signOut()`
+from its serialized auth coroutine, even if React Native has not mounted.
+Await completion before accepting another login. Sign-out clears Latchway
+account state, not the app's external auth provider; real secure-storage
+failures still throw and can be retried with the same method.
 
 A production Play Integrity run requires a physical device and a build whose
 package name and signing-certificate digest match the gateway application
@@ -177,4 +206,11 @@ The repository is content-filtered to `dev.latchway`. Composite-build substituti
 
 ## Release dependency check
 
-CI must run once against only the published CocoaPods/Maven coordinates, without local path or repository overrides, before npm publication. A local native build proving source compatibility does not replace that consumer check. The manual `Published dependency consumer` workflow performs that gate; the promotion-dispatched release workflow repeats it before npm publication.
+Before npm publication, verify that a clean consumer resolves the exact public
+CocoaPods/Maven coordinates without local path or repository overrides. Publish
+the native SDKs first and wait for the coordinates to become downloadable; an
+accepted Maven upload does not by itself mean Central publication is complete.
+A local native build proves source compatibility, not public dependency
+availability. The current main-only `single-maintainer-release.yml` workflow
+builds and publishes the npm package; it does not run a separate consumer
+verification gate or establish physical-device evidence.

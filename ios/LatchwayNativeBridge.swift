@@ -551,6 +551,8 @@ actor LatchwayBridgeStore {
         guard !invalidated else { throw LatchwayLifecycleError.disposed }
         switch operation {
         case "get", "configure", "snapshot": break
+        case "signOut":
+            try await app.signOut()
         case "claimIdentityBinding":
             let bindingID = UUID()
             try await app.claimIdentityBinding(bindingID)

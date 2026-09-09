@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and releases will follow Semantic
 Versioning once package publication begins.
 
+## [1.3.0] - 2026-09-09
+
+### Added
+
+- Add `LatchwayApp.signOut(): Promise<void>` for application-level sign-out
+  without an account handle or generation ID. The native shared app fences
+  pending identity work and retires its current or persisted account; repeated
+  calls retry unfinished cleanup through the same API.
+- Document native-owned authentication flows: the native auth owner awaits
+  the shared app's sign-out even when no RN or AI screen is mounted. Native/RN
+  configuration remains order-independent with no Firebase dependency or
+  runtime Latchway bootstrap.
+
+### Changed
+
+- Pin iOS 1.3.0 and Android 1.2.0. JavaScript client 1.1.0, contract 1.1.0,
+  wire protocols and supported React/React Native peers remain unchanged.
+- Preserve the 1.2.1 Fetch response fix and existing account/generation-targeted
+  logout APIs. No legacy API or storage migration support is removed.
+
+### Upgrade
+
+- Install `@latchway/react-native@1.3.0`, update Pods and rebuild both native
+  apps. Embedded hosts must resolve the same pinned native SDK implementation.
+- Prefer `await app.signOut()` in the serialized application auth flow; stop
+  UI/tool work first and sign out the external auth provider separately.
+  Cleanup errors still reject and must be retried before another login.
+  Sign-out does not reset per-user quotas or log out other devices.
+- No fresh physical-device attestation, cloud or production distribution proof
+  is claimed by this release note.
+
 ## [1.2.1] - 2026-09-09
 
 ### Fixed

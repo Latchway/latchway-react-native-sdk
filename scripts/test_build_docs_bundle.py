@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+PACKAGE_VERSION = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 SPEC = importlib.util.spec_from_file_location("build_docs_bundle", ROOT / "scripts/build_docs_bundle.py")
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -23,6 +24,8 @@ SPEC.loader.exec_module(MODULE)
 class DocumentationBundleTests(unittest.TestCase):
     def test_full_source_references_and_quickstarts_are_exact(self) -> None:
         config = json.loads((ROOT / "docs-bundle.config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["version"], PACKAGE_VERSION)
+        self.assertEqual(config["release"], f"v{PACKAGE_VERSION}")
         documents = {item["path"]: item["source"] for item in config["documents"]}
         examples = {item["name"]: item["source"] for item in config["examples"]}
         for source in (
@@ -66,7 +69,7 @@ class DocumentationBundleTests(unittest.TestCase):
         )
         self.assertIn('"./testing"', package)
         self.assertIn('"./package.json"', package)
-        self.assertIn('"version": "1.2.0"', package)
+        self.assertIn(f'"version": "{PACKAGE_VERSION}"', package)
 
     def test_bundle_is_reproducible_self_describing_and_checksum_bound(self) -> None:
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
@@ -76,7 +79,7 @@ class DocumentationBundleTests(unittest.TestCase):
                     sys.executable, str(ROOT / "scripts/build_docs_bundle.py"),
                     "--output-dir", output, "--source-date-epoch", "0",
                 ], cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
-                archives.append(Path(output, "docs-bundle-1.2.0.tar.gz"))
+                archives.append(Path(output, f"docs-bundle-{PACKAGE_VERSION}.tar.gz"))
             self.assertEqual(archives[0].read_bytes(), archives[1].read_bytes())
             with tarfile.open(archives[0], "r:gz") as archive:
                 members = archive.getmembers()
@@ -88,7 +91,7 @@ class DocumentationBundleTests(unittest.TestCase):
                 }
             manifest = json.loads(payloads["bundle-manifest.json"])
             self.assertEqual(manifest["schema_version"], MODULE.SCHEMA)
-            self.assertEqual(manifest["release"]["version"], "1.2.0")
+            self.assertEqual(manifest["release"]["version"], PACKAGE_VERSION)
             self.assertEqual({item["kind"] for item in manifest["files"]} >= {
                 "quickstart", "framework", "release_notes", "supported_versions",
                 "public_symbols", "errors", "examples",
@@ -137,7 +140,7 @@ class DocumentationBundleTests(unittest.TestCase):
                 "revokeFamily", "revokeFamilyWithComponents", "cancel",
                 "Latchway", "LatchwayApp", "LatchwayAccount", "LatchwayTokenInput",
                 "LatchwayIdentityConfiguration", "LatchwayAuthEvent", "LatchwayAuthBinding",
-                "signIn", "restore", "currentAccount", "makeClient", "updateIdToken", "logout",
+                "signIn", "signOut", "restore", "currentAccount", "makeClient", "updateIdToken", "logout",
                 "firebaseProject", "jwtIdentity", "bindLatchwayAuth",
                 "LatchwayLifecycleError", "LatchwayLifecycleCode",
             } <= symbols)
@@ -154,7 +157,7 @@ class DocumentationBundleTests(unittest.TestCase):
                 "src/app.ts", "src/identity.ts", "src/errors.ts",
             })
             supplied = payloads["quickstart/supplied-identity.md"].decode("utf-8")
-            for marker in ("Latchway.configure", "app.signIn", "account.updateIdToken", "account.logout",
+            for marker in ("Latchway.configure", "app.signIn", "app.signOut", "account.updateIdToken", "account.logout",
                            "bindLatchwayAuth", "identity_refresh_required"):
                 self.assertIn(marker, supplied)
             self.assertIn("identity_refresh_required", {row["name"] for row in catalogs["errors.json"]})
@@ -184,7 +187,7 @@ class DocumentationBundleTests(unittest.TestCase):
                         info.size = len(payload)
                         archive.addfile(info, io.BytesIO(payload))
             with self.assertRaises(MODULE.BundleError):
-                MODULE.verify_archive(malicious, "docs-bundle-1.2.0")
+                MODULE.verify_archive(malicious, f"docs-bundle-{PACKAGE_VERSION}")
 
     def test_provenance_commit_must_equal_the_checked_out_source(self) -> None:
         with tempfile.TemporaryDirectory() as output:

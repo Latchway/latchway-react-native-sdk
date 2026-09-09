@@ -1,6 +1,11 @@
 # Latchway React Native SDK
 
-Version 1.2.1 fixes native Fetch response parsing for non-streaming OpenAI and
+Version 1.3.0 adds `await app.signOut()`: one app-level operation to sign out the
+shared native/React Native account, including pending sign-in and persisted
+cleanup, without first acquiring an account or generation ID. Native auth owners
+use the same operation even when no React Native or AI screen is mounted.
+
+It includes the 1.2.1 native Fetch response parsing fix for non-streaming OpenAI and
 LangChain calls, including HTTP error bodies. See the
 [patch upgrade guidance](docs/langchain.md#response-handling-in-121).
 
@@ -10,13 +15,15 @@ or native-team Latchway bootstrap is required in the new integration.
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-Version 1.2.x supports a minimum host of React Native 0.74 / React 18.2 with
+Version 1.3.x supports a minimum host of React Native 0.74 / React 18.2 with
 New Architecture and host-aligned native dependencies. It retains exact API URL
 handling and keeps the base SDK small: only `@latchway/client` and a private
 `web-streams-polyfill` fallback are required runtime dependencies. Babel and
 global polyfills are application-owned; follow the [LangChain quickstart](docs/langchain.md)
-only if using that integration. Native SDK dependencies are iOS 1.2.0 and
-Android 1.1.0. Shared apps require server 1.1.1+ with explicit host caller policy.
+only if using that integration. Native SDK dependencies are iOS 1.3.0 and
+Android 1.2.0; `@latchway/client` remains 1.1.0. Shared apps require server 1.1.1+
+with explicit host caller policy. Install Pods and rebuild both native apps
+when upgrading from 1.2.x; this update is not JavaScript-only.
 
 **Upgrading from 1.1.0:** `/polyfills` and `/babel` remain as deprecated opt-in
 entrypoints, but their dependencies are no longer installed automatically. Apps
@@ -39,8 +46,8 @@ the separate workspace/conformance application.
 
 - React Native `>=0.74.0 <1.0.0` with the New Architecture enabled; React 18.2 minimum,
   paired with the React version required by the chosen React Native release
-- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.2.0
-- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.1.0 artifacts
+- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.3.0
+- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.2.0 artifacts
 - Node 24.19.0 and pnpm 10.15.0 for repository development
 
 Starting in 1.1.3, the minimum host is React Native 0.74.0 with
@@ -76,6 +83,20 @@ const client = await account.makeClient();
 Your application supplies and refreshes the ID token; no Firebase SDK is imported
 by Latchway. For native-first attachment, use `app.makeClient()` without signing
 in again. See [configure, refresh, logout and LangChain](docs/supplied-identity.md).
+
+In your serialized application sign-out flow, stop UI/tool work and await:
+
+```ts
+await app.signOut();
+await yourAuth.signOut(); // Your provider remains application-owned.
+```
+
+`signOut()` also works before sign-in returns or after a restart, and retries
+unfinished native cleanup when called again. A secure-storage failure still
+rejects: keep the app signed out and retry cleanup before accepting another
+login. Native and RN callers share this boundary; screen disposal alone does
+not sign out the account. Latchway does not sign out Firebase/other providers,
+reset per-user quotas or remotely log out other devices.
 
 ## Legacy constructor usage
 
@@ -326,7 +347,7 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-Version 1.2.x consumes released contract `1.1.0`: shared apps use wire `3`,
+Version 1.3.x consumes released contract `1.1.0`: shared apps use wire `3`,
 legacy constructors retain wire `2`, and the server supports `[1, 2, 3]`.
 Core commit `0a60cbef57d904664430e235e1e165fea14f610b` fixes the bundle SHA-256
 `deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293`.

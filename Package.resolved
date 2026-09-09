@@ -1,5 +1,5 @@
 {
-  "originHash" : "a5ce20c27b576f02075469ba6c41ae6e34150537be57ee7fd790d7ae82a3753c",
+  "originHash" : "4cbfc3e9cba8305caee9ccda8620792ff1f387a6f94fabd154accf471038b922",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -15,7 +15,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Latchway/latchway-ios-sdk.git",
       "state" : {
-        "revision" : "465e8fb9890fc337f9c266ee8dd70607bd2c0474"
+        "revision" : "70ccf239151e69000212c1188b80aa3ea3da0b3a"
       }
     },
     {

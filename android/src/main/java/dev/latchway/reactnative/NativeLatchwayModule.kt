@@ -291,6 +291,7 @@ public class NativeLatchwayModule internal constructor(
             } else LatchwayAppRegistry.getApp(name, fromReactNative = true)
             when (operation) {
                 "configure", "get", "snapshot" -> Unit
+                "signOut" -> app.signOut()
                 "activate" -> app.activate()
                 "beginIdentity" -> {
                     val ticket = runtime.acquire(

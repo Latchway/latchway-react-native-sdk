@@ -92,10 +92,10 @@ export async function bindLatchwayAuth(app: LatchwayApp, options: {
         if (disposed || current !== epoch) return;
         pending = controller;
         if (event.type === "signOut") {
-          // Captured handles never turn a delayed A logout into a B logout.
-          const captured = account;
+          // The binding queue owns auth intent. Native resolves unpublished or
+          // retiring accounts too; currentAccount() alone misses both cases.
+          await app.signOut();
           account = null;
-          await captured?.logout();
           return;
         }
         const token = { getIdToken: event.getIdToken, signal: controller.signal };

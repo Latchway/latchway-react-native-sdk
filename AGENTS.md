@@ -8,11 +8,14 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-The published 1.2.0 baseline and the 1.2.1 response-handling patch candidate use
+The 1.3.0 app-level sign-out release builds on the published 1.2.0 shared-account
+baseline and 1.2.1 response-handling fix, using
 released contract checkpoint 1.1.0. Shared account APIs use current wire protocol
 3; legacy constructors retain wire 2 behavior. Exact reviewed JavaScript, iOS
 and Android source commits are recorded in `release-compatibility.json`.
-The 1.2.1 patch does not change those dependency or contract pins. Publication
+It pins iOS 1.3.0 and Android 1.2.0; JavaScript client 1.1.0 and the wire contract
+are unchanged. This additive release retains existing compatibility APIs and
+does not include unrelated unpublished legacy-storage removal. Publication
 follows the maintainer-authorized release workflow; do not claim deferred
 physical-device or distribution evidence was completed. Production npm,
 CocoaPods, Gradle, TurboModule, source, fixture, example and CI changes are
