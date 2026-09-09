@@ -1,6 +1,6 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.2.0` for native authenticated transport and
+Use `@latchway/react-native@1.2.1` for native authenticated transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
@@ -14,7 +14,7 @@ require downgrading the example or guarantee every third-party dependency on
 the minimum host.
 
 ```sh
-npm install --save-exact @latchway/react-native@1.2.0 @latchway/langchain@1.1.0 \
+npm install --save-exact @latchway/react-native@1.2.1 @latchway/langchain@1.1.0 \
   @latchway/client@1.1.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
@@ -91,7 +91,7 @@ Classes must still be constructed with
 
 ## Upgrading from 1.1.0
 
-For an existing 1.1.1 application, upgrade to 1.2.0 and recopy both runtime files
+For an existing 1.1.1 application, upgrade to 1.2.1 and recopy both runtime files
 linked above. The corrected probe checks exact Responses and Chat Completions
 paths; the older app-owned copy is not replaced by an npm package update.
 Do not fix a trailing-slash rejection by widening the SDK destination allowlist.
@@ -110,7 +110,7 @@ npm install --save-exact react-native-get-random-values@1.11.0 \
   react-native-url-polyfill@2.0.0 text-encoding@0.7.0
 # Required only if you use @latchway/react-native/babel:
 npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
-npm install --save-exact @latchway/react-native@1.2.0
+npm install --save-exact @latchway/react-native@1.2.1
 cd ios && pod install && cd ..
 ```
 
@@ -191,6 +191,63 @@ For an `openai_chat` feature use the existing `createLatchwayChatOpenAI` instead
 Both factories default to no automatic framework retries. Native pre-dispatch
 session recovery is separate; uncertain provider dispatches must not be replayed
 casually. Explicit `chatOptions.maxRetries` is an application policy choice.
+
+## Response handling in 1.2.1
+
+Upgrade from 1.2.0 with `npm install --save-exact @latchway/react-native@1.2.1`,
+keep the lockfile, and regenerate the app's JavaScript bundle through your usual
+build workflow. The native SDK pins, gateway configuration, account setup and
+app-owned runtime files do not change for this patch.
+
+The fix makes Fetch body readers consume the underlying native bytes on React
+Native runtimes with incomplete stream-backed `Response` support. Both a normal
+`await model.invoke(...)` HTTP 200 response and an HTTP error response can be
+decoded by the framework. Streaming remains supported; switching every call to
+streaming or patching global fetch is not required.
+
+The fallback supports `text()`, `json()`, `arrayBuffer()` and the native pull
+stream. Binary `blob()` support remains host-dependent: React Native's bundled
+Blob cannot construct binary parts. Fallback `formData()` accepts
+`application/x-www-form-urlencoded`, not multipart bodies. This patch does not
+install global runtime polyfills or add dependencies.
+
+Do not automatically retry a successful HTTP request after a client-side parse
+failure: the upstream may already have generated output and incurred usage.
+Keep tool-only replies (`content` empty with valid tool calls) separate from
+transport errors, and execute only your allowlisted, argument-validated tools.
+
+`JSON.stringify(error)` alone can produce `{}` because JavaScript `Error`
+properties are often non-enumerable. Log explicit redacted fields instead of
+the whole error, response body, headers, tokens or prompt. For example:
+
+```ts
+try {
+  const answer = await model.invoke('Explain Latchway');
+  // Render the answer or handle its tool calls.
+} catch (cause: unknown) {
+  const error = typeof cause === 'object' && cause !== null
+    ? cause as Record<string, unknown> : {};
+  const status = typeof error.status === 'number' && Number.isInteger(error.status)
+    && error.status >= 400 && error.status <= 599 ? error.status : undefined;
+  const safeCodes = ['request_invalid', 'quota_exceeded', 'concurrency_exceeded',
+    'session_expired', 'session_revoked', 'upstream_timeout',
+    'upstream_unavailable', 'upstream_protocol_error'];
+  const code = typeof error.code === 'string' && safeCodes.includes(error.code)
+    ? error.code : undefined;
+  const correlation = error.requestID ?? error.request_id;
+  const requestID = typeof correlation === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(correlation)
+    ? correlation : undefined;
+  console.warn('AI request failed', {
+    message: status === undefined ? 'AI request failed.' : `AI request failed (HTTP ${status}).`,
+    status, code, requestID,
+  });
+}
+```
+
+The example deliberately constructs a safe summary rather than logging arbitrary
+provider error messages, which may echo application data. Preserve the request
+ID for gateway support; missing correlation is not permission to log raw data.
 
 ## Tools and local history
 

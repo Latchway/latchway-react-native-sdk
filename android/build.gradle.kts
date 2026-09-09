@@ -12,7 +12,7 @@ kotlin {
 }
 
 group = "dev.latchway"
-version = "1.2.0"
+version = "1.2.1"
 
 // Resolve from the consuming build, not this library's node_modules. npm and
 // pnpm can hoist React Native and Codegen; the host owns both versions.

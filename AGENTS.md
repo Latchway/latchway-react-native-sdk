@@ -8,15 +8,17 @@ Build the React Native client that exposes Latchway through an ergonomic
 TypeScript API while delegating sensitive platform behavior to the released iOS
 and Android SDKs.
 
-The version 1 React Native implementation is locked to the draft contract
-checkpoint 1.0.0 and current wire protocol 2, with exact reviewed JavaScript, iOS, and
-Android source commits in `release-compatibility.json`. The package remains
-unpublished until protected native-device, dependency-registry, provenance,
-compatibility, and immutable-release evidence gates pass. Production npm,
-CocoaPods, Gradle, TurboModule, source, fixture, example, and CI changes are
-authorized when they preserve the active source lock. Never invent a wire contract,
-publish an unreleased package, fake production behavior, or weaken the native
-security boundary.
+The published 1.2.0 baseline and the 1.2.1 response-handling patch candidate use
+released contract checkpoint 1.1.0. Shared account APIs use current wire protocol
+3; legacy constructors retain wire 2 behavior. Exact reviewed JavaScript, iOS
+and Android source commits are recorded in `release-compatibility.json`.
+The 1.2.1 patch does not change those dependency or contract pins. Publication
+follows the maintainer-authorized release workflow; do not claim deferred
+physical-device or distribution evidence was completed. Production npm,
+CocoaPods, Gradle, TurboModule, source, fixture, example and CI changes are
+authorized when they preserve the active source lock. Never invent a wire
+contract, publish without release authorization, fake production behavior or
+weaken the native security boundary. Preserve historical release receipts.
 
 ## Authority and dependency boundaries
 

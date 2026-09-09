@@ -6,6 +6,7 @@ import { acquire, type NativeLease } from "./coordinator.js";
 import { parseComponentDiagnostics } from "./component-client.js";
 import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
 import { assertNoCredentialFields } from "./native-output.js";
+import { responseWithNativeBody } from "./response.js";
 import type {
   LatchwayClient,
   LatchwayFetch,
@@ -489,32 +490,6 @@ function aliasFrameworkRequestID(response: Response): Response {
   const requestID = response.headers.get("X-Latchway-Request-ID");
   if (requestID === null || response.headers.get("X-Request-ID") === requestID) return response;
   response.headers.set("X-Request-ID", requestID);
-  return response;
-}
-
-function responseWithNativeBody(body: ReadableStream<Uint8Array> | null, init: ResponseInit): Response {
-  let response: Response;
-  try {
-    response = new Response(body, init);
-  } catch {
-    // Some React Native Response implementations reject ponyfill streams even
-    // though the instance body is attached below and consumed directly.
-    response = new Response(null, init);
-  }
-  if (body === null) return response;
-  const exposed = (response as Response & { body?: ReadableStream<Uint8Array> | null }).body;
-  if (exposed !== undefined && exposed !== null && typeof exposed.getReader === "function") {
-    return response;
-  }
-  // React Native 0.82's built-in Response accepts the stream but does not
-  // expose it through `body`. Restore the exact native-owned pull stream on
-  // the instance; no bytes are buffered and the native cancel/close lifecycle
-  // remains authoritative.
-  Object.defineProperty(response, "body", {
-    configurable: true,
-    enumerable: true,
-    value: body,
-  });
   return response;
 }
 

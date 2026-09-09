@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and releases will follow Semantic
 Versioning once package publication begins.
 
+## [1.2.1] - 2026-09-09
+
+### Fixed
+
+- Consume native response bytes correctly through Fetch body methods on React
+  Native runtimes whose `Response` implementation does not support stream-backed
+  bodies. Non-streaming OpenAI/LangChain calls such as `model.invoke()` can parse
+  a successful HTTP 200 JSON response, and framework error handling can read
+  actual HTTP error responses instead of an empty or misinterpreted body.
+- Keep streaming, cancellation and the native credential boundary intact.
+  No public API, gateway protocol or runtime dependency changes are required.
+
+### Upgrade
+
+- Upgrade `@latchway/react-native` to 1.2.1 and regenerate the application's
+  JavaScript bundle through its usual build workflow. Existing 1.2.0 account
+  setup and app-owned runtime files remain valid.
+- JavaScript client 1.1.0, iOS 1.2.0 and Android 1.1.0 pins are unchanged.
+  No fresh physical-device attestation or production distribution proof is
+  claimed by this JavaScript response-handling patch.
+
 ## [1.2.0] - 2026-09-08
 
 - Add developer-supplied `signIn`, `restore`, `currentAccount`, account-scoped

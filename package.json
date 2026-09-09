@@ -1,6 +1,6 @@
 {
   "name": "@latchway/react-native",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Hardware-backed React Native client for the Latchway AI gateway",
   "license": "Apache-2.0",
   "type": "module",
@@ -138,6 +138,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.68.0",
     "vitest": "4.1.11",
+    "whatwg-fetch": "3.6.20",
     "zod": "4.5.4"
   },
   "codegenConfig": {

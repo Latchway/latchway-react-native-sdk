@@ -84,6 +84,9 @@ importers:
       vitest:
         specifier: 4.1.11
         version: 4.1.11(@types/node@24.13.3)(vite@8.2.2(@types/node@24.13.3)(terser@5.51.2)(yaml@2.9.0))
+      whatwg-fetch:
+        specifier: 3.6.20
+        version: 3.6.20
       zod:
         specifier: 4.5.4
         version: 4.5.4

@@ -1,12 +1,16 @@
 # Latchway React Native SDK
 
+Version 1.2.1 fixes native Fetch response parsing for non-streaming OpenAI and
+LangChain calls, including HTTP error bodies. See the
+[patch upgrade guidance](docs/langchain.md#response-handling-in-121).
+
 Version 1.2.0 adds [shared accounts with developer-supplied identity](docs/supplied-identity.md).
 Native or RN can configure first. No Firebase dependency, auth authority setup
 or native-team Latchway bootstrap is required in the new integration.
 
 `@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
 
-Version 1.2.0 supports a minimum host of React Native 0.74 / React 18.2 with
+Version 1.2.x supports a minimum host of React Native 0.74 / React 18.2 with
 New Architecture and host-aligned native dependencies. It retains exact API URL
 handling and keeps the base SDK small: only `@latchway/client` and a private
 `web-streams-polyfill` fallback are required runtime dependencies. Babel and
@@ -322,7 +326,7 @@ The example in [`example`](example/README.md) demonstrates Firebase Authenticati
 
 ## Contract lock
 
-Version 1.2.0 consumes released contract `1.1.0`: shared apps use wire `3`,
+Version 1.2.x consumes released contract `1.1.0`: shared apps use wire `3`,
 legacy constructors retain wire `2`, and the server supports `[1, 2, 3]`.
 Core commit `0a60cbef57d904664430e235e1e165fea14f610b` fixes the bundle SHA-256
 `deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293`.

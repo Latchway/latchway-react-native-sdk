@@ -17,7 +17,7 @@
   },
   "react_native": {
     "package": "@latchway/react-native",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "baseline": "0.82.0",
     "supported_range": ">=0.74.0 <1.0.0",
     "minimum": {
