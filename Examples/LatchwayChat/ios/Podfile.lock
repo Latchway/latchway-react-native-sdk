@@ -54,17 +54,17 @@ PODS:
   - hermes-engine (0.82.0):
     - hermes-engine/Pre-built (= 0.82.0)
   - hermes-engine/Pre-built (0.82.0)
-  - Latchway/AppAttest (1.2.0):
-    - Latchway/Core (= 1.2.0)
-  - Latchway/Core (1.2.0)
-  - LatchwayReactNative (1.2.0):
+  - Latchway/AppAttest (2.0.0):
+    - Latchway/Core (= 2.0.0)
+  - Latchway/Core (2.0.0)
+  - LatchwayReactNative (2.0.0):
     - boost
     - DoubleConversion
     - fast_float
     - fmt
     - glog
     - hermes-engine
-    - Latchway/AppAttest (= 1.2.0)
+    - Latchway/AppAttest (= 2.0.0)
     - RCT-Folly
     - RCT-Folly/Fabric
     - RCTRequired
@@ -2824,8 +2824,8 @@ SPEC CHECKSUMS:
   GoogleUtilities: 4e0c2ad9fa0d0d18b5c4df8bf57b461cba35b0bb
   GTMSessionFetcher: a6d2b2aa203485893d4511ff64642dc811f7c09f
   hermes-engine: 8642d8f14a548ab718ec112e9bebdfdd154138b5
-  Latchway: ecafdef9fb5018bb431f31ad0463c71f79ad8a91
-  LatchwayReactNative: f13612632468a7fc0abf480dbd6143fc6867fa61
+  Latchway: 03a2ee4ff8b46f2e407109c7bebda96170135465
+  LatchwayReactNative: caf6fa1339a6cff005321065e763ab15b318b5ca
   RCT-Folly: 846fda9475e61ec7bcbf8a3fe81edfcaeb090669
   RCTDeprecation: 22bf66112da540a7d40e536366ddd8557934fca1
   RCTRequired: a0ed4dc41b35f79fbb6d8ba320e06882a8c792cf

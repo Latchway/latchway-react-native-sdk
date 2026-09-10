@@ -1,14 +1,45 @@
 # Shared-native verification scope
 
-## Current fresh-account source cleanup
+## Fresh-account release — 2026-09-10
 
-The current iOS and RN source removes previous constructor, authority and
-storage-adoption paths. This is source-breaking and unreleased. Previously
-published artifacts and the receipts below are unchanged; their results do not
-automatically verify this cleanup. Exact source revisions and new checks must
-be recorded when the implementation finishes.
+React Native 2.0.0 and iOS 2.0.0 remove previous constructor, callback-authority
+and storage-adoption paths. This is a source-breaking fresh-account release,
+with Android 1.2.1. Earlier artifacts and receipts remain unchanged; they do not
+automatically verify this release.
 
-Current acceptance must cover:
+The release is pinned to:
+
+- React Native `155d26203e3db33099974387c2b9369f30b40c0d` / `v2.0.0`.
+- iOS `4cb90278597f4cf6881b08c8521cf37dc398c7cf` / `v2.0.0`.
+- Android `d9832626ee08b1a873aaae4f00714cf573219d49` / `v1.2.1`.
+
+The public npm 2.0.0 archive and GitHub release asset have identical bytes
+(SHA-256 `2a210f0e480a7391d9f3fde1b88505a80ac5e8088f76f4f1f52aadb4cfe32316`).
+Their uncompressed package matches the locally tested archive. The native
+dependency pins and Sigstore provenance were verified against the exact release
+commit, main-branch workflow and publishing run `34440824754`.
+
+Release-source verification passed 259 unit/lifecycle/contract tests, 13 runtime
+tests, 15 consumer/archive script tests, 10 docs/development-environment tests,
+10 Swift bridge tests and 15 Android bridge tests. Types, lint, code generation,
+package reproducibility and both Metro bundles passed. The RN 0.74 / React 18.2
+consumer compiled for an unsigned iOS simulator using normal CocoaPods 2.0.0;
+its SDK package was the tested release candidate, not a local native override.
+
+The standalone example now installs actual npm 2.0.0 with registry integrity
+locked, without a source overlay. Its typecheck, 14 tests, offline LangChain
+adapter checks, registry/autolinking checks and Android ARM64 Debug APK build
+passed with public Maven 1.2.1. Both production Metro bundles passed. Normal
+CocoaPods resolution installed Latchway/AppAttest 2.0.0 and the npm 2.0.0
+bridge, with no local native SDK override. These are build and fixture results,
+not a new physical-device or live-account attestation receipt.
+
+The existing example dependency tree reports nine moderate advisory nodes in
+React Native CLI/XML parsing and development-server request parsing, with no
+high or critical entries in the npm audit snapshot. This release does not claim
+a clean dependency audit or silently change those unrelated tooling pins.
+
+Separate device/account acceptance must still cover:
 
 - Configure-first from RN and native with one shared registry and conflicting
   settings rejected.

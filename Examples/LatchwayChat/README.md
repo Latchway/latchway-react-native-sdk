@@ -1,18 +1,18 @@
 # LatchwayChat · React Native
 
-## Current source and published baseline
+## Published SDK 2.0.0
 
-The current iOS/RN source removes previous constructor and storage-adoption
-paths. This is a source-breaking, unreleased cleanup; it does not change any
-published package or historical receipt. Use the explicit source-development
-setup below to exercise this branch, with matching native bridge sources.
-The normal registry build remains the previously published baseline:
-
-This app consumes **published npm packages**: `@latchway/react-native` 1.2.0,
+This app consumes **published npm packages**: `@latchway/react-native` 2.0.0,
 `@latchway/client` 1.1.0 and `@latchway/langchain` 1.1.0. Their native pins are
-CocoaPods Latchway 1.2.0 and Maven Central Android 1.1.0. Use gateway 1.1.1 or
-newer, including the schema-31 identity issuance-time fix. Normal Metro,
+CocoaPods Latchway 2.0.0 and Maven Central Android 1.2.1. Use gateway 1.1.3 or
+newer for the App Attest acceptance and Play testing policies. Normal Metro,
 TypeScript and autolinking resolve installed packages, not sibling SDK source.
+
+Version 2.0.0 is a source-breaking fresh-account release: older constructor,
+callback-authority and storage-adoption paths are removed. Rebuild the native
+app after updating npm and Pods; this is not an over-the-air JavaScript-only
+upgrade. The SDK does not automatically migrate older stored credentials.
+Historical receipts below remain evidence only for their stated versions.
 
 The example owns Firebase login and supplies its ID token through `signIn`,
 `restore` and `updateIdToken`. Either RN or native may configure first; matching
@@ -65,6 +65,11 @@ native host screens; they do not bootstrap Latchway or copy credentials.
 The JavaScript-only verification explicitly skips CocoaPods; run the complete
 check after installing Pods. Never link a second SPM/native SDK alongside the
 one supplied by the npm package. Standard signing/App Attest/Play setup remains.
+
+When updating an existing checkout whose `Podfile.lock` still pins an older
+native Latchway version, run `pod update Latchway --project-directory=ios`
+once after updating npm. This unlocks only Latchway; a normal `pod install`
+then uses the committed 2.0.0 lock. Rebuild the app rather than reloading Metro.
 
 ### Optional SDK source development
 
@@ -152,8 +157,8 @@ SDK checkout or the parent pnpm workspace.
 ## What runs where
 
 - Firebase Auth owns sign-up, sign-in, and Firebase session persistence.
-- `@latchway/react-native@1.2.0` owns authenticated transport, via
-  CocoaPods `Latchway/AppAttest 1.2.0` and Maven Central Android SDKs 1.1.0.
+- `@latchway/react-native@2.0.0` owns authenticated transport, via
+  CocoaPods `Latchway/AppAttest 2.0.0` and Maven Central Android SDKs 1.2.1.
   App Attest, Secure Enclave/Keystore, DPoP and refresh credentials stay native.
 - `@latchway/langchain@1.1.0` creates ChatOpenAI from
   `@langchain/openai@1.5.10`, with a feature-bound Latchway fetch. Its stateless
@@ -178,14 +183,15 @@ Android: JDK 17+, SDK 37, NDK 27.1.12297006; Kotlin 2.3.21 matches the published
 native SDK metadata.
 
 The gateway must support rich Responses tool inputs and trusted input accounting
-(server 1.1.1 or later). Configure:
+(server 1.1.3 or later for the policies below). Configure:
 
 1. A disposable application and Development environment.
 2. Firebase identity provider `firebase` with your Firebase project ID; enable
    Email/Password in Firebase Authentication.
 3. An `ios` root Component Definition for the Apple bundle ID, with
    direct App Attest, plus a required App Attest policy matching team, bundle,
-   signing category and development environment, plus explicit
+   signing category and accepted Apple environment (`development`, `production`
+   or `any`), plus explicit
    `sharedNativeCallers: ["ios", "react-native"]` on that policy.
 4. Feature `latchway-foundation-models` with `openai_responses` routing and a
    compatible trusted input accounting profile. The name is shared with the
@@ -200,7 +206,13 @@ deployment enables React Native iOS only. For Android, add a
 `android` component, real Play Integrity policy with
 `sharedNativeCallers: ["android", "react-native"]`, signing certificate
 SHA-256, project number and server verifier credentials. It fails closed if the
-project number is missing; it does not use debug attestation.
+project number is missing. Play testing responses are accepted only when the
+server's Development policy explicitly enables them; production remains strict.
+Neither platform has a client-side environment or verification-bypass flag.
+Apple distribution/build metadata is checked when present, but older proofs
+can omit it. `any` accepts both Apple environments; it does not prove a build's
+distribution category. Configuration activation requires fresh mobile evidence
+before refreshing the session.
 
 ## Install and configure
 
