@@ -1,12 +1,17 @@
 # LatchwayChat · React Native
 
-## Published SDK 2.0.0
+## Published SDK 2.0.1
 
-This app consumes **published npm packages**: `@latchway/react-native` 2.0.0,
+This app consumes **published npm packages**: `@latchway/react-native` 2.0.1,
 `@latchway/client` 1.1.1 and `@latchway/langchain` 1.1.0. Their native pins are
-CocoaPods Latchway 2.0.0 and Maven Central Android 1.2.1. Use gateway 1.1.3 or
-newer for the App Attest acceptance and Play testing policies. Normal Metro,
+CocoaPods Latchway 2.0.1 and Maven Central Android 1.2.2. Use gateway 1.1.4 or
+newer for the complete error-diagnostics behavior described here. Normal Metro,
 TypeScript and autolinking resolve installed packages, not sibling SDK source.
+
+The 2.0.1 error-handling patch preserves safe gateway detail, request IDs and
+retry/field guidance. Direct-fetch mode reads canonical error bodies and rejects
+partial or failed streams; no failed request is automatically replayed. Registry
+resolution and automated tests are not physical-device attestation evidence.
 
 Version 2.0.0 is a source-breaking fresh-account release: older constructor,
 callback-authority and storage-adoption paths are removed. Rebuild the native
@@ -69,7 +74,7 @@ one supplied by the npm package. Standard signing/App Attest/Play setup remains.
 When updating an existing checkout whose `Podfile.lock` still pins an older
 native Latchway version, run `pod update Latchway --project-directory=ios`
 once after updating npm. This unlocks only Latchway; a normal `pod install`
-then uses the committed 2.0.0 lock. Rebuild the app rather than reloading Metro.
+then uses the committed 2.0.1 lock. Rebuild the app rather than reloading Metro.
 
 ### Optional SDK source development
 
@@ -157,8 +162,8 @@ SDK checkout or the parent pnpm workspace.
 ## What runs where
 
 - Firebase Auth owns sign-up, sign-in, and Firebase session persistence.
-- `@latchway/react-native@2.0.0` owns authenticated transport, via
-  CocoaPods `Latchway/AppAttest 2.0.0` and Maven Central Android SDKs 1.2.1.
+- `@latchway/react-native@2.0.1` owns authenticated transport, via
+  CocoaPods `Latchway/AppAttest 2.0.1` and Maven Central Android SDKs 1.2.2.
   App Attest, Secure Enclave/Keystore, DPoP and refresh credentials stay native.
 - `@latchway/langchain@1.1.0` creates ChatOpenAI from
   `@langchain/openai@1.5.10`, with a feature-bound Latchway fetch. Its stateless

@@ -16,7 +16,7 @@ for (const [location, pkg] of Object.entries(lock.packages)) {
 for (const name of ['@latchway/react-native', '@latchway/client', '@latchway/langchain']) {
   const location = 'node_modules/' + name;
   const pkg = lock.packages[location];
-  const expected = {'@latchway/client': '1.1.1', '@latchway/langchain': '1.1.0', '@latchway/react-native': '2.0.0'};
+  const expected = {'@latchway/client': '1.1.1', '@latchway/langchain': '1.1.0', '@latchway/react-native': '2.0.1'};
   assert.equal(pkg.version, expected[name]);
   assert.equal(new URL(pkg.resolved).origin, 'https://registry.npmjs.org');
   assert(pkg.integrity.startsWith('sha512-'));
@@ -33,22 +33,22 @@ assert.equal(fs.realpathSync(linked.dependencies['@latchway/react-native'].root)
 const tsconfig = JSON.parse(fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8'));
 assert(!tsconfig.compilerOptions?.paths?.['@latchway/react-native'], 'TypeScript must verify installed package declarations');
 const nativeBuild = fs.readFileSync(path.join(nativePackageRoot, 'android/build.gradle.kts'), 'utf8');
-assert(nativeBuild.includes('dev.latchway:latchway-okhttp:1.2.1'));
-assert(nativeBuild.includes('dev.latchway:latchway-play-integrity:1.2.1'));
+assert(nativeBuild.includes('dev.latchway:latchway-okhttp:1.2.2'));
+assert(nativeBuild.includes('dev.latchway:latchway-play-integrity:1.2.2'));
 assert(fs.readFileSync(path.join(nativePackageRoot, 'LatchwayReactNative.podspec'), 'utf8')
-  .includes('spec.dependency "Latchway/AppAttest", "2.0.0"'));
-console.log('TypeScript and native autolinking use npm; native dependency pins are iOS 2.0.0 / Android 1.2.1');
+  .includes('spec.dependency "Latchway/AppAttest", "2.0.1"'));
+console.log('TypeScript and native autolinking use npm; native dependency pins are iOS 2.0.1 / Android 1.2.2');
 const podLock = path.join(root, 'ios/Podfile.lock');
 if (!javascriptOnly) {
   assert(fs.existsSync(podLock), 'Install CocoaPods before running full registry verification');
   const pods = fs.readFileSync(podLock, 'utf8');
-  assert(pods.includes('Latchway/AppAttest (2.0.0)'));
-  assert(pods.includes('LatchwayReactNative (2.0.0)'));
+  assert(pods.includes('Latchway/AppAttest (2.0.1)'));
+  assert(pods.includes('LatchwayReactNative (2.0.1)'));
   assert(!/\n  Latchway:\n    :path:/.test(pods));
   assert(!pods.includes('.latchway-development'));
   assert(/SPEC REPOS:\n  trunk:\n(?:    - [^\n]+\n)*    - Latchway\n/.test(pods),
     'Latchway must resolve from the CocoaPods registry');
-  console.log('Native iOS: CocoaPods Latchway/AppAttest 2.0.0 + npm bridge 2.0.0 (no local SDK override)');
+  console.log('Native iOS: CocoaPods Latchway/AppAttest 2.0.1 + npm bridge 2.0.1 (no local SDK override)');
 } else {
   console.log('CocoaPods resolution not checked in this invocation; run without --javascript-only after Pod install');
 }
