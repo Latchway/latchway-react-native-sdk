@@ -2,12 +2,10 @@ import { LatchwayError } from "@latchway/client";
 import { DefaultLatchwayClient } from "./client.js";
 import { nativeModule, type NativeLatchwayModule } from "./native/bridge.js";
 import { assertNoCredentialFields } from "./native-output.js";
-import type { AndroidSecurityOptions, AppleSecurityOptions, LatchwayClient, ReactNativeIOSComponent, ReactNativePlatform } from "./types.js";
+import type { AndroidSecurityOptions, AppleSecurityOptions, LatchwayClient, ReactNativePlatform } from "./types.js";
 import { SDK_VERSION } from "./version.js";
 import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
 import { validateIdentityConfiguration, type LatchwayIdentityConfiguration } from "./identity.js";
-
-export interface LegacyIdentityReference { name: string; issuer: string; tenant?: string }
 
 /** Application-owned token acquisition; never retained as a shared JS provider. */
 export type LatchwayTokenInput = ({ idToken: string; getIdToken?: never } |
@@ -17,38 +15,24 @@ export interface LatchwayAppOptions {
   baseURL: string;
   applicationID: string;
   environment: string;
-  identity?: LatchwayIdentityConfiguration | LegacyIdentityReference;
-  identityProvider?: string;
+  identity?: LatchwayIdentityConfiguration;
   apple?: Partial<AppleSecurityOptions> & {
     /** Authorized delegated-component groups, distinct from the private root. */
     sharedKeychainAccessGroups?: readonly string[];
-    /** Explicit [] declares no historical delegated component credentials. */
-    legacyComponents?: readonly ReactNativeIOSComponent[];
-    legacyAttestationNamespaces?: readonly string[];
   };
   android?: Partial<AndroidSecurityOptions>;
-  /** Standalone JS-owned auth: return one user's issuer/tenant/UID/token atomically. */
-  getIdentitySnapshot?: () => Promise<LatchwayIdentitySnapshot | null>;
-}
-
-export interface LatchwayIdentitySnapshot {
-  issuer: string;
-  tenant?: string;
-  subject: string;
-  token: string;
 }
 
 export interface LatchwayAppSnapshot {
   appInstanceID: string;
-  authorityInstanceID: string;
   generationID?: string;
   revision: number;
   state: "inactive" | "active" | "refreshRequired" | "retiring" | "loggedOut";
 }
 
 interface AppDescriptor extends LatchwayAppSnapshot {
-  nativeAppABI: 1 | 2;
-  identityMode?: "supplied" | "authority";
+  nativeAppABI: 3;
+  identityMode: "supplied";
   contractVersion: "1.1.0";
   protocolVersion: 3;
   baseURL: string;
@@ -56,19 +40,11 @@ interface AppDescriptor extends LatchwayAppSnapshot {
   environment: string;
   nativeSDKVersion: string;
   platform: ReactNativePlatform;
-  authorityInstanceID: string;
   componentKeychainAccessGroups?: readonly string[];
 }
 
 let nextClient = 0;
 const wrapperID = Math.random().toString(36).slice(2);
-interface IdentityOwner {
-  id: string;
-  provider: () => Promise<LatchwayIdentitySnapshot | null>;
-  running: boolean;
-}
-const identityOwners = new WeakMap<NativeLatchwayModule, Map<string, Promise<IdentityOwner>>>();
-
 interface PendingIdentity {
   controller: AbortController;
   finished: Promise<void>;
@@ -87,7 +63,6 @@ function workFor(module: NativeLatchwayModule, appInstanceID: string): AppIdenti
   if (work === undefined) { work = { pending: new Set() }; apps.set(appInstanceID, work); }
   return work;
 }
-
 /** A wrapper for the process-wide native app, not a JavaScript session owner. */
 export class LatchwayApp {
   readonly name: string;
@@ -107,11 +82,6 @@ export class LatchwayApp {
     return this.accept(await command(this.module, { operation: "snapshot", name: this.name }));
   }
 
-  /** Explicit activation through the one registered identity authority. */
-  async activate(): Promise<LatchwayAppSnapshot> {
-    return this.accept(await command(this.module, { operation: "activate", name: this.name }));
-  }
-
   /** Verify an application's ID token and join/create its shared native account. */
   async signIn(input: LatchwayTokenInput): Promise<LatchwayAccount> {
     return this.identityOperation("signIn", input);
@@ -127,12 +97,14 @@ export class LatchwayApp {
    * Does not sign out your authentication provider or reset server-side quotas.
    * A genuine secure-storage failure remains blocked and can be retried here. */
   async signOut(): Promise<void> {
-    const minimumMinor = this.latest.platform === "react_native_ios" ? 3 : 2;
+    const minimum = this.latest.platform === "react_native_ios" ? [2, 0, 0] : [1, 2, 1];
     const version = /^(\d+)\.(\d+)\.(\d+)$/u.exec(this.latest.nativeSDKVersion);
-    if (this.latest.nativeAppABI !== 2 || version === null ||
-        Number(version[1]) < 1 || Number(version[1]) === 1 && Number(version[2]) < minimumMinor) {
+    const actual = version?.slice(1).map(Number);
+    const firstDifference = actual?.findIndex((part, index) => part !== minimum[index]);
+    if (this.latest.nativeAppABI !== 3 || actual === undefined || firstDifference !== undefined &&
+        firstDifference >= 0 && (actual[firstDifference] ?? -1) < (minimum[firstDifference] ?? 0)) {
       throw new LatchwayLifecycleError("native_version_incompatible",
-        "App signOut requires iOS SDK 1.3.0 or Android SDK 1.2.0. Reinstall native dependencies and rebuild the app.");
+        "App signOut requires iOS SDK 2.0.0 or Android SDK 1.2.1 with bridge ABI 3. Reinstall native dependencies and rebuild the app.");
     }
     const work = workFor(this.module, this.instanceID);
     let flight = work.signOut;
@@ -254,40 +226,17 @@ export class LatchwayApp {
   }
 
   private requireSuppliedIdentity(): void {
-    if (this.latest.nativeAppABI !== 2) {
+    if (this.latest.nativeAppABI !== 3) {
       throw new LatchwayLifecycleError("native_version_incompatible", "Rebuild with the supplied-identity native SDKs.");
     }
     if (this.latest.identityMode !== "supplied") {
-      throw new LatchwayLifecycleError("configuration_conflict", "This app uses a legacy identity authority.");
+      throw new LatchwayLifecycleError("configuration_conflict", "This app requires supplied identity.");
     }
   }
 
   /** Requires a captured generation. Never guesses the current/new account. */
   async logout(generationID: string): Promise<void> {
     this.accept(await command(this.module, { operation: "logout", name: this.name, generationID }));
-  }
-
-  /** Explicitly retire the current account and replace its auth owner. Useful
-   * after a standalone JS reload; never call this from an ordinary remount.
-   * Read a snapshot and supply its owner ID to reject stale competing transfers.
-   * Activation is a separate, intentional login action after this completes. */
-  async transferIdentityAuthority(options: {
-    identity: LegacyIdentityReference;
-    getIdentitySnapshot: NonNullable<LatchwayAppOptions["getIdentitySnapshot"]>;
-    expectedAuthorityInstanceID: string;
-  }): Promise<LatchwayAppSnapshot> {
-    const owner = await createIdentityOwner(this.module, options.getIdentitySnapshot);
-    const descriptor = await command(this.module, { operation: "transferIdentityAuthority", name: this.name,
-      identity: options.identity, authorityInstanceID: owner.id,
-      expectedAuthorityInstanceID: options.expectedAuthorityInstanceID });
-    const snapshot = this.accept(descriptor);
-    if (snapshot.authorityInstanceID !== owner.id) throw invalidResponse();
-    let owners = identityOwners.get(this.module);
-    if (owners === undefined) { owners = new Map(); identityOwners.set(this.module, owners); }
-    owners.set(identityOwnerKey({ ...options, baseURL: descriptor.baseURL,
-      applicationID: descriptor.applicationID, environment: descriptor.environment }), Promise.resolve(owner));
-    startIdentityOwner(this.module, owner);
-    return snapshot;
   }
 
   async makeClient(generationID?: string): Promise<LatchwayClient> {
@@ -321,11 +270,7 @@ export class LatchwayApp {
       });
       return new DefaultLatchwayClient({
         baseURL: new URL(`${descriptor.baseURL.replace(/\/$/u, "")}/`),
-        applicationID: descriptor.applicationID, environment: descriptor.environment,
-        identityProvider: "native-owned", appVersion: SDK_VERSION, nativeIdentityAuthority: true,
-        getIdentityToken: () => Promise.reject(new LatchwayLifecycleError("identity_authority_required", "Identity belongs to the native app.")),
-        appleSharedKeychainAccessGroups: descriptor.componentKeychainAccessGroups ?? [], nativeJSON: "", fingerprint: descriptor.appInstanceID,
-        scope: `${descriptor.appInstanceID}|${descriptor.generationID}`,
+        appleSharedKeychainAccessGroups: descriptor.componentKeychainAccessGroups ?? [],
       }, lease);
     } catch (error) {
       await this.module.dispose(clientID).catch(() => undefined);
@@ -373,89 +318,14 @@ export class LatchwayAccount {
 export async function configureLatchwayApp(options: LatchwayAppOptions, name = "[DEFAULT]"): Promise<LatchwayApp> {
   const module = await nativeModule();
   requireAppModule(module);
-  const { getIdentitySnapshot, ...publicOptions } = options;
-  const supplied = options.identity !== undefined && "providerID" in options.identity;
-  if (supplied) {
-    validateIdentityConfiguration(options.identity as LatchwayIdentityConfiguration);
-    if (getIdentitySnapshot !== undefined || options.identityProvider !== undefined) {
-      throw new LatchwayLifecycleError("configuration_conflict", "Supplied identity cannot install a legacy token authority.");
-    }
+  if (options.identity !== undefined) validateIdentityConfiguration(options.identity);
+  if (Object.keys(options).some(key => !["baseURL", "applicationID", "environment", "identity", "apple", "android"].includes(key)) ||
+      options.apple !== undefined && Object.keys(options.apple).some(key =>
+        !["rootKeychainAccessGroup", "sharedKeychainAccessGroups", "appAttestEnabled", "softwareKeyFallbackPolicy"].includes(key))) {
+    throw new LatchwayLifecycleError("configuration_conflict", "The app configuration contains unsupported options.");
   }
-  let owners = identityOwners.get(module);
-  if (owners === undefined) { owners = new Map(); identityOwners.set(module, owners); }
-  const ownerKey = identityOwnerKey(options);
-  let pendingOwner = owners.get(ownerKey);
-  if (pendingOwner === undefined && getIdentitySnapshot !== undefined) {
-    if (options.identity === undefined) throw new LatchwayLifecycleError("identity_authority_required");
-    // Publish the promise before awaiting native, so concurrent configure calls
-    // cannot register competing owners or replace the first callback.
-    pendingOwner = createIdentityOwner(module, getIdentitySnapshot);
-    owners.set(ownerKey, pendingOwner);
-  }
-  let owner: IdentityOwner | undefined;
-  try { owner = await pendingOwner; } catch (error) { owners.delete(ownerKey); throw error; }
-  let descriptor: AppDescriptor;
-  try {
-    descriptor = await command(module, { ...publicOptions, operation: "configure", name,
-      ...(supplied ? { identityMode: "supplied" } : {}),
-      ...(owner === undefined ? {} : { authorityInstanceID: owner.id }) });
-  } catch (error) {
-    // A failed first initialization must not pin an unregistered JS callback.
-    // Do not delete a newer owner's promise installed by an explicit transfer.
-    if (owners.get(ownerKey) === pendingOwner) owners.delete(ownerKey);
-    throw error;
-  }
-  if (owner !== undefined && owner.id === descriptor.authorityInstanceID) startIdentityOwner(module, owner);
+  const descriptor = await command(module, { ...options, operation: "configure", name, identityMode: "supplied" });
   return new LatchwayApp(name, module, descriptor);
-}
-
-function identityOwnerKey(options: LatchwayAppOptions): string {
-  const identity = options.identity;
-  return JSON.stringify([new URL(options.baseURL).href.replace(/\/$/u, ""), options.applicationID,
-    options.environment, identity !== undefined && "name" in identity ? identity.name : undefined,
-    identity?.issuer, identity !== undefined && "name" in identity ? identity.tenant : undefined]);
-}
-
-function startIdentityOwner(module: NativeLatchwayModule, owner: IdentityOwner): void {
-  if (owner.running) return;
-  owner.running = true;
-  void serveIdentity(module, owner).finally(() => { owner.running = false; });
-}
-
-async function createIdentityOwner(module: NativeLatchwayModule, provider: IdentityOwner["provider"]): Promise<IdentityOwner> {
-  const encoded = await module.appCommand(JSON.stringify({ operation: "newIdentityAuthority" }))
-    .catch((error: unknown) => { throw fromNativeError(error); });
-  let handle: unknown;
-  try { handle = JSON.parse(encoded); } catch { throw invalidResponse(); }
-  if (typeof handle !== "object" || handle === null || Array.isArray(handle) ||
-      Object.keys(handle).length !== 1 || !("authorityInstanceID" in handle) ||
-      typeof handle.authorityInstanceID !== "string" || !UUID.test(handle.authorityInstanceID)) throw invalidResponse();
-  return { id: handle.authorityInstanceID, provider, running: false };
-}
-
-async function serveIdentity(module: NativeLatchwayModule, owner: {
-  id: string; provider: () => Promise<LatchwayIdentitySnapshot | null>;
-}): Promise<void> {
-  // Native limits each identity wait to 15 seconds. If this JS runtime goes
-  // away or its provider stalls, native authorization fails closed.
-  try {
-    while (true) {
-      const encoded = await module.appCommand(JSON.stringify({ operation: "identityPoll", authorityInstanceID: owner.id }));
-      if (encoded.length > 1024) return;
-      const request = JSON.parse(encoded) as { requestID?: unknown };
-      if (typeof request !== "object" || request === null || Array.isArray(request) ||
-          Object.keys(request).some((key) => key !== "requestID")) return;
-      if (request.requestID === undefined) continue;
-      if (typeof request.requestID !== "string" || !UUID.test(request.requestID)) return;
-      let snapshot: LatchwayIdentitySnapshot | null;
-      try { snapshot = await owner.provider(); } catch { snapshot = null; }
-      await module.appCommand(JSON.stringify({ operation: "identityReply", authorityInstanceID: owner.id,
-        requestID: request.requestID, snapshot }));
-    }
-  } catch {
-    // Bridge invalidation terminates the owner loop. Native session checks
-    // still enforce their timeout and never reuse a previous identity token.
-  }
 }
 
 export async function getLatchwayApp(name = "[DEFAULT]"): Promise<LatchwayApp> {
@@ -480,14 +350,17 @@ async function command(module: NativeLatchwayModule, input: Record<string, unkno
        new Set(record.componentKeychainAccessGroups).size !== record.componentKeychainAccessGroups.length ||
        record.componentKeychainAccessGroups.some(group => typeof group !== "string" || group.length > 255 ||
          !/^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9.-]+$/u.test(group)))) throw invalidResponse();
-  if (![1, 2].includes(record.nativeAppABI as number) || record.contractVersion !== "1.1.0" || record.protocolVersion !== 3 ||
-      record.identityMode !== undefined && !["supplied", "authority"].includes(record.identityMode as string) ||
+  if (record.nativeAppABI !== 3) {
+    throw new LatchwayLifecycleError("native_version_incompatible", "Rebuild with the current React Native bridge.");
+  }
+  if (record.contractVersion !== "1.1.0" || record.protocolVersion !== 3 ||
+      record.identityMode !== "supplied" ||
       !Number.isSafeInteger(record.revision) || (record.revision as number) < 0 ||
       !["inactive", "active", "refreshRequired", "retiring", "loggedOut"].includes(record.state as string) ||
       !["react_native_ios", "react_native_android"].includes(record.platform as string) ||
-      ["baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "authorityInstanceID"]
+      ["baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID"]
         .some((key) => typeof record[key] !== "string" || !record[key].length || record[key].length > 2048) ||
-      !UUID.test(record.appInstanceID as string) || !UUID.test(record.authorityInstanceID as string) ||
+      !UUID.test(record.appInstanceID as string) ||
       record.generationID !== undefined && (typeof record.generationID !== "string" || !UUID.test(record.generationID)) ||
       ["active", "refreshRequired"].includes(record.state as string) && record.generationID === undefined) throw invalidResponse();
   let url: URL;
@@ -505,7 +378,7 @@ function requireAppModule(module: NativeLatchwayModule): void {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DESCRIPTOR_KEYS = new Set(["nativeAppABI", "contractVersion", "protocolVersion", "revision", "state", "platform",
-  "baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "authorityInstanceID", "generationID", "componentKeychainAccessGroups", "identityMode"]);
+  "baseURL", "applicationID", "environment", "nativeSDKVersion", "appInstanceID", "generationID", "componentKeychainAccessGroups", "identityMode"]);
 
 async function beginIdentity(module: NativeLatchwayModule, input: Record<string, unknown>): Promise<string> {
   return opaqueHandle(module, input, "ticketID");
@@ -524,7 +397,7 @@ async function opaqueHandle(module: NativeLatchwayModule, input: Record<string, 
 }
 
 function publicSnapshot(value: AppDescriptor): LatchwayAppSnapshot {
-  return { appInstanceID: value.appInstanceID, authorityInstanceID: value.authorityInstanceID,
+  return { appInstanceID: value.appInstanceID,
     revision: value.revision, state: value.state,
     ...(value.generationID === undefined ? {} : { generationID: value.generationID }) };
 }

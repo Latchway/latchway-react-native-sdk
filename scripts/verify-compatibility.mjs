@@ -48,11 +48,11 @@ assertEqual(requireMatch(versionSource, /SDK_VERSION = "([^"]+)"/u, "React Nativ
   compatibility.react_native.version, "React Native SDK version constant");
 assertEqual(requireMatch(versionSource, /CONTRACT_VERSION = "([^"]+)"/u, "React Native contract constant"),
   compatibility.contract.version, "React Native contract constant");
-assertEqual(Number(requireMatch(versionSource, /PROTOCOL_VERSION = (\d+)/u, "legacy React Native protocol constant")),
-  2, "legacy React Native protocol constant");
+assertEqual(Number(requireMatch(versionSource, /PROTOCOL_VERSION = (\d+)/u, "React Native protocol constant")),
+  3, "React Native protocol constant");
 if (compatibility.contract.wire_protocol !== 3 ||
-    !versionSource.includes("[1, PROTOCOL_VERSION, 3]")) {
-  throw new Error("Shared native apps require wire 3 alongside legacy wire 2 constructors.");
+    !versionSource.includes("[PROTOCOL_VERSION]")) {
+  throw new Error("Current native apps require wire 3 without legacy constructor fallbacks.");
 }
 
 const podspec = await readText("LatchwayReactNative.podspec");

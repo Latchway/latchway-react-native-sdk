@@ -1,3 +1,4 @@
+import { sharedFixtureClient } from "./shared-fixture.js";
 import { readFile } from "node:fs/promises";
 import OpenAI from "openai";
 import { generateText } from "ai";
@@ -24,7 +25,7 @@ import {
   createFrameworkConsumers,
   runFrameworkConsumerSmoke,
 } from "../example/src/framework-consumers.js";
-import { createLatchwayClient, SDK_VERSION, type LatchwayClient } from "../src/index.js";
+import { SDK_VERSION, type LatchwayClient } from "../src/index.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 const FEATURE = "habit_assistant";
@@ -140,8 +141,6 @@ describe("React Native framework conformance", () => {
     expect(examplePackage.dependencies?.["@anthropic-ai/sdk"]).toBeUndefined();
     expect(gateway.configureInputs[0]).toMatchObject({
       sdkVersion: SDK_VERSION,
-      frameworkID: fixture.registry.id,
-      frameworkVersion: fixture.registry.react_native.latest,
     });
     expect(gateway.requests[0]?.feature).toBe(FEATURE);
     expect(gateway.requests[0]?.headers.get("X-Latchway-Framework")).toBe(fixture.registry.id);
@@ -406,7 +405,7 @@ describe("React Native framework conformance", () => {
       "data-plane-dispatch",
     ]);
     expect(gateway.requests).toHaveLength(1);
-    expect(getIdentityToken).toHaveBeenCalledTimes(1);
+    expect(getIdentityToken).not.toHaveBeenCalled();
   });
 
   it(reactNativeFrameworkCaseTitle("RN-FW-REFRESH-001"), async () => {
@@ -592,14 +591,13 @@ describe("React Native framework conformance", () => {
 
 function install(
   gateway: NativeFrameworkGateway,
-  getIdentityToken: () => Promise<string> = async () => IDENTITY_TOKEN,
+  _getIdentityToken?: () => Promise<string>,
 ): LatchwayClient {
   restoreNative = installNativeModuleForTesting(gateway);
-  const client = createLatchwayClient({
+  const client = sharedFixtureClient({
     baseURL: GATEWAY,
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
-    getIdentityToken,
     apple: { rootKeychainAccessGroup: "ABCDE12345.dev.latchway.example" },
   });
   clients.push(client);

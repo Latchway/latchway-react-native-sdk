@@ -24,7 +24,7 @@ Pod::Spec.new do |spec|
     "DEFINES_MODULE" => "YES",
   }
 
-  spec.dependency "Latchway/AppAttest", "1.3.0"
+  spec.dependency "Latchway/AppAttest", "2.0.0"
   if respond_to?(:install_modules_dependencies, true)
     install_modules_dependencies(spec)
   else

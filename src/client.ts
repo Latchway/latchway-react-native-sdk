@@ -2,7 +2,7 @@ import { LatchwayError } from "@latchway/client";
 import { ReadableStream as PonyfillReadableStream } from "web-streams-polyfill";
 import type { RuntimeConfiguration } from "./config.js";
 import { encodeIOSComponentDescriptor, encodeIOSComponentDescriptors } from "./config.js";
-import { acquire, type NativeLease } from "./coordinator.js";
+import type { NativeLease } from "./coordinator.js";
 import { parseComponentDiagnostics } from "./component-client.js";
 import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
 import { assertNoCredentialFields } from "./native-output.js";
@@ -17,7 +17,7 @@ import type {
   ReactNativeComponentDiagnostics,
   ReactNativeIOSComponent,
 } from "./types.js";
-import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import { SDK_VERSION } from "./version.js";
 
 const MAXIMUM_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 const MAXIMUM_NATIVE_REQUEST_BYTES = 12 * 1024 * 1024;
@@ -170,9 +170,9 @@ export class DefaultLatchwayClient implements LatchwayClient {
   private retired = false;
   private logoutComplete = false;
 
-  constructor(private readonly config: RuntimeConfiguration, lease?: Promise<NativeLease>) {
+  constructor(private readonly config: RuntimeConfiguration, lease: Promise<NativeLease>) {
     this.gatewayURL = config.baseURL.href.replace(/\/$/u, "");
-    this.lease = lease ?? acquire(config);
+    this.lease = lease;
     this.ready = this.lease.then(async (lease) => { await lease.ready; });
   }
 
@@ -205,8 +205,9 @@ export class DefaultLatchwayClient implements LatchwayClient {
     }
 
     const operationID = makeOperationID();
-    const identityToken = await this.identityForOperation(signal);
-    const start = lease.module.startRequest(lease.clientID, operationID, identityToken, requestJSON);
+    this.assertActive();
+    if (signal?.aborted) throw abortError();
+    const start = lease.module.startRequest(lease.clientID, operationID, requestJSON);
     const observedStart = start.then(async (value) => {
       if (signal.aborted || this.disposed || this.retired) {
         const responseID = recoverResponseID(value);
@@ -263,12 +264,29 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     const compatibility = await lease.ready;
     const encoded = await this.nativeString("diagnostics");
-    return parseDiagnostics(encoded, compatibility.platform, compatibility.nativeSDKVersion, this.config.nativeIdentityAuthority === true);
+    return parseDiagnostics(encoded, compatibility.platform, compatibility.nativeSDKVersion);
   }
 
   async refresh(): Promise<void> {
     this.assertActive();
     await this.nativeVoid("refresh");
+  }
+
+  async componentAccount(): Promise<string> {
+    this.assertActive();
+    const lease = await this.lease;
+    await lease.ready;
+    this.assertActive();
+    const encoded = await lease.module.appCommand(JSON.stringify({ operation: "componentAccount", clientID: lease.clientID }))
+      .catch((cause: unknown) => { throw fromNativeError(cause); });
+    if (encoded.length > 8192) throw new LatchwayError("protocol_response_invalid", "Invalid component account handoff.");
+    const value = parseRecord(encoded, "component account");
+    if (!hasOnlyKeys(value, ["account"]) || typeof value.account !== "string" || value.account.length > 4096 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/u.test(value.account)) {
+      throw new LatchwayError("protocol_response_invalid", "Invalid component account handoff.");
+    }
+    this.assertActive();
+    return value.account;
   }
 
   async prepareComponents(
@@ -326,17 +344,9 @@ export class DefaultLatchwayClient implements LatchwayClient {
     await this.nativeVoid("revoke");
   }
 
-  async revokeCurrentInstallationFamily(retiring: readonly ReactNativeIOSComponent[] = []): Promise<void> {
+  async revokeCurrentInstallationFamily(): Promise<void> {
     this.assertActive();
-    if (retiring.length === 0) {
-      await this.nativeVoid("revokeFamily");
-      return;
-    }
-    const componentsJSON = encodeIOSComponentDescriptors(
-      retiring,
-      this.config.appleSharedKeychainAccessGroups,
-    );
-    await this.nativeComponentOperation("revokeFamily", componentsJSON);
+    await this.nativeVoid("revokeFamily");
   }
 
   async dispose(): Promise<void> {
@@ -360,12 +370,6 @@ export class DefaultLatchwayClient implements LatchwayClient {
     this.logoutComplete = true;
   }
 
-  private async identityForOperation(signal?: AbortSignal): Promise<string> {
-    const value = this.config.nativeIdentityAuthority ? "" : await token(this.config.getIdentityToken, signal);
-    this.assertActive();
-    return value;
-  }
-
   private async nativeString(
     method: "quota" | "diagnostics",
     signal?: AbortSignal,
@@ -374,10 +378,11 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await this.identityForOperation(signal);
+    this.assertActive();
+    if (signal?.aborted) throw abortError();
     const operation = method === "quota"
-      ? lease.module.quota(lease.clientID, operationID, identityToken, argument ?? "")
-      : lease.module.diagnostics(lease.clientID, operationID, identityToken);
+      ? lease.module.quota(lease.clientID, operationID, argument ?? "")
+      : lease.module.diagnostics(lease.clientID, operationID);
     return abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
@@ -385,33 +390,32 @@ export class DefaultLatchwayClient implements LatchwayClient {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await this.identityForOperation(signal);
+    this.assertActive();
+    if (signal?.aborted) throw abortError();
     const operation = method === "refresh"
-      ? lease.module.refresh(lease.clientID, operationID, identityToken)
+      ? lease.module.refresh(lease.clientID, operationID)
       : method === "revoke"
-        ? lease.module.revoke(lease.clientID, operationID, identityToken)
-        : lease.module.revokeFamily(lease.clientID, operationID, identityToken);
+        ? lease.module.revoke(lease.clientID, operationID)
+        : lease.module.revokeFamily(lease.clientID, operationID);
     await abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
   private async nativeComponentOperation(
-    method: "prepare" | "replace" | "revokeComponent" | "revokeFamily",
+    method: "prepare" | "replace" | "revokeComponent",
     encodedDescriptor: string,
     signal?: AbortSignal,
   ): Promise<string> {
     const lease = await this.lease;
     await lease.ready;
     const operationID = makeOperationID();
-    const identityToken = await this.identityForOperation(signal);
+    this.assertActive();
+    if (signal?.aborted) throw abortError();
     const operation = method === "prepare"
-      ? lease.module.prepareComponents(lease.clientID, operationID, identityToken, encodedDescriptor)
+      ? lease.module.prepareComponents(lease.clientID, operationID, encodedDescriptor)
       : method === "replace"
-        ? lease.module.replaceComponent(lease.clientID, operationID, identityToken, encodedDescriptor)
-        : method === "revokeComponent"
-          ? lease.module.revokeComponent(lease.clientID, operationID, identityToken, encodedDescriptor)
-            .then(() => "")
-          : lease.module.revokeFamilyWithComponents(lease.clientID, operationID, identityToken, encodedDescriptor)
-            .then(() => "");
+        ? lease.module.replaceComponent(lease.clientID, operationID, encodedDescriptor)
+        : lease.module.revokeComponent(lease.clientID, operationID, encodedDescriptor)
+          .then(() => "");
     return abortable(operation, signal, () => { lease.module.cancel(lease.clientID, operationID); });
   }
 
@@ -792,16 +796,15 @@ function parseDiagnostics(
   encoded: string,
   platform: "react_native_ios" | "react_native_android",
   nativeSDKVersion: string,
-  shared = false,
 ): ReactNativeDiagnostics {
-  const contractVersion = shared ? "1.1.0" : CONTRACT_VERSION;
-  const protocolVersion = shared ? 3 : PROTOCOL_VERSION;
+  const contractVersion = "1.1.0";
+  const protocolVersion = 3;
   const value = parseRecord(encoded, "diagnostics");
   assertNoCredentialFields(value);
   if (!hasOnlyKeys(value, [
     "contractVersion", "protocolVersion", "keyStorage", "attestation", "session", "installation", "server",
     "lastErrorCode",
-  ]) || (value.contractVersion !== contractVersion && (shared || value.contractVersion !== "1.0.0")) || value.protocolVersion !== protocolVersion ||
+  ]) || value.contractVersion !== contractVersion || value.protocolVersion !== protocolVersion ||
       typeof value.keyStorage !== "string" || !isRecord(value.attestation) || !isRecord(value.session) ||
       !isRecord(value.installation) || !isRecord(value.server)) {
     throw new LatchwayError("protocol_response_invalid", "Latchway returned invalid native diagnostics.");
@@ -856,20 +859,6 @@ function parseDiagnostics(
     },
     ...(lastErrorCode === undefined ? {} : { lastErrorCode }),
   };
-}
-
-async function token(provider: () => Promise<string>, signal?: AbortSignal): Promise<string> {
-  let result: string;
-  try {
-    result = await abortable(Promise.resolve().then(provider), signal);
-  } catch (cause) {
-    if (isAbort(cause)) throw cause;
-    throw new LatchwayError("identity_token_invalid", "The identity token provider failed.", { cause });
-  }
-  if (typeof result !== "string" || result.length === 0 || result.length > 65_536 || /\p{Cc}/u.test(result)) {
-    throw new LatchwayError("identity_token_invalid", "The identity token provider returned an invalid token.");
-  }
-  return result;
 }
 
 async function abortable<T>(operation: Promise<T>, signal?: AbortSignal, cancel?: () => void): Promise<T> {

@@ -27,7 +27,7 @@ if (System.getenv('LATCHWAY_SHARED_NATIVE_SOURCE') == '1') {
     allprojects {
         configurations.configureEach {
             resolutionStrategy.eachDependency { details ->
-                if (details.requested.group == 'dev.latchway' && details.requested.name in ['latchway-core', 'latchway-okhttp', 'latchway-play-integrity', 'latchway-firebase-auth', 'latchway-bom']) details.useVersion('1.1.0-dev')
+                if (details.requested.group == 'dev.latchway' && details.requested.name in ['latchway-core', 'latchway-okhttp', 'latchway-play-integrity', 'latchway-firebase-auth', 'latchway-bom']) details.useVersion('1.2.1-dev')
             }
         }
         repositories {

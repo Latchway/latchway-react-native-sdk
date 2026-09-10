@@ -27,8 +27,6 @@ export function sharedApp(): Promise<LatchwayApp> {
       apple: {
         rootKeychainAccessGroup: config.appleTeamID + '.' + config.appleBundleID,
         appAttestEnabled: true, softwareKeyFallbackPolicy: 'disallow',
-        // This chat demo has never provisioned delegated extension credentials.
-        legacyComponents: [],
       },
       android: Platform.OS === 'android' ? {
         playIntegrityCloudProjectNumber: config.androidPlayIntegrityProjectNumber,
@@ -55,11 +53,10 @@ onIdTokenChanged(auth, user => {
     .catch(() => {}); // A failed refresh remains suspended; the next chat action retries visibly.
 });
 
-/** Only the explicit sign-out action may capture a persisted generation on a
- * cold launch. Delayed auth notifications retire only their already-held scope. */
-export async function signOutLatchway(): Promise<void> {
-  const snapshot = await (await sharedApp()).snapshot();
-  await accounts.logout(snapshot.generationID);
+/** Explicit application logout needs no account lookup, including cold launch
+ * or interrupted cleanup. Delayed auth events retire only their held scope. */
+export function signOutLatchway(): Promise<void> {
+  return accounts.signOut();
 }
 
 let observedIdentity = identityKey();

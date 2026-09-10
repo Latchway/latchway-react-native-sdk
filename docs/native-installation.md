@@ -1,216 +1,154 @@
 # Native installation
 
-For React Native 0.74–0.81 hosts, first follow the
+React Native 2.0.0 uses the fresh shared-account model and pins iOS 2.0.0 plus
+Android 1.2.1. Install Pods and rebuild both native apps; bridge ABI 3 is not
+compatible with an older JS/native bundle. Historical artifacts are unchanged.
+
+For React Native 0.74 hosts, follow the complete
 [minimum-version toolchain and New Architecture setup](react-native-compatibility.md).
-The expanded peer range starts in 1.1.3. React Native SDK 1.3.0 pins iOS 1.3.0
-and Android 1.2.0; upgrading requires installing Pods and rebuilding native apps.
 
-React Native autolinking installs both native bridges. New integrations call
-`Latchway.configure` from either native or RN with matching public configuration;
-no extra runtime native bootstrap, Firebase dependency or authority registration
-is needed. Capabilities/provisioning and the platform security settings below
-are still host build requirements. See [developer-supplied identity](supplied-identity.md).
-If the host also uses a native SDK directly, resolve one matching implementation:
-do not link a separate SwiftPM SDK copy alongside the CocoaPods SDK used by RN.
-
-## iOS
+## iOS application
 
 Configure `apple.rootKeychainAccessGroup` with the fully resolved private app-ID
-group that appears first in the signed root target. For an existing legacy
-installation, list every explicit
-extension-shared group in `apple.legacySharedKeychainAccessGroups`; the native
-SDK scans only exact root-record coordinates in those groups. Missing,
-wildcard, duplicate, or root-equal groups fail closed, and stale root records
-require an explicit migration.
+group that appears first in the signed root target. The native SDK proves that
+boundary before root key/session operations. Root credentials never use an
+extension group or an implicit shared-first group.
 
-The podspec pins `Latchway/AppAttest` 1.3.0 and React Native codegen dependencies.
-Run CocoaPods from the host application after installing the npm package.
-Enable App Attest for the application identifier and use a real device for
-conformance; simulators report attestation unsupported.
+If using delegated extensions, declare their current approved groups in
+`apple.sharedKeychainAccessGroups`. Each group must be explicit, fully resolved,
+distinct from the root group and authorized by the target's signed entitlement.
+Omission at first registration means no delegated groups. Equivalent later
+configure calls inherit the immutable allowlist.
 
-The native auth owner awaits `try await app.signOut()` on the shared
-`LatchwayApp` at sign-out, even if no RN or AI screen was opened. This cleans
-current/persisted Latchway account state; it does not call Firebase or another
-identity provider's sign-out. Secure-storage failures still throw and require
-retry through the same API before another login.
-
-The Firebase Authentication example pins React Native Firebase 25.1.0 and
-Firebase Apple SDK 12.15.0 and uses CocoaPods static frameworks. The Latchway
-package itself does not depend on Firebase. Firebase has announced that the
-existing CocoaPods releases remain installable but new Firebase Apple SDK
-versions stop shipping through CocoaPods after October 2026; migrate the
-example to the compatible React Native Firebase SPM path only after its pinned
-RN 0.82 native host build is green.
-
-For a source-development run on a physical iPhone or iPad, the example offers a
-separate opt-in Debug bootstrap. `scripts/copy-development-firebase-ios-config.sh`
-validates an external, bundle-matched Firebase plist and copies it only into a
-Debug `iphoneos` build; `scripts/run-development-react-native-ios.sh` keeps the
-custom token and digest out of an allowlisted Xcode build environment, validates
-the complete non-secret deployment coordinates, rechecks grant freshness, and
-force-bundles the exact JavaScript checkout before handing the grant to one
-no-debugger launch. The physical-device run therefore does not require Metro or
-Local Network access, although iOS can still show React Native's one-time Debug
-permission sheet on the first install. Later runs update the existing app so
-that OS consent persists. The app signs in with a new grant, revokes the old
-descriptor-bound family, verifies the root Responses/quota/diagnostics path,
-and prepares the App Intent descriptor. After the one-use grant has been
-destroyed, the root publishes a nonsecret exact-run shared-Keychain challenge
-immediately before the waiting marker. The separately launched Debug App Intent
-captures that challenge before constructing its client, refreshes an
-independently keyed delegated session, and fully consumes one successful bounded
-Responses body. It rechecks the challenge immediately before echoing the run in
-a bounded shared-Keychain receipt. The containing app accepts only its
-native-captured exact run, deletes both artifacts, retires that exact
-descriptor-bound family, and signs out. The runner passes only after retrieving
-the exact random-run
-marker written after terminal cleanup. Its bounded post-wait abort path also
-relaunches the containing app to finish and verify family retirement/sign-out
-after interruption or timeout, deleting both challenge and receipt. The Debug
-native module and marker writer are
-absent from Release. This path verifies local integration only and cannot
-satisfy the protected physical-evidence gate. See the example README for the
-exact runner workflow and possible Shortcuts tap.
-
-Firebase Authentication and Firebase App Check are distinct. The checked-in
-example pins Firebase App/Auth but does not install the native App Check module,
-and a Firebase web App Check registration does not apply to an iOS application.
-When App Check enforcement is enabled for the Firebase resource, pin a
-compatible React Native Firebase App Check dependency and activate the Apple
-App Attest provider before the Auth exchange. A debug App Check provider/token
-is never acceptable in a protected Release candidate.
-
-A production App Attest run requires all of the following, none of which can be
-substituted by a simulator build:
-
-- an App Attest-capable physical iPhone or iPad;
-- a registered App ID with the App Attest capability, a matching Team ID and
-  bundle ID, and a provisioning profile containing the entitlement;
-- `development` or `production` selected consistently in the entitlement,
-  React Native client configuration, gateway application record, and Apple
-  verification policy; and
-- a real application identity token plus the exact gateway/core release named
-  by the synchronized contract lock.
-
-The legacy root-application bridge constructs the App Attest provider with the exact
-`rootKeychainAccessGroup`, `legacySharedKeychainAccessGroups`, and
-`.reactNativeIOS` runtime, then passes the same groups to
-`LatchwayConfiguration`. Keychain, Secure Enclave, session, and accepted App
-Attest key state are runtime-isolated on that compatibility path. The recommended
-shared-app API instead reuses the native app registry across native and RN
-callers. An extension bridge constructs no App
-Attest provider: iOS app extensions cannot call
-`DCAppAttestService.generateKey`, so extension sessions remain independently
-keyed and delegated from the already attested root application.
-
-The checked-in App Intents target has two intentionally different build
-boundaries. In Debug, its own CocoaPods target links `Latchway/AppExtensions`
-and the native Swift intent performs the local delegated-request proof without
-hosting a React Native JavaScript runtime. In Release, that dependency is not
-linked, no executable Latchway client path is compiled, and the archive/signing
-fixture's intent fails closed. The CocoaPods subspec is imported through module
-`Latchway`, not the SwiftPM-only module name.
-
-Candidate production requires a distinct child bundle ID and provisioning
-profile. The signed root target lists its private app-ID Keychain group first
-and the shared component group second; the first position keeps implicit root
-Keychain writes private. The signed extension lists only the shared group and
-therefore cannot read root-private key, credential, identity, or session state.
-Each provisioning profile must authorize every group its target signs, either
-exactly or with a well-formed terminal wildcard. The extension must not carry
-App Attest. The Debug intent constructs its delegated client with
-`.reactNativeIOS`; the gateway component definition must therefore use platform
-`react_native_ios`, kind `app_intent_extension`, delegated-only trust, and the
-same requested feature as the descriptor prepared by the root.
-
-The root JavaScript API owns the descriptor lifecycle:
-
-- `prepareComponents` provisions one or more exact descriptors;
-- `replaceComponent` rotates/replaces one exact descriptor;
-- root-side `componentDiagnostics` reads redacted local state without acquiring
-  application identity;
-- `revokeComponent` retires one descriptor; and
-- no-argument `revokeCurrentInstallationFamily()` retires the root plus every
-  component in the native iOS SDK's durable root-private descriptor registry;
-  the optional descriptor list additionally covers pre-registry legacy state.
-
-Descriptors are normalized and snapshotted before asynchronous identity work.
-The native SDK registers only their public Keychain coordinates before it can
-create component-local state. Successful cleanup removes a coordinate, while a
-failed Keychain erasure keeps it durable for retry after a later app launch.
-Preparation, replacement, and returned diagnostics are checked against that
-same snapshot, and serialized multi-component input larger than 65,536 bytes is
-rejected in JavaScript before crossing the native bridge. Component keys,
-grants, delegated sessions, and the root identity never cross into JavaScript.
-
-For local native SDK work, declare the sibling `Latchway.podspec` by path in the
-appropriate host targets. The root path declaration lets the autolinked React
-Native pod resolve its App Attest dependency from that source, while the
-extension subspec is Debug-only:
-
-```ruby
-target "ContainingApp" do
-  pod "Latchway", :path => "../../../latchway-ios-sdk"
-  # use_native_modules! / use_react_native! follows here.
-end
-
-target "AppIntents" do
-  pod "Latchway/AppExtensions", :path => "../../../latchway-ios-sdk",
-      :configurations => ["Debug"]
-end
+```ts
+const app = await Latchway.configure({
+  baseURL, applicationID, environment, identity,
+  apple: {
+    rootKeychainAccessGroup: 'YOURPREFIX.com.example.app',
+    sharedKeychainAccessGroups: ['YOURPREFIX.com.example.app.widget'],
+  },
+});
 ```
 
-Local paths belong only in the host Podfile. They are absent from the published React Native podspec.
+Use the actual App ID prefix from signing; it can differ from the Team ID.
+Literal `$(AppIdentifierPrefix)`, missing entitlements and invalid groups fail.
+Fresh account storage does not require inventory of prior SDK stores or invoke
+a migration callback.
 
-## Android
+Install the native pods selected by the matching RN package/source configuration,
+then rebuild the app. Keep a single native implementation: do not also link
+another SPM copy into the host. Local source paths belong only in development
+host configuration, never the published RN podspec.
 
-The library pins the native 1.2.0 Maven coordinates. The library and native AAR
-minimum compile SDK are API 34; minimum Android runtime API remains 24.
-The AARs publish Kotlin 2.3 metadata. The RN 0.74 minimum fixture and RN 0.82
-example use Kotlin 2.3.21, AGP 8.12.0 and Gradle 8.13; the example's newer
-compile/target SDK is a host choice, not the Latchway library minimum.
-The minimum fixture uses an explicit newer build-only React Native Gradle
-plugin and settings-based autolinking; follow its complete compatibility recipe.
-React Native and Codegen themselves resolve from the consuming app, not a
-library-local 0.82 installation.
-Play Integrity requires the decimal Google Cloud project number in
-`android.playIntegrityCloudProjectNumber`; JavaScript never receives or
-supplies the resulting integrity token.
+Enable App Attest on the application identifier. Real attestation requires a
+supported physical iPhone/iPad, a matching bundle/team/profile, consistent
+development/production App Attest policy, and a valid application identity token.
+A simulator cannot substitute for that proof. The SDK constructs the default
+native App Attest provider; application code supplies identity separately.
 
-The native auth owner calls the shared `LatchwayApp`'s suspend `app.signOut()`
-from its serialized auth coroutine, even if React Native has not mounted.
-Await completion before accepting another login. Sign-out clears Latchway
-account state, not the app's external auth provider; real secure-storage
-failures still throw and can be retried with the same method.
+To use local device builds and TestFlight against the same development gateway,
+see [development attestation](development-attestation.md). Apple environment
+acceptance is server-owned; there is no new JavaScript App Attest environment flag.
 
-A production Play Integrity run requires a physical device and a build whose
-package name and signing-certificate digest match the gateway application
-record. Configure the Play Integrity API and its decimal Google Cloud project
-number, upload the signed build to a Play internal/closed/production track, and
-install it from Google Play. A locally sideloaded debug APK can prove compilation
-and bridge behavior, but it is not production Play Integrity evidence. Exercise
-both hardware-backed/StrongBox-available and fallback policy variants on the
-device matrix required by the deployment.
+Firebase is not part of Latchway's dependency graph. An app may own Firebase
+Auth or any supported issuer's SDK and forward tokens through supplied-identity
+APIs. Firebase Auth, Firebase App Check and gateway App Attest are distinct;
+one does not substitute for another.
 
-For local native SDK work, publish the native artifacts to a disposable Maven repository and set one of:
+## iOS delegated extensions
 
-```sh
-./android/gradlew -p android -PlatchwayNativeRepository=/absolute/path/to/maven check
+The containing app signs with its private group first, followed by separate
+component groups. Each extension signs with only its own group and never the
+root-private or a sibling's group. Every signed group must be permitted by its
+provisioning profile. The extension must not carry an App Attest entitlement.
+
+Host operations use the captured account's client:
+
+- `prepareComponents` provisions approved descriptors;
+- `replaceComponent` replaces one component;
+- `componentDiagnostics` returns safe local state;
+- `revokeComponent` retires one component; and
+- explicit family revocation retires the current registered family.
+
+Normal logout uses `app.signOut()`, not installation revocation. It persists
+account/component retirement and fences existing work even offline, including
+pending identity acquisition and interrupted cleanup. Use `account.logout()`
+only when deliberately targeting that captured account generation.
+
+A descriptor contains a definition ID, kind, fully resolved component Keychain
+group and requested features. Native code validates it against the registered
+allowlist and gateway policy, and records its coordinate before component state
+can be created. Keys, grants and sessions stay native and account-scoped.
+Failed cleanup remains journaled for retry; an old handle cannot open a new
+account's component.
+
+An extension client requires the explicit current `LatchwayComponentAccount`
+handoff created by the root client's native `componentAccount()`. This is a
+non-secret generation descriptor, not a root credential. The Swift extension
+initializer takes gateway/application/environment, the component and account;
+it takes no root-private group or identity token. A genuinely RN-hosted extension
+uses the account-bound component bridge. The root's
+`await client.componentAccount()` returns an opaque string produced natively;
+pass it unchanged, not a JavaScript user ID or invented scope:
+
+```ts
+const handoff = await client.componentAccount();
+// Transfer only this non-secret descriptor through an authorized container.
+// In the separate signed RN-hosted extension process:
+const componentClient = createLatchwayComponentClient({
+  baseURL, applicationID, environment, component, account: handoff,
+});
+const diagnostics = await componentClient.diagnostics();
 ```
 
-```sh
-LATCHWAY_NATIVE_REPOSITORY=/absolute/path/to/maven ./android/gradlew -p android check
-```
+The root-private group and application identity are not component-client
+options. There is no unbound extension storage path. This diagnostic call does
+not by itself prove delegated request execution. The handoff is iOS-specific;
+Android rejects that operation explicitly.
 
-The repository is content-filtered to `dev.latchway`. Composite-build substitution is intentionally avoided because the Android SDK and React Native 0.82 currently use incompatible Gradle major versions.
+Application extensions remain delegated-only. They cannot call
+`DCAppAttestService.generateKey`; the host cannot attest on their behalf.
+Use `Latchway/AppExtensions` in the extension target. An App Intent implemented
+in Swift does not need a React Native runtime. Source examples and signed
+physical extension checks are separate; compiling an intent is not proof of
+entitlement isolation, delegated networking or a cross-process logout race.
 
-## Release dependency check
+## Android application
 
-Before npm publication, verify that a clean consumer resolves the exact public
-CocoaPods/Maven coordinates without local path or repository overrides. Publish
-the native SDKs first and wait for the coordinates to become downloadable; an
-accepted Maven upload does not by itself mean Central publication is complete.
-A local native build proves source compatibility, not public dependency
-availability. The current main-only `single-maintainer-release.yml` workflow
-builds and publishes the npm package; it does not run a separate consumer
-verification gate or establish physical-device evidence.
+The native authentication owner calls `app.signOut()` on the shared app even
+when RN has not mounted; Swift uses `try await app.signOut()`, and Kotlin uses
+the suspend function. Await cleanup before accepting another account. External
+Firebase or other auth-provider logout is still application-owned.
+
+Supply the decimal Google Cloud project number in
+`android.playIntegrityCloudProjectNumber`. JavaScript does not receive or
+supply the resulting Play Integrity token. Normal configure installs the native
+default provider and does not require a Firebase integration artifact.
+
+The native SDK and bridge compile against API 34. Native artifacts publish
+Kotlin 2.3 metadata; use the compatible host toolchain described in
+[React Native compatibility](react-native-compatibility.md). The host's target
+SDK and other dependencies may require a newer compile SDK. React Native and
+Codegen resolve from the host; the library does not install another RN runtime.
+
+A production Play Integrity check requires a physical device and an app whose
+package and signing-certificate digest match gateway policy. Enable Play
+Integrity for the project, publish the build to a Play track and install it
+from Google Play. A sideloaded Debug APK is only compilation/bridge evidence.
+Do not relax recognized/licensed or hardware policies merely to pass a test.
+
+Google Play Console test responses can exercise a deliberately scoped
+development policy. They retain `debug` trust, require no client bypass flag,
+and are not production evidence. See [development attestation](development-attestation.md).
+
+## Source and release checks
+
+The LatchwayChat example documents its explicit source-development toggle.
+Keep local CocoaPods/Maven paths confined to that development setup. Published
+consumers must resolve only released coordinates without source overrides;
+inspect both native dependency graphs and rebuild the application.
+
+A successful source build is not publication evidence, and an old published
+lockfile does not prove this cleanup. Run matching SDK, bridge and account
+lifecycle tests before any new release. Real App Attest, Play distribution,
+extensions and physical account-transition tests retain their separate scope.

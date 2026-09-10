@@ -6,12 +6,12 @@ import com.facebook.react.bridge.JavaOnlyMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableMap
 import dev.latchway.core.LATCHWAY_CONTRACT_VERSION
-import dev.latchway.core.LATCHWAY_PROTOCOL_VERSION
 import dev.latchway.core.LatchwayErrorCode
 import dev.latchway.core.LatchwayException
 import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_ID
 import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
 import okhttp3.Authenticator
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -39,6 +39,7 @@ import java.lang.reflect.Proxy
 import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -56,21 +57,116 @@ public class NativeLatchwayModuleTest {
     }
 
     @Test
-    public fun fwAuth101And102GeneratedSpecForwardsBootstrapAndDpopDispatchToNativeSdk() {
+    public fun currentSpecHasNoDirectRootConstructorOrPerRequestIdentityArguments() {
+        val methods = NativeLatchwaySpec::class.java.declaredMethods.associateBy { it.name }
+        assertFalse(methods.containsKey("configure"))
+        assertFalse(methods.containsKey("establishDirectAttestation"))
+        assertFalse(methods.containsKey("revokeFamilyWithComponents"))
+        assertEquals(4, requireNotNull(methods["startRequest"]).parameterCount)
+        assertEquals(3, requireNotNull(methods["refresh"]).parameterCount)
+        assertEquals(4, requireNotNull(methods["quota"]).parameterCount)
+        assertEquals(3, requireNotNull(methods["revokeFamily"]).parameterCount)
+    }
+
+    @Test
+    public fun obsoleteAppCommandsAndInventoryAreRejectedBeforeRegistryAccess() {
+        val context: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
+        val module = NativeLatchwayModule(context) { JavaOnlyMap() }
+        try {
+            for (operation in listOf("newIdentityAuthority", "identityPoll", "identityReply", "activate", "transferIdentityAuthority")) {
+                val result = RecordingPromise()
+                module.appCommand(JSONObject().put("operation", operation).toString(), result.value)
+                assertEquals("invalid_configuration", result.await().rejection().code)
+            }
+            val result = RecordingPromise()
+            module.appCommand(JSONObject().put("operation", "configure").put("identityMode", "supplied")
+                .put("legacyComponents", JSONArray()).toString(), result.value)
+            assertEquals("invalid_configuration", result.await().rejection().code)
+            val unsupported = RecordingPromise()
+            module.appCommand(JSONObject().put("operation", "componentAccount")
+                .put("clientID", "unavailable-client").toString(), unsupported.value)
+            assertEquals("attestation_unsupported", unsupported.await().rejection().code)
+        } finally { module.invalidate() }
+    }
+
+    @Test
+    public fun signOutIsARecognizedCurrentAppCommand() {
+        val context: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
+        val module = NativeLatchwayModule(context) { JavaOnlyMap() }
+        try {
+            val result = RecordingPromise()
+            module.appCommand(JSONObject().put("operation", "signOut")
+                .put("name", "not-configured-${UUID.randomUUID()}").toString(), result.value)
+            assertEquals("app_not_configured", result.await().rejection().code)
+        } finally { module.invalidate() }
+    }
+
+    @Test
+    public fun callerCannotAssertPlayTestingVerdictThroughNativeConfiguration() {
+        val context: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
+        val module = NativeLatchwayModule(context) { JavaOnlyMap() }
+        try {
+            for (key in listOf("allowTestingResponses", "isTestingResponse", "minimumTrustLevel")) {
+                val result = RecordingPromise()
+                val configuration = JSONObject().put("operation", "configure").put("identityMode", "supplied")
+                    .put("baseURL", "https://gateway.example.test")
+                    .put("applicationID", "app_01J00000000000000000000000").put("environment", "development")
+                    .put("android", JSONObject().put("playIntegrityCloudProjectNumber", "123456789")
+                        .put(key, "debug"))
+                module.appCommand(configuration.toString(), result.value)
+                assertEquals("invalid_configuration", result.await().rejection().code)
+            }
+        } finally { module.invalidate() }
+    }
+
+    @Test
+    public fun suppliedConfigurationReturnsOnlyCurrentAbiAndCanBeJoinedWithoutIdentity() {
+        val context: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
+        val module = NativeLatchwayModule(context) { JavaOnlyMap() }
+        val name = "supplied-bridge-${UUID.randomUUID()}"
+        val configuration = JSONObject().put("operation", "configure").put("name", name)
+            .put("baseURL", "https://gateway-${UUID.randomUUID()}.example.test")
+            .put("applicationID", "app_01J00000000000000000000000").put("environment", "development")
+            .put("identityMode", "supplied")
+            .put("identity", JSONObject().put("providerID", "firebase")
+                .put("issuer", "https://securetoken.google.com/bridge-test")
+                .put("audience", "bridge-test"))
+            .put("android", JSONObject().put("playIntegrityCloudProjectNumber", "123456789"))
+        try {
+            val first = RecordingPromise()
+            module.appCommand(configuration.toString(), first.value)
+            val descriptor = JSONObject(first.await().resolvedString())
+            assertEquals(3, descriptor.getInt("nativeAppABI"))
+            assertEquals(3, descriptor.getInt("protocolVersion"))
+            assertEquals("supplied", descriptor.getString("identityMode"))
+            assertFalse(descriptor.has("authorityInstanceID"))
+            assertFalse(descriptor.has("generationID"))
+            configuration.remove("identity")
+            configuration.remove("android")
+            val joined = RecordingPromise()
+            module.appCommand(configuration.toString(), joined.value)
+            assertEquals(descriptor.getString("appInstanceID"),
+                JSONObject(joined.await().resolvedString()).getString("appInstanceID"))
+        } finally { module.invalidate() }
+    }
+
+    @Test
+    public fun fwAuth101And102GeneratedSpecUsesAnAccountLeaseAndNativeDpopDispatch() {
         // FW-AUTH-101 / FW-AUTH-102: this is compiled bridge evidence. Pair it
         // with the exact-AAR session/DPoP tests for the native cryptography.
         val fake = FakeNativeClientOperations()
         val fixture = configuredFixture(fake)
 
         val response = fixture.startRequest(
-            identityToken = "external-identity-bootstrap",
             requestJSON = nativeRequest(fixture.baseURL, "bootstrap through generated spec"),
         )
         val metadata = JSONObject(response.resolvedString())
 
+        assertFalse(response.resolvedString().contains(fake.verifiedIdentity))
+
         assertEquals(200, metadata.getInt("status"))
         assertEquals(1, fake.bootstrapCalls.get())
-        assertEquals(listOf("external-identity-bootstrap"), fake.networkIdentityTokens)
+        assertEquals(listOf("native-verified-identity"), fake.networkIdentityTokens)
         assertEquals(1, fake.protectedRequests.size)
         val protected = fake.protectedRequests.single()
         assertTrue(protected.header("Authorization")?.startsWith("DPoP ") == true)
@@ -78,7 +174,7 @@ public class NativeLatchwayModuleTest {
         val protectedBody = Buffer()
         requireNotNull(protected.body).writeTo(protectedBody)
         assertEquals("bootstrap through generated spec", protectedBody.readUtf8())
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
         fixture.closeResponse(metadata.getString("responseID")).assertResolved()
     }
 
@@ -122,8 +218,7 @@ public class NativeLatchwayModuleTest {
             val fixture = configuredFixture(fake, server.url("/").toString().removeSuffix("/"))
 
             val response = fixture.startRequest(
-                identityToken = "external-identity-for-native-retry",
-                requestJSON = nativeRequest(fixture.baseURL, "one replayable body"),
+                    requestJSON = nativeRequest(fixture.baseURL, "one replayable body"),
             )
             val metadata = JSONObject(response.resolvedString())
             val first = requireNotNull(server.takeRequest(5, TimeUnit.SECONDS))
@@ -136,16 +231,16 @@ public class NativeLatchwayModuleTest {
             assertEquals(first.headers["Authorization"], second.headers["Authorization"])
             assertNotEquals(first.headers["DPoP"], second.headers["DPoP"])
             assertEquals(
-                listOf("external-identity-for-native-retry", "external-identity-for-native-retry"),
+                listOf("native-verified-identity", "native-verified-identity"),
                 identities,
             )
-            assertTokenCleared(fake)
+            assertNativeIdentityPrivate(fake)
             fixture.closeResponse(metadata.getString("responseID")).assertResolved()
         }
     }
 
     @Test
-    public fun fwAuth104GeneratedSpecClearsRejectedIdentityBeforeReauthentication() {
+    public fun fwAuth104GeneratedSpecSurfacesNativeFreshnessFailureWithoutSupplyingTokens() {
         // FW-AUTH-104
         val fake = FakeNativeClientOperations()
         fake.refreshFailures += LatchwayException(
@@ -154,16 +249,18 @@ public class NativeLatchwayModuleTest {
         )
         val fixture = configuredFixture(fake)
 
-        val rejected = fixture.refresh("external-identity-stale")
+        fake.verifiedIdentity = "native-identity-stale"
+        val rejected = fixture.refresh()
         assertEquals("identity_reauthentication_required", rejected.rejection().code)
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
 
-        fixture.refresh("external-identity-fresh").assertResolved()
+        fake.verifiedIdentity = "native-identity-fresh"
+        fixture.refresh().assertResolved()
         assertEquals(
-            listOf("external-identity-stale", "external-identity-fresh"),
+            listOf("native-identity-stale", "native-identity-fresh"),
             fake.refreshIdentityTokens,
         )
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
     }
 
     @Test
@@ -173,14 +270,14 @@ public class NativeLatchwayModuleTest {
         val fake = FakeNativeClientOperations()
         val fixture = configuredFixture(fake)
 
-        fixture.revokeFamily("external-identity-family-owner").assertResolved()
+        fixture.revokeFamily().assertResolved()
         assertEquals(1, fake.familyRevocations.get())
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
 
-        val rejected = fixture.quota("external-identity-after-family-retirement")
+        val rejected = fixture.quota()
         assertEquals("installation_family_revoked", rejected.rejection().code)
         assertTrue(fake.protectedRequests.isEmpty())
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
     }
 
     @Test
@@ -190,11 +287,11 @@ public class NativeLatchwayModuleTest {
         val fake = FakeNativeClientOperations().apply { componentRevoked = true }
         val fixture = configuredFixture(fake)
 
-        val rejected = fixture.quota("external-identity-component-owner")
+        val rejected = fixture.quota()
 
         assertEquals("component_revoked", rejected.rejection().code)
         assertTrue(fake.protectedRequests.isEmpty())
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
     }
 
     @Test
@@ -227,13 +324,12 @@ public class NativeLatchwayModuleTest {
         }
 
         val rejected = fixture.startRequest(
-            identityToken = "external-identity-redirect-check",
             requestJSON = nativeRequest(fixture.baseURL, "redirect must be revalidated"),
         )
 
         assertEquals("request_invalid", rejected.rejection().code)
         assertEquals(1, fake.redirectResponseAttempts.get())
-        assertTokenCleared(fake)
+        assertNativeIdentityPrivate(fake)
     }
 
     @Test
@@ -242,23 +338,21 @@ public class NativeLatchwayModuleTest {
         val finish = CountDownLatch(1)
         val fake = FakeNativeClientOperations()
         val reactContext: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
-        val module = NativeLatchwayModule(reactContext, NativeClientFactory { configuration, _, _, tokenProvider, _ ->
-            fake.configuration = configuration
-            fake.tokenProvider = tokenProvider
-            entered.countDown()
-            assertTrue(finish.await(10, TimeUnit.SECONDS))
-            fake
-        }) { JavaOnlyMap() }
+        val module = NativeLatchwayModule(reactContext) { JavaOnlyMap() }
         val configured = RecordingPromise()
         try {
-            module.configure("late-client", nativeConfiguration("https://gateway.example.test"), configured.value)
+            module.installClientLease("late-client", "https://gateway.example.test".toHttpUrl(), {
+                entered.countDown()
+                assertTrue(finish.await(10, TimeUnit.SECONDS))
+                fake
+            }, configured.value)
             assertTrue(entered.await(10, TimeUnit.SECONDS))
             module.invalidate()
             finish.countDown()
             assertEquals("cancelled", configured.await().rejection().code)
             assertTrue(fake.closed)
             val later = RecordingPromise()
-            module.appCommand(JSONObject().put("operation", "newIdentityAuthority").toString(), later.value)
+            module.appCommand(JSONObject().put("operation", "snapshot").toString(), later.value)
             assertEquals("client_disposed", later.await().rejection().code)
         } finally {
             finish.countDown()
@@ -272,28 +366,20 @@ public class NativeLatchwayModuleTest {
         baseURL: String = "https://gateway.example.test",
     ): ModuleFixture {
         val reactContext: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
-        val factory = NativeClientFactory { configuration, _, _, tokenProvider, _ ->
-            fake.configuration = configuration
-            fake.tokenProvider = tokenProvider
-            fake
-        }
-        val module = NativeLatchwayModule(reactContext, factory) { JavaOnlyMap() }
+        val module = NativeLatchwayModule(reactContext) { JavaOnlyMap() }
         val fixture = ModuleFixture(module, fake, baseURL)
         fixtures += fixture
 
-        val configured = fixture.configure()
-        val compatibility = JSONObject(configured.resolvedString())
-        assertEquals("react_native_android", compatibility.getString("platform"))
-        assertEquals(LATCHWAY_CONTRACT_VERSION, compatibility.getString("contractVersion"))
-        assertEquals(LATCHWAY_PROTOCOL_VERSION, compatibility.getInt("protocolVersion"))
-        assertEquals(LATCHWAY_REACT_NATIVE_FRAMEWORK_ID, fake.configuration?.frameworkID)
-        assertEquals(LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION, fake.configuration?.frameworkVersion)
+        fixture.configure().assertResolved()
         return fixture
     }
 
-    private fun assertTokenCleared(fake: FakeNativeClientOperations) {
-        assertThrows(IllegalStateException::class.java) { fake.currentIdentity() }
+    private fun assertNativeIdentityPrivate(fake: FakeNativeClientOperations) {
+        // Supplied identity belongs to the native account, never a request ABI argument.
+        assertTrue(fake.currentIdentity().startsWith("native-"))
+        assertFalse(fake.protectedRequests.any { it.header("identityToken") != null })
     }
+
 }
 
 private class ModuleFixture(
@@ -305,34 +391,33 @@ private class ModuleFixture(
     private var closed = false
 
     fun configure(): RecordingPromise = RecordingPromise().also { promise ->
-        module.configure(CLIENT_ID, nativeConfiguration(baseURL), promise.value)
+        module.installClientLease(CLIENT_ID, baseURL.toHttpUrl(), { operations }, promise.value)
         promise.await()
     }
 
-    fun startRequest(identityToken: String, requestJSON: String): RecordingPromise =
+    fun startRequest(requestJSON: String): RecordingPromise =
         RecordingPromise().also { promise ->
             module.startRequest(
                 CLIENT_ID,
                 operationID("request"),
-                identityToken,
                 requestJSON,
                 promise.value,
             )
             promise.await()
         }
 
-    fun refresh(identityToken: String): RecordingPromise = RecordingPromise().also { promise ->
-        module.refresh(CLIENT_ID, operationID("refresh"), identityToken, promise.value)
+    fun refresh(): RecordingPromise = RecordingPromise().also { promise ->
+        module.refresh(CLIENT_ID, operationID("refresh"), promise.value)
         promise.await()
     }
 
-    fun revokeFamily(identityToken: String): RecordingPromise = RecordingPromise().also { promise ->
-        module.revokeFamily(CLIENT_ID, operationID("family"), identityToken, promise.value)
+    fun revokeFamily(): RecordingPromise = RecordingPromise().also { promise ->
+        module.revokeFamily(CLIENT_ID, operationID("family"), promise.value)
         promise.await()
     }
 
-    fun quota(identityToken: String): RecordingPromise = RecordingPromise().also { promise ->
-        module.quota(CLIENT_ID, operationID("quota"), identityToken, "assistant", promise.value)
+    fun quota(): RecordingPromise = RecordingPromise().also { promise ->
+        module.quota(CLIENT_ID, operationID("quota"), "assistant", promise.value)
         promise.await()
     }
 
@@ -362,8 +447,7 @@ private class FakeNativeClientOperations(
             .build()
     },
 ) : NativeClientOperations {
-    lateinit var tokenProvider: TransientIdentityTokenProvider
-    var configuration: NativeConfiguration? = null
+    var verifiedIdentity: String = "native-verified-identity"
     var familyRevoked: Boolean = false
     var componentRevoked: Boolean = false
     var closed: Boolean = false
@@ -404,7 +488,7 @@ private class FakeNativeClientOperations(
 
     override suspend fun diagnostics(): String = JSONObject()
         .put("contractVersion", LATCHWAY_CONTRACT_VERSION)
-        .put("protocolVersion", LATCHWAY_PROTOCOL_VERSION)
+        .put("protocolVersion", 3)
         .toString()
 
     override suspend fun revokeCurrentInstallation() = Unit
@@ -415,7 +499,9 @@ private class FakeNativeClientOperations(
         familyRevoked = true
     }
 
-    fun currentIdentity(): String = tokenProvider.current()
+    override suspend fun logout() { familyRevoked = true }
+
+    fun currentIdentity(): String = verifiedIdentity
 
     override fun close() {
         if (closed) return
@@ -506,26 +592,6 @@ private data class NativeRejection(
     val message: String?,
     val userInfo: WritableMap?,
 )
-
-private fun nativeConfiguration(baseURL: String): String = JSONObject()
-    .put("baseURL", baseURL)
-    .put("applicationID", "app_react_native_android_test")
-    .put("environment", "development")
-    .put("identityProvider", "mock_oidc")
-    .put("appVersion", "1.0.0-test")
-    .put("sdkVersion", "1.0.0")
-    .put("frameworkID", LATCHWAY_REACT_NATIVE_FRAMEWORK_ID)
-    .put("frameworkVersion", LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION)
-    .put("contractVersion", LATCHWAY_CONTRACT_VERSION)
-    .put("protocolVersion", LATCHWAY_PROTOCOL_VERSION)
-    .put("allowInsecureLoopback", baseURL.startsWith("http://127.0.0.1:"))
-    .put("apple", JSONObject()
-        .put("appAttestEnabled", true)
-        .put("softwareKeyFallbackPolicy", "forbidden"))
-    .put("android", JSONObject()
-        .put("playIntegrityCloudProjectNumber", "123456789")
-        .put("keyPolicy", "software_allowed"))
-    .toString()
 
 private fun nativeRequest(baseURL: String, body: String): String = JSONObject()
     .put("url", "$baseURL/v1/responses")

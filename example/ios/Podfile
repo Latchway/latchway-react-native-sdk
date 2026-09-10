@@ -35,7 +35,7 @@ target 'AppIntents' do
   if ENV['LATCHWAY_IOS_SDK_PATH']
     pod 'Latchway/AppExtensions', :path => ENV.fetch('LATCHWAY_IOS_SDK_PATH'), :configurations => ['Debug']
   else
-    pod 'Latchway/AppExtensions', '1.0.0', :configurations => ['Debug']
+    pod 'Latchway/AppExtensions', '2.0.0', :configurations => ['Debug']
   end
 end
 

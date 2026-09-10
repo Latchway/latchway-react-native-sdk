@@ -7,7 +7,6 @@ import type {
   LatchwayComponentClient,
   ReactNativeComponentDiagnostics,
   ReactNativeComponentTrustSource,
-  ReactNativeDirectAttestationComponent,
   ReactNativeIOSComponent,
 } from "./types.js";
 
@@ -31,18 +30,6 @@ export class DefaultLatchwayComponentClient implements LatchwayComponentClient {
   constructor(private readonly config: RuntimeComponentConfiguration) {
     this.lease = acquireComponent(config);
     this.ready = this.lease.then(async (lease) => { await lease.ready; });
-  }
-
-  async establishDirectAttestation(): Promise<void> {
-    this.assertActive();
-    const lease = await this.lease;
-    await lease.ready;
-    const operationID = makeComponentOperationID();
-    try {
-      await lease.module.establishDirectAttestation(lease.clientID, operationID);
-    } catch (cause) {
-      throw fromNativeError(cause);
-    }
   }
 
   async diagnostics(): Promise<ReactNativeComponentDiagnostics> {
@@ -75,7 +62,7 @@ export class DefaultLatchwayComponentClient implements LatchwayComponentClient {
 
 export function parseComponentDiagnostics(
   encoded: string,
-  component: ReactNativeDirectAttestationComponent | ReactNativeIOSComponent,
+  component: ReactNativeIOSComponent,
 ): ReactNativeComponentDiagnostics {
   const value = parseRecord(encoded);
   assertNoCredentialFields(value);

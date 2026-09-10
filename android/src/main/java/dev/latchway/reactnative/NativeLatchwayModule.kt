@@ -8,27 +8,18 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.module.annotations.ReactModule
 import dev.latchway.core.KeyPolicy
-import dev.latchway.core.LatchwayIdentityAuthorityReference
 import dev.latchway.core.LatchwayIdentityConfiguration
-import dev.latchway.core.LatchwayIdentityAuthority
-import dev.latchway.core.LatchwayIdentitySnapshot
 import dev.latchway.core.LatchwayLifecycleCode
 import dev.latchway.core.LatchwayLifecycleException
 import dev.latchway.core.LatchwayAppState
 import dev.latchway.okhttp.LatchwayApp
 import dev.latchway.okhttp.LatchwayAppOptions
 import dev.latchway.okhttp.LatchwayAppRegistry
-import dev.latchway.core.LATCHWAY_CONTRACT_VERSION
-import dev.latchway.core.LATCHWAY_PROTOCOL_VERSION
 import dev.latchway.core.LATCHWAY_SDK_VERSION
 import dev.latchway.core.LatchwayClientPlatform
 import dev.latchway.core.LatchwayErrorCode
 import dev.latchway.core.LatchwayException
 import dev.latchway.okhttp.LatchwayClient
-import dev.latchway.okhttp.LatchwayConfiguration
-import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_ID
-import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
-import dev.latchway.playintegrity.PlayIntegrityAttestationProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,11 +29,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -65,16 +53,6 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal fun interface NativeClientFactory {
-    fun create(
-        configuration: NativeConfiguration,
-        keyPolicy: KeyPolicy,
-        cloudProjectNumber: Long,
-        tokenProvider: TransientIdentityTokenProvider,
-        reactContext: ReactApplicationContext,
-    ): NativeClientOperations
-}
-
 internal interface NativeClientOperations : Closeable {
     val applicationClient: OkHttpClient
 
@@ -83,6 +61,7 @@ internal interface NativeClientOperations : Closeable {
     suspend fun diagnostics(): String
     suspend fun revokeCurrentInstallation()
     suspend fun revokeCurrentInstallationFamily()
+    suspend fun logout()
 }
 
 internal fun nativeApplicationClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
@@ -151,6 +130,8 @@ private class ProductionNativeClientOperations(
         client.revokeCurrentInstallationFamily()
     }
 
+    override suspend fun logout() { client.logout() }
+
     override fun close() {
         applicationClient.dispatcher.cancelAll()
         applicationClient.connectionPool.evictAll()
@@ -159,45 +140,13 @@ private class ProductionNativeClientOperations(
     }
 }
 
-private val PRODUCTION_NATIVE_CLIENT_FACTORY = NativeClientFactory {
-        configuration,
-        keyPolicy,
-        cloudProjectNumber,
-        tokenProvider,
-        reactContext,
-    ->
-    val nativeConfiguration = LatchwayConfiguration(
-        baseUrl = configuration.baseURL.toHttpUrl(),
-        applicationId = configuration.applicationID,
-        environment = configuration.environment,
-        identityProvider = configuration.identityProvider,
-        clientPlatform = LatchwayClientPlatform.REACT_NATIVE_ANDROID,
-        sdkVersion = configuration.sdkVersion,
-        keyPolicy = keyPolicy,
-        allowInsecureLoopback = configuration.allowInsecureLoopback,
-    )
-    ProductionNativeClientOperations(
-        LatchwayClient(
-            configuration = nativeConfiguration,
-            identityTokenProvider = { tokenProvider.current() },
-            attestationProvider = PlayIntegrityAttestationProvider(
-                context = reactContext,
-                cloudProjectNumber = cloudProjectNumber,
-            ),
-            context = reactContext,
-        ),
-    )
-}
-
 @ReactModule(name = NativeLatchwayModule.NAME)
 public class NativeLatchwayModule internal constructor(
     reactContext: ReactApplicationContext,
-    private val clientFactory: NativeClientFactory,
     private val userInfoFactory: () -> WritableMap,
 ) : NativeLatchwaySpec(reactContext) {
     public constructor(reactContext: ReactApplicationContext) : this(
         reactContext,
-        PRODUCTION_NATIVE_CLIENT_FACTORY,
         { Arguments.createMap() },
     )
 
@@ -215,24 +164,9 @@ public class NativeLatchwayModule internal constructor(
             val input = JSONObject(commandJSON)
             val operation = input.getString("operation")
             val name = input.optString("name", LatchwayAppRegistry.DEFAULT_NAME)
-            if (operation == "newIdentityAuthority") {
-                return@launchPromise JSONObject().put("authorityInstanceID", UUID.randomUUID().toString()).toString()
-            }
-            if (operation == "identityPoll" || operation == "identityReply") {
-                val broker = NativeIdentityBrokers.values[input.getString("authorityInstanceID")]
-                    ?: throw LatchwayLifecycleException(LatchwayLifecycleCode.IDENTITY_AUTHORITY_REQUIRED)
-                if (operation == "identityPoll") {
-                    val request = broker.nextRequest()
-                    return@launchPromise JSONObject().apply { request?.let { put("requestID", it) } }.toString()
-                }
-                val encoded = input.optJSONObject("snapshot")
-                val snapshot = encoded?.let {
-                    val token = it.getString("token")
-                    require(token.toByteArray(Charsets.UTF_8).size <= 65_536)
-                    LatchwayIdentitySnapshot(it.getString("issuer"), it.optNullableString("tenant"), it.getString("subject"), token)
-                }
-                broker.reply(input.getString("requestID"), snapshot)
-                return@launchPromise "{}"
+            require(operation in APP_COMMANDS) { "Unknown native app command" }
+            if (operation == "componentAccount") {
+                throw unsupportedAppleComponent()
             }
             if (operation == "clientLogout") {
                 val id = input.getString("clientID")
@@ -240,18 +174,22 @@ public class NativeLatchwayModule internal constructor(
                 logout()
                 return@launchPromise "{}"
             }
-            val app = if (operation == "configure") {
-                val suppliedMode = input.optString("identityMode", "authority") == "supplied"
-                require(input.optString("identityMode", "authority") in setOf("supplied", "authority"))
-                val suppliedIdentity = if (suppliedMode) input.optJSONObject("identity")?.let {
+            val app = if (operation == "configure") run {
+                require(input.optString("identityMode", "") == "supplied") {
+                    "Only supplied identity is supported"
+                }
+                require(input.keys().asSequence().all(APP_CONFIGURATION_KEYS::contains)) {
+                    "App configuration has unexpected fields"
+                }
+                val suppliedIdentity = input.optJSONObject("identity")?.let {
+                    require(it.keys().asSequence().all(IDENTITY_CONFIGURATION_KEYS::contains))
                     LatchwayIdentityConfiguration(it.getString("providerID"), it.getString("issuer"),
                         it.getString("audience"), it.optNullableString("tenantID"))
-                } else null
-                val reference = suppliedIdentity?.reference ?: input.optJSONObject("identity")?.let {
-                    LatchwayIdentityAuthorityReference(it.getString("name"), it.getString("issuer"),
-                        if (it.has("tenant")) it.getString("tenant") else null)
                 }
                 val android = input.optJSONObject("android")
+                require(android == null || android.keys().asSequence().all(ANDROID_CONFIGURATION_KEYS::contains))
+                val apple = input.optJSONObject("apple")
+                require(apple == null || apple.keys().asSequence().all(APPLE_CONFIGURATION_KEYS::contains))
                 val keyPolicy = when (android?.optString("keyPolicy", "")) {
                     null, "" -> null
                     "hardware_backed_required" -> KeyPolicy(preferStrongBox = false, allowSoftwareBacked = false)
@@ -260,39 +198,22 @@ public class NativeLatchwayModule internal constructor(
                     else -> throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
                 }
                 val project = android?.optString("playIntegrityCloudProjectNumber", "")?.takeIf { it.isNotEmpty() }
-                val brokerID = input.optString("authorityInstanceID", "").takeIf { it.isNotEmpty() }
-                require(!suppliedMode || brokerID == null)
-                require(suppliedIdentity == null || !input.has("identityProvider") ||
-                    input.getString("identityProvider") == suppliedIdentity.providerId)
-                val newBroker = brokerID != null && !NativeIdentityBrokers.values.containsKey(brokerID)
-                val broker = brokerID?.let { id ->
-                    UUID.fromString(id)
-                    NativeIdentityBrokers.values.computeIfAbsent(id) { NativeIdentityBroker() }
-                }
-                val provider = if (project != null) {
-                    PlayIntegrityAttestationProvider(reactApplicationContext, project.toLong())
-                } else null
-                try { LatchwayAppRegistry.configure(reactApplicationContext, LatchwayAppOptions(
-                    input.getString("baseURL").toHttpUrl(), input.getString("applicationID"), input.getString("environment"),
-                    identity = reference, identityProvider = suppliedIdentity?.providerId ?: input.optString("identityProvider", "").takeIf { it.isNotEmpty() },
-                    keyPolicy = keyPolicy, attestationPolicyId = project?.let { "play-integrity:$it" },
-                    suppliedIdentity = suppliedIdentity, playIntegrityCloudProjectNumber = project?.toLong()),
-                    name = name, authority = broker, attestationProvider = provider, authorityInstanceId = brokerID,
-                    fromReactNative = true).also { registered ->
-                        if (suppliedMode && registered.identityMode != "supplied") {
-                            throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
-                        }
-                        if (newBroker && registered.authorityInstanceId != brokerID) NativeIdentityBrokers.values.remove(brokerID)
-                    }
-                } catch (failure: Exception) {
-                    if (newBroker) NativeIdentityBrokers.values.remove(brokerID)
-                    throw failure
-                }
+                LatchwayAppRegistry.configure(
+                    reactApplicationContext,
+                    LatchwayAppOptions(
+                        input.getString("baseURL").toHttpUrl(),
+                        input.getString("applicationID"), input.getString("environment"),
+                        identity = suppliedIdentity?.reference, identityProvider = suppliedIdentity?.providerId,
+                        keyPolicy = keyPolicy, attestationPolicyId = project?.let { "play-integrity:$it" },
+                        suppliedIdentity = suppliedIdentity, playIntegrityCloudProjectNumber = project?.toLong()
+                    ),
+                    name = name, fromReactNative = true
+                )
             } else LatchwayAppRegistry.getApp(name, fromReactNative = true)
+            if (app.identityMode != "supplied") throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
             when (operation) {
                 "configure", "get", "snapshot" -> Unit
                 "signOut" -> app.signOut()
-                "activate" -> app.activate()
                 "beginIdentity" -> {
                     val ticket = runtime.acquire(
                         create = { app.beginIdentity(input.getString("intent"), input.optNullableString("generationID"), input.optNullableString("bindingID")) },
@@ -328,26 +249,6 @@ public class NativeLatchwayModule internal constructor(
                     val binding = input.getString("bindingID")
                     if (identityBindings.remove(binding, app)) app.releaseIdentityBinding(binding)
                 }
-                "transferIdentityAuthority" -> {
-                    val expected = input.getString("expectedAuthorityInstanceID")
-                    val replacement = input.getString("authorityInstanceID")
-                    UUID.fromString(expected)
-                    UUID.fromString(replacement)
-                    val identity = input.getJSONObject("identity")
-                    val broker = NativeIdentityBroker()
-                    if (replacement == expected || NativeIdentityBrokers.values.putIfAbsent(replacement, broker) != null) {
-                        throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
-                    }
-                    try {
-                        app.transferIdentityAuthority(broker,
-                            LatchwayIdentityAuthorityReference(identity.getString("name"), identity.getString("issuer"),
-                                identity.optNullableString("tenant")), expected, replacement)
-                        NativeIdentityBrokers.values.remove(expected)
-                    } catch (failure: Exception) {
-                        NativeIdentityBrokers.values.remove(replacement, broker)
-                        throw failure
-                    }
-                }
                 "logout" -> app.logout(input.getString("generationID"))
                 "observe" -> withTimeoutOrNull(25_000) {
                     app.snapshots.first { it.revision > input.getLong("afterRevision") }
@@ -357,23 +258,11 @@ public class NativeLatchwayModule internal constructor(
                     require(!clients.containsKey(id))
                     val sdkVersion = input.getString("sdkVersion")
                     require(sdkVersion.length <= 128 && sdkVersion.matches(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")))
-                    runtime.acquire(
-                        create = {
-                            val client = app.makeClient(LatchwayClientPlatform.REACT_NATIVE_ANDROID, sdkVersion,
-                                input.optNullableString("generationID"))
-                            try {
-                                client to NativeClientContext(ProductionNativeClientOperations(client), TransientIdentityTokenProvider(),
-                                    app.baseUrl, nativeIdentityOwned = true)
-                            } catch (failure: Throwable) { client.close(); throw failure }
-                        },
-                        publish = { (client, context) ->
-                            if (clients.putIfAbsent(id, context) != null) {
-                                throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
-                            }
-                            appLogouts[id] = { client.logout(); context.closeResponses() }
-                        },
-                        release = { (_, context) -> context.close() },
-                    )
+                    registerClientLease(id, app.baseUrl) {
+                        ProductionNativeClientOperations(app.makeClient(
+                            LatchwayClientPlatform.REACT_NATIVE_ANDROID, sdkVersion,
+                            input.optNullableString("generationID")))
+                    }
                 }
                 else -> throw IllegalArgumentException("Unknown native app command")
             }
@@ -383,41 +272,38 @@ public class NativeLatchwayModule internal constructor(
 
     override fun getName(): String = NAME
 
-    override fun configure(clientID: String, configurationJSON: String, promise: Promise) {
-        launchPromise(clientID, "configure", promise) {
-            require(!clients.containsKey(clientID)) { "client identifier is already configured" }
-            val configuration = NativeConfiguration.parse(configurationJSON)
-            require(configuration.contractVersion == LATCHWAY_CONTRACT_VERSION &&
-                configuration.protocolVersion == LATCHWAY_PROTOCOL_VERSION &&
-                configuration.frameworkID == LATCHWAY_REACT_NATIVE_FRAMEWORK_ID &&
-                configuration.frameworkVersion == LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
-            ) { "contract version is incompatible" }
-            val projectNumber = configuration.playIntegrityCloudProjectNumber
-                ?: throw IllegalArgumentException("Play Integrity cloud project number is required on Android")
-            val keyPolicy = when (configuration.keyPolicy) {
-                "hardware_backed_required" -> KeyPolicy(preferStrongBox = false, allowSoftwareBacked = false)
-                "strongbox_preferred" -> KeyPolicy(preferStrongBox = true, allowSoftwareBacked = false)
-                "software_allowed" -> KeyPolicy(preferStrongBox = true, allowSoftwareBacked = true)
-                else -> throw IllegalArgumentException("Android key policy is invalid")
-            }
-            val tokenProvider = TransientIdentityTokenProvider()
-            runtime.acquire(
-                create = {
-                    val client = clientFactory.create(configuration, keyPolicy, projectNumber, tokenProvider, reactApplicationContext)
-                    NativeClientContext(client, tokenProvider, configuration.baseURL.toHttpUrl())
-                },
-                publish = { context ->
-                    check(clients.putIfAbsent(clientID, context) == null) { "client identifier is already configured" }
-                },
-                release = { it.close() },
-            )
-            JSONObject()
-                .put("platform", "react_native_android")
-                .put("nativeSDKVersion", LATCHWAY_SDK_VERSION)
-                .put("contractVersion", LATCHWAY_CONTRACT_VERSION)
-                .put("protocolVersion", LATCHWAY_PROTOCOL_VERSION)
-                .toString()
+    /** Internal lease injection shares production registration/teardown without a public constructor. */
+    internal fun installClientLease(
+        clientID: String,
+        baseURL: okhttp3.HttpUrl,
+        create: suspend () -> NativeClientOperations,
+        promise: Promise,
+    ) {
+        launchPromise(clientID, "install-lease", promise) {
+            registerClientLease(clientID, baseURL, create)
+            "{}"
         }
+    }
+
+    private suspend fun registerClientLease(
+        clientID: String,
+        baseURL: okhttp3.HttpUrl,
+        create: suspend () -> NativeClientOperations,
+    ) {
+        runtime.acquire(
+            create = {
+                val client = create()
+                try { NativeClientContext(client, baseURL) }
+                catch (failure: Throwable) { client.close(); throw failure }
+            },
+            publish = { context ->
+                if (clients.putIfAbsent(clientID, context) != null) {
+                    throw LatchwayLifecycleException(LatchwayLifecycleCode.CONFIGURATION_CONFLICT)
+                }
+                appLogouts[clientID] = { context.logout() }
+            },
+            release = { it.close() },
+        )
     }
 
     override fun configureComponent(
@@ -429,7 +315,7 @@ public class NativeLatchwayModule internal constructor(
         launchPromise(clientID, "configure-component", promise) {
             throw LatchwayException(
                 code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
-                safeMessage = "React Native direct component attestation is not supported by this Android SDK",
+                safeMessage = "Account-bound iOS components are not supported by this Android SDK",
             )
         }
     }
@@ -437,12 +323,11 @@ public class NativeLatchwayModule internal constructor(
     override fun startRequest(
         clientID: String,
         operationID: String,
-        identityToken: String,
         requestJSON: String,
         promise: Promise,
     ) {
         operate(clientID, operationID, promise) { context ->
-            context.startRequest(identityToken, requestJSON)
+            context.startRequest(requestJSON)
         }
     }
 
@@ -468,43 +353,26 @@ public class NativeLatchwayModule internal constructor(
         promise.resolve(null)
     }
 
-    override fun refresh(clientID: String, operationID: String, identityToken: String, promise: Promise) {
+    override fun refresh(clientID: String, operationID: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
-            context.withIdentityToken(identityToken) { client -> client.refresh() }
+            context.withClient { client -> client.refresh() }
         }
     }
 
     override fun quota(
         clientID: String,
         operationID: String,
-        identityToken: String,
         feature: String,
         promise: Promise,
     ) {
         operate(clientID, operationID, promise) { context ->
-            context.withIdentityToken(identityToken) { client -> client.quota(feature) }
+            context.withClient { client -> client.quota(feature) }
         }
     }
 
-    override fun diagnostics(clientID: String, operationID: String, identityToken: String, promise: Promise) {
+    override fun diagnostics(clientID: String, operationID: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
-            context.withIdentityToken(identityToken) { client -> client.diagnostics() }
-        }
-    }
-
-    override fun establishDirectAttestation(
-        clientID: String,
-        operationID: String,
-        promise: Promise,
-    ) {
-        operate(clientID, operationID, promise) {
-            // The v1 Android SDK has independently keyed delegated components,
-            // but no direct component-attestation endpoint. Never imitate the
-            // iOS App Attest protocol or accept evidence through JavaScript.
-            throw LatchwayException(
-                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
-                safeMessage = "Direct component attestation is not supported by this Android SDK",
-            )
+            context.withClient { client -> client.diagnostics() }
         }
     }
 
@@ -516,7 +384,7 @@ public class NativeLatchwayModule internal constructor(
         operate(clientID, operationID, promise) {
             throw LatchwayException(
                 code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
-                safeMessage = "Direct-attestation component diagnostics are not supported by this Android SDK",
+                safeMessage = "Native iOS component diagnostics are not supported by this Android SDK",
             )
         }
     }
@@ -524,7 +392,6 @@ public class NativeLatchwayModule internal constructor(
     override fun prepareComponents(
         clientID: String,
         operationID: String,
-        identityToken: String,
         componentsJSON: String,
         promise: Promise,
     ) {
@@ -539,7 +406,6 @@ public class NativeLatchwayModule internal constructor(
     override fun replaceComponent(
         clientID: String,
         operationID: String,
-        identityToken: String,
         componentJSON: String,
         promise: Promise,
     ) {
@@ -568,7 +434,6 @@ public class NativeLatchwayModule internal constructor(
     override fun revokeComponent(
         clientID: String,
         operationID: String,
-        identityToken: String,
         componentJSON: String,
         promise: Promise,
     ) {
@@ -580,30 +445,15 @@ public class NativeLatchwayModule internal constructor(
         }
     }
 
-    override fun revoke(clientID: String, operationID: String, identityToken: String, promise: Promise) {
+    override fun revoke(clientID: String, operationID: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
-            context.withIdentityToken(identityToken) { client -> client.revokeCurrentInstallation() }
+            context.withClient { client -> client.revokeCurrentInstallation() }
         }
     }
 
-    override fun revokeFamily(clientID: String, operationID: String, identityToken: String, promise: Promise) {
+    override fun revokeFamily(clientID: String, operationID: String, promise: Promise) {
         operate(clientID, operationID, promise) { context ->
-            context.withIdentityToken(identityToken) { client -> client.revokeCurrentInstallationFamily() }
-        }
-    }
-
-    override fun revokeFamilyWithComponents(
-        clientID: String,
-        operationID: String,
-        identityToken: String,
-        componentsJSON: String,
-        promise: Promise,
-    ) {
-        operate(clientID, operationID, promise) {
-            throw LatchwayException(
-                code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
-                safeMessage = "Descriptor-bound iOS family retirement is not supported by this Android SDK",
-            )
+            context.withClient { client -> client.revokeCurrentInstallationFamily() }
         }
     }
 
@@ -707,16 +557,13 @@ public class NativeLatchwayModule internal constructor(
 
 internal class NativeClientContext(
     private val client: NativeClientOperations,
-    private val tokenProvider: TransientIdentityTokenProvider,
     private val baseURL: okhttp3.HttpUrl,
-    private val nativeIdentityOwned: Boolean = false,
 ) {
-    private val operationMutex = Mutex()
     private val responses = ConcurrentHashMap<String, NativeResponse>()
     private val applicationClient = client.applicationClient
 
-    suspend fun startRequest(identityToken: String, encoded: String): String =
-        withIdentityToken(identityToken) {
+    suspend fun startRequest(encoded: String): String =
+        withClient {
             val input = NativeRequestInput.parse(encoded)
             val url = try {
                 input.url.toHttpUrl()
@@ -790,21 +637,11 @@ internal class NativeClientContext(
         responses.remove(responseID)?.close()
     }
 
-    suspend fun <T> withIdentityToken(token: String, action: suspend (NativeClientOperations) -> T): T {
-        if (nativeIdentityOwned) {
-            require(token.isEmpty()) { "The native identity authority owns this app" }
-            return action(client)
-        }
-        if (token.isEmpty() || token.toByteArray(Charsets.UTF_8).size > 65_536 || token.any(Char::isISOControl)) {
-            throw LatchwayException(
-                code = LatchwayErrorCode.REQUEST_INVALID,
-                safeMessage = "The identity token is invalid",
-            )
-        }
-        return operationMutex.withLock {
-            tokenProvider.set(token)
-            try { action(client) } finally { tokenProvider.clear() }
-        }
+    suspend fun <T> withClient(action: suspend (NativeClientOperations) -> T): T = action(client)
+
+    suspend fun logout() {
+        client.logout()
+        closeResponses()
     }
 
     fun close() {
@@ -820,7 +657,7 @@ internal class NativeClientContext(
 
 private fun appDescriptor(app: LatchwayApp): String {
     val state = app.snapshots.value
-    return JSONObject().put("nativeAppABI", 2).put("contractVersion", "1.1.0").put("protocolVersion", 3)
+    return JSONObject().put("nativeAppABI", 3).put("contractVersion", "1.1.0").put("protocolVersion", 3)
         .put("identityMode", app.identityMode)
         .put("nativeSDKVersion", LATCHWAY_SDK_VERSION).put("platform", "react_native_android")
         .put("baseURL", app.baseUrl.toString()).put("applicationID", app.applicationId).put("environment", app.environment)
@@ -829,39 +666,7 @@ private fun appDescriptor(app: LatchwayApp): String {
             LatchwayAppState.LOGGED_OUT -> "loggedOut"
             LatchwayAppState.REFRESH_REQUIRED -> "refreshRequired"
             else -> state.state.name.lowercase()
-        }).put("authorityInstanceID", state.authorityInstanceId).toString()
-}
-
-private object NativeIdentityBrokers {
-    val values = ConcurrentHashMap<String, NativeIdentityBroker>()
-}
-
-/** Every authorization asks the JS owner; no token snapshot is cached here. */
-private class NativeIdentityBroker : LatchwayIdentityAuthority {
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<LatchwayIdentitySnapshot?>>()
-    private val queue = Channel<String>(64)
-    private val slots = java.util.concurrent.Semaphore(64)
-    override suspend fun identitySnapshot(): LatchwayIdentitySnapshot? {
-        if (!slots.tryAcquire()) throw LatchwayLifecycleException(LatchwayLifecycleCode.IDENTITY_UNAVAILABLE)
-        val id = UUID.randomUUID().toString()
-        val response = CompletableDeferred<LatchwayIdentitySnapshot?>()
-        pending[id] = response
-        return try {
-            withTimeout(15_000) { queue.send(id); response.await() }
-        } catch (error: Exception) {
-            throw LatchwayLifecycleException(LatchwayLifecycleCode.IDENTITY_UNAVAILABLE)
-        } finally {
-            pending.remove(id)
-            response.cancel()
-            slots.release()
-        }
-    }
-    suspend fun nextRequest(): String? = withTimeoutOrNull(20_000) {
-        var id = queue.receive()
-        while (!pending.containsKey(id)) id = queue.receive()
-        id
-    }
-    fun reply(id: String, snapshot: LatchwayIdentitySnapshot?) { pending.remove(id)?.complete(snapshot) }
+        }).toString()
 }
 
 private class NativeResponse(
@@ -897,62 +702,6 @@ private class NativeResponse(
 
     fun close() {
         if (closed.compareAndSet(false, true)) response.close()
-    }
-}
-
-internal class TransientIdentityTokenProvider {
-    @Volatile private var value: String? = null
-    fun set(token: String) { value = token }
-    fun clear() { value = null }
-    fun current(): String = value ?: throw IllegalStateException("identity token is unavailable")
-}
-
-internal data class NativeConfiguration(
-    val baseURL: String,
-    val applicationID: String,
-    val environment: String,
-    val identityProvider: String,
-    val sdkVersion: String,
-    val frameworkID: String,
-    val frameworkVersion: String,
-    val contractVersion: String,
-    val protocolVersion: Int,
-    val allowInsecureLoopback: Boolean,
-    val playIntegrityCloudProjectNumber: Long?,
-    val keyPolicy: String,
-) {
-    companion object {
-        fun parse(encoded: String): NativeConfiguration {
-            require(encoded.toByteArray(Charsets.UTF_8).size <= 65_536) { "native configuration is too large" }
-            val value = JSONObject(encoded)
-            val android = value.getJSONObject("android")
-            val apple = value.getJSONObject("apple")
-            require(value.keys().asSequence().toSet() == NATIVE_CONFIGURATION_KEYS &&
-                android.keys().asSequence().toSet().let { keys ->
-                    NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS.all(keys::contains) &&
-                        keys.all(NATIVE_ANDROID_CONFIGURATION_KEYS::contains)
-                } &&
-                apple.keys().asSequence().toSet().let { keys ->
-                    NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS.all(keys::contains) &&
-                        keys.all(NATIVE_APPLE_CONFIGURATION_KEYS::contains)
-                }
-            ) { "native configuration has unexpected fields" }
-            return NativeConfiguration(
-                baseURL = value.getString("baseURL"),
-                applicationID = value.getString("applicationID"),
-                environment = value.getString("environment"),
-                identityProvider = value.getString("identityProvider"),
-                sdkVersion = value.getString("sdkVersion"),
-                frameworkID = value.getString("frameworkID"),
-                frameworkVersion = value.getString("frameworkVersion"),
-                contractVersion = value.getString("contractVersion"),
-                protocolVersion = value.getInt("protocolVersion"),
-                allowInsecureLoopback = value.optBoolean("allowInsecureLoopback", false),
-                playIntegrityCloudProjectNumber = android.optString("playIntegrityCloudProjectNumber")
-                    .takeIf(String::isNotEmpty)?.toLongOrNull(),
-                keyPolicy = android.getString("keyPolicy"),
-            )
-        }
     }
 }
 
@@ -1130,17 +879,23 @@ private const val MAXIMUM_HEADERS: Int = 128
 private const val MAXIMUM_HEADER_BYTES: Int = 128 * 1024
 private const val MAXIMUM_HEADER_VALUE_BYTES: Int = 8 * 1024
 
-private val NATIVE_CONFIGURATION_KEYS = setOf(
-    "baseURL", "applicationID", "environment", "identityProvider", "appVersion", "sdkVersion",
-    "frameworkID", "frameworkVersion", "contractVersion", "protocolVersion",
-    "allowInsecureLoopback", "apple", "android",
+private val APP_COMMANDS = setOf(
+    "configure", "get", "snapshot", "client", "clientLogout", "logout", "signOut", "observe",
+    "beginIdentity", "completeIdentity", "cancelIdentity", "claimIdentityBinding",
+    "releaseIdentityBinding", "componentAccount",
 )
-private val NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS = setOf("keyPolicy")
-private val NATIVE_ANDROID_CONFIGURATION_KEYS = NATIVE_ANDROID_CONFIGURATION_REQUIRED_KEYS +
-    setOf("playIntegrityCloudProjectNumber")
-private val NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS = setOf("appAttestEnabled", "softwareKeyFallbackPolicy")
-private val NATIVE_APPLE_CONFIGURATION_KEYS = NATIVE_APPLE_CONFIGURATION_REQUIRED_KEYS + setOf(
-    "storageNamespace", "rootKeychainAccessGroup", "legacySharedKeychainAccessGroups",
+private val APP_CONFIGURATION_KEYS = setOf(
+    "operation", "name", "baseURL", "applicationID", "environment", "identityMode", "identity", "apple", "android",
+)
+private val IDENTITY_CONFIGURATION_KEYS = setOf("providerID", "issuer", "audience", "tenantID")
+private val ANDROID_CONFIGURATION_KEYS = setOf("playIntegrityCloudProjectNumber", "keyPolicy")
+private val APPLE_CONFIGURATION_KEYS = setOf(
+    "rootKeychainAccessGroup", "sharedKeychainAccessGroups", "appAttestEnabled", "softwareKeyFallbackPolicy",
+)
+
+private fun unsupportedAppleComponent(): LatchwayException = LatchwayException(
+    code = LatchwayErrorCode.ATTESTATION_UNSUPPORTED,
+    safeMessage = "Account-bound iOS components are not supported by the Android bridge",
 )
 
 private val METHOD_PATTERN = Regex("^[A-Z][A-Z0-9!#$%&'*+.^_`|~-]{0,31}$")

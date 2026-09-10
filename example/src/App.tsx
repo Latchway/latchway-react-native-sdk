@@ -15,7 +15,8 @@ import Config from "react-native-config";
 import firebaseApp from "@react-native-firebase/app";
 import firebaseAuth from "@react-native-firebase/auth";
 import {
-  createLatchwayClient,
+  Latchway,
+  firebaseProject,
   LatchwayError,
   type LatchwayClient,
   type ReactNativeIOSComponent,
@@ -41,8 +42,8 @@ const deployment = {
   rootKeychainAccessGroup: Platform.OS === "ios"
     ? required("LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP")
     : undefined,
-  legacySharedKeychainAccessGroups: Platform.OS === "ios"
-    ? configuredKeychainAccessGroups("LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS")
+  sharedKeychainAccessGroups: Platform.OS === "ios"
+    ? configuredKeychainAccessGroups("LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS")
     : [],
   appIntentComponentDefinitionID: Platform.OS === "ios" && __DEV__
     ? configuredOptional("LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID")
@@ -54,35 +55,54 @@ let developmentIdentityBootstrap: Promise<void> | undefined;
 let developmentRunPhase: "initial" | "resume" | "abort" | "abort_sign_out" | undefined;
 let firebaseInitialization: Promise<void> | undefined;
 
-function makeClient(): LatchwayClient {
-  return createLatchwayClient({
+async function makeClient(): Promise<LatchwayClient> {
+  await ensureFirebaseApp();
+  const projectID = firebaseApp.app().options.projectId;
+  if (!projectID) throw new Error("The application must configure its Firebase project ID.");
+  const app = await Latchway.configure({
     baseURL: deployment.baseURL,
     applicationID: deployment.applicationID,
     environment: deployment.environment,
-    identityProvider: "firebase",
-    getIdentityToken: physicalConformanceEnabled()
-      ? physicalIdentityToken
-      : developmentDeviceBootstrapEnabled()
-        ? developmentIdentityToken
-        : ordinaryIdentityToken,
+    identity: firebaseProject({projectID}),
     ...(deployment.googleCloudProjectNumber === undefined ? {} : {
       android: { playIntegrityCloudProjectNumber: deployment.googleCloudProjectNumber },
     }),
     ...(deployment.rootKeychainAccessGroup === undefined ? {} : {
       apple: {
         rootKeychainAccessGroup: deployment.rootKeychainAccessGroup,
-        legacySharedKeychainAccessGroups: deployment.legacySharedKeychainAccessGroups,
+        sharedKeychainAccessGroups: deployment.sharedKeychainAccessGroups,
       },
     }),
   });
+  const account = await app.signIn({getIdToken: physicalConformanceEnabled()
+    ? physicalIdentityToken : developmentDeviceBootstrapEnabled()
+      ? developmentIdentityToken : ordinaryIdentityToken});
+  return account.makeClient();
 }
 
 export default function App(): React.JSX.Element {
+  const [client, setClient] = useState<LatchwayClient>();
+  const [failure, setFailure] = useState<string>();
+  useEffect(() => {
+    let disposed = false;
+    let owned: LatchwayClient | undefined;
+    void makeClient().then(async value => {
+      if (disposed) { await value.dispose(); return; }
+      owned = value;
+      setClient(value);
+    }).catch((error: unknown) => { if (!disposed) setFailure(safeError(error)); });
+    return () => { disposed = true; void owned?.dispose(); };
+  }, []);
+  if (!client) return <SafeAreaView><Text>{failure ?? "Preparing shared account…"}</Text></SafeAreaView>;
+  return <ReadyApp initialClient={client} />;
+}
+
+function ReadyApp({initialClient}: {initialClient: LatchwayClient}): React.JSX.Element {
   const [input, setInput] = useState("Plan a focused afternoon.");
   const [output, setOutput] = useState("");
   const [status, setStatus] = useState("Ready");
   const [busy, setBusy] = useState(false);
-  const [client, setClient] = useState(makeClient);
+  const [client, setClient] = useState(initialClient);
 
   useEffect(() => () => { void client.dispose(); }, [client]);
 
@@ -164,13 +184,12 @@ export default function App(): React.JSX.Element {
       if (physicalConformanceEnabled()) {
         // The collector removes ordinary application state before this launch,
         // but iOS uninstall does not guarantee Keychain or Secure Enclave
-        // removal. Require a fresh Firebase state first, then explicitly revoke
-        // any prior native Latchway installation before measuring a replacement.
-        // The one-use custom-token grant is consumed only if revocation or the
-        // replacement needs identity.
+        // removal. The factory has explicitly signed in with the one-use test
+        // identity. Require that identity before retiring this account's current
+        // installation and measuring its replacement; no old storage is adopted.
         await ensureFirebaseApp();
-        if (firebaseAuth().currentUser !== null) {
-          throw new Error("Protected physical evidence requires a fresh Firebase identity state.");
+        if (firebaseAuth().currentUser === null) {
+          throw new Error("Protected physical evidence requires the supplied test identity.");
         }
       }
       measuredClient = await freshClientAfterRevocation(client, makeClient, async (replacement) => {
@@ -203,19 +222,11 @@ export default function App(): React.JSX.Element {
           throw new Error("The physical App Attest registration was not ready for assertion reuse.");
         }
 
-        // Release the native context, retire only its persisted session, then
-        // re-establish with the same Secure Enclave installation key and the
-        // accepted App Attest key marker. The example-native method is a
-        // physical Release-only, one-use diagnostic and cannot reset either
-        // key. No identifier or attestation material is written to evidence.
+        // Retire this generation using the current public API. Its account's
+        // device/App Attest keys remain available for explicit sign-in.
+        await measuredClient.logout();
         await measuredClient.dispose();
-        await sink.retireSessionForAssertionReuse(
-          deployment.applicationID,
-          deployment.environment,
-          deployment.rootKeychainAccessGroup,
-          deployment.legacySharedKeychainAccessGroups,
-        );
-        measuredClient = makeClient();
+        measuredClient = await makeClient();
         await measuredClient.ready;
         await measuredClient.refresh();
         setClient(measuredClient);
@@ -472,12 +483,6 @@ interface EvidenceSink {
     identityProvider: "firebase",
   ): Promise<string>;
   javascriptBundleSHA256(): Promise<string>;
-  retireSessionForAssertionReuse(
-    applicationID: string,
-    environment: string,
-    rootKeychainAccessGroup: string,
-    legacySharedKeychainAccessGroups: string[],
-  ): Promise<void>;
   runID(): Promise<string>;
   write(encoded: string): Promise<void>;
 }
@@ -490,7 +495,7 @@ interface DevelopmentIdentitySink {
   ): Promise<string>;
   developmentVerificationPhase(): Promise<"initial" | "resume" | "abort" | "abort_sign_out">;
   clearDevelopmentAppIntentArtifacts(accessGroup: string): Promise<void>;
-  markDevelopmentAppIntentWaiting(accessGroup: string): Promise<void>;
+  markDevelopmentAppIntentWaiting(accessGroup: string, account: string): Promise<void>;
   consumeDevelopmentAppIntentReceipt(accessGroup: string): Promise<void>;
   completeDevelopmentVerification(): Promise<void>;
   completeDevelopmentAbort(): Promise<void>;
@@ -533,7 +538,6 @@ function evidenceSink(): EvidenceSink {
   const value = NativeModules.LatchwayEvidence as EvidenceSink | undefined;
   if (value === undefined || typeof value.consumeIdentityGrant !== "function" ||
       typeof value.javascriptBundleSHA256 !== "function" ||
-      (Platform.OS === "ios" && typeof value.retireSessionForAssertionReuse !== "function") ||
       typeof value.runID !== "function" || typeof value.write !== "function") {
     throw new Error("The physical-evidence native sink is unavailable.");
   }
@@ -683,7 +687,7 @@ async function runDevelopmentVerification(
       developmentIdentityEstablished = firebaseAuth().currentUser !== null;
       if (phase === "abort") {
         await current.ready;
-        await current.revokeCurrentInstallationFamily([component]);
+        await current.revokeCurrentInstallationFamily();
       }
       // `abort_sign_out` is admitted only after descriptor-bound family
       // retirement completed. It does not create a new root merely to revoke
@@ -710,7 +714,7 @@ async function runDevelopmentVerification(
       await sink.consumeDevelopmentAppIntentReceipt(component.keychainAccessGroup);
       failureStage = "family_revoke";
       await current.ready;
-      await current.revokeCurrentInstallationFamily([component]);
+      await current.revokeCurrentInstallationFamily();
       failureStage = "firebase_sign_out";
       await current.dispose();
       await firebaseAuth().signOut();
@@ -749,11 +753,11 @@ async function runDevelopmentVerification(
     familyCleanupRequired = true;
     failureStage = "family_revoke";
     await current.ready;
-    await current.revokeCurrentInstallationFamily([component]);
+    await current.revokeCurrentInstallationFamily();
     familyCleanupRequired = false;
     failureStage = "native_session_establishment";
     await current.dispose();
-    measured = makeClient();
+    measured = await makeClient();
     familyCleanupRequired = true;
     await measured.ready;
 
@@ -817,7 +821,7 @@ async function runDevelopmentVerification(
       waiting_for_app_intent: true,
     }, null, 2));
     setStatus("Waiting for the Run Latchway Proof App Intent");
-    await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup);
+    await sink.markDevelopmentAppIntentWaiting(component.keychainAccessGroup, await measured.componentAccount());
     waitingForAppIntent = true;
     familyCleanupRequired = false;
     developmentIdentityBootstrap = undefined;
@@ -839,7 +843,7 @@ async function runDevelopmentVerification(
         if (familyCleanupRequired && terminalFailure?.stage !== "family_revoke" &&
             measured !== undefined && component !== undefined) {
           try {
-            await measured.revokeCurrentInstallationFamily([component]);
+            await measured.revokeCurrentInstallationFamily();
             familyCleanupRequired = false;
           } catch (cleanupError) {
             terminalFailure = {
@@ -885,9 +889,9 @@ async function runDevelopmentVerification(
 
 function developmentAppIntentComponent(): ReactNativeIOSComponent {
   const definitionID = deployment.appIntentComponentDefinitionID;
-  const keychainAccessGroup = deployment.legacySharedKeychainAccessGroups[0];
+  const keychainAccessGroup = deployment.sharedKeychainAccessGroups[0];
   if (definitionID === undefined || keychainAccessGroup === undefined ||
-      deployment.legacySharedKeychainAccessGroups.length !== 1) {
+      deployment.sharedKeychainAccessGroups.length !== 1) {
     throw new Error("The Debug App Intent component descriptor is unavailable.");
   }
   return {

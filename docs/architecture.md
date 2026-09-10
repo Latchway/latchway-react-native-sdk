@@ -1,145 +1,112 @@
 # React Native SDK architecture
 
-## Dependency and trust boundary
+The current source has one root lifecycle: configure a native app, supply
+identity, then obtain account-bound clients. This source-breaking model is
+versioned as 2.0.0; historical package receipts and tags are unchanged.
 
-```text
-React Native application
-  └─ @latchway/react-native
-       ├─ @latchway/client 1.0.0 (errors and shared transport concepts)
-       ├─ Latchway/AppAttest 1.0.0 (iOS)
-       ├─ Latchway/AppExtensions 1.0.0 (optional Debug extension target)
-       └─ dev.latchway:latchway-okhttp + latchway-play-integrity 1.0.0 (Android)
-```
+## Ownership
 
-The core repository owns OpenAPI, error codes, attestation binding, DPoP behavior, and compatibility. This package owns the handwritten React Native API, fetch integration, TurboModule schema, cross-instance lease, abort propagation, stable error projection, and redacted diagnostics. Native SDKs exclusively own installation keys, secure session persistence, platform attestation, DPoP signing, and native single-flight.
+The core repository owns OpenAPI, error codes, canonical attestation/DPoP
+bindings and the checksummed contract. Current clients use contract 1.1.0,
+wire 3 and `supplied_identity_v1`; client code cannot invent a different wire
+contract. `@latchway/client` provides shared transport/error concepts.
 
-The gateway, not the SDK, derives user, organization, plan, trust, routing,
-pricing, and quota facts. The SDK never receives an upstream provider
-credential or treats application-supplied values as trusted server facts.
+The RN SDK owns handwritten TypeScript, fetch integration, the TurboModule,
+cancellation, safe error projection and response pull/backpressure. Native iOS
+and Android SDKs own the app registry, account lifecycle, installation keys,
+secure storage, platform attestation, DPoP and refresh coordination.
+The application owns its auth provider, UI state, tools and external logout.
+The gateway authenticates identity and owns trust, routing, quota and billing.
 
-## Contract ownership
+## Identity and account flow
 
-The Latchway core repository exclusively owns the client OpenAPI, error-code
-registry, protocol compatibility manifest, canonical attestation binding, DPoP
-vectors, canonical request examples, and checksummed contract bundle. A
-contract update must verify checksums, update `contract.lock`, regenerate only
-internal types, rerun shared vectors, and pass conformance against the exact
-core revision. Generated bridge and wire types do not become public API.
+1. Matching `Latchway.configure` calls join one native app without signing in.
+   The first caller supplies public identity/security metadata; later explicit
+   conflicts fail. Either native or RN may initialize first.
+2. `signIn`, `restore` or account `updateIdToken` captures a native ticket
+   before invoking the application's optional one-shot token producer.
+3. Native verifies the supplied token through the gateway. Only a valid
+   server-verified snapshot becomes fresh identity in native memory.
+4. A client captures its account generation atomically. It cannot attach A's
+   request to B after an intervening sign-in.
+5. Identity expiry suspends protected work until a same-account update. Logout
+   persists retirement, cancels work and removes freshness; no network or
+   external auth callback is needed for local cleanup.
 
-## Operation flow
+App snapshots expose safe `appInstanceID`, generation and monotonic revision
+state. They do not expose identity subjects or tokens. Acquisition tickets and
+optional auth-binding leases are native-owned and exclusive. JS invalidation
+closes registration atomically, cancels pending tickets, releases only that
+runtime's binding and closes its clients. A late native completion cannot
+publish a client or binding after runtime destruction. It does not log out the
+shared account or terminate another native/RN surface.
 
-1. JavaScript validates the origin, feature, configuration, request state, and decoded query names; provider-credential names fail before identity acquisition or dispatch.
-2. The application identity callback returns an external identity JWT.
-3. The TurboModule passes that JWT transiently to the native SDK while native session work runs.
-4. Native repeats the exact origin and allowed-path checks, establishes or refreshes a device-bound session, signs a DPoP proof, attaches native-owned protocol headers, and dispatches through its private URLSession or OkHttp client.
-5. Native refuses redirects, retains the credential-bearing request and response task, and returns only an opaque response identifier, status, and allowlisted safe headers.
-6. A WHATWG `ReadableStream` pulls bounded base64 response chunks through the TurboModule. Pull demand supplies bridge backpressure; abort, reader cancellation, EOF, client disposal, and invalid metadata all finish or cancel the native handle. JavaScript never clones or replays an authenticated request. Android's locked authenticator and iOS's locked feature transport exclusively own the contract-safe, one-time pre-dispatch retry; iOS bounds rejection classification to 64 KiB before any response bytes become visible.
+The current storage model is account-scoped from first use. It imports no older
+root sessions and exposes no inventory/cleanup callback configuration. Current
+persistent logout, interrupted-cleanup retry, inactive-key retention and
+component revision fences remain security mechanisms, not compatibility modes.
 
-Authorization, DPoP, access tokens, refresh tokens, private keys, and attestation evidence never appear in a native return value. Response bodies are application data, not credential envelopes, and remain incrementally delivered rather than eagerly buffered.
+## Authenticated transport
 
-The containing application's root client owns the public descriptor lifecycle:
-prepare, replace, descriptor diagnostics, descriptor revoke, and whole-family
-retirement. Descriptors are normalized and snapshotted before any identity
-await; native results must match the same snapshot. Identity is acquired only
-transiently for prepare, replace, revoke, and family retirement. Root-side
-component diagnostics are identity-free. A 65,536-byte JavaScript serialization
-limit keeps oversized descriptor sets from reaching the native bridge.
+JavaScript validates exact origin, feature/path, headers and bounded request
+body before native dispatch. Native repeats the checks, verifies the account
+and identity fence, establishes/refreshes the device-bound session, attaches
+Authorization and a distinct DPoP proof, then uses private URLSession/OkHttp.
 
-The component path uses a separate extension-process client, not the containing
-app's root client or lease. JavaScript running inside a signed `.appex` can
-supply one validated public descriptor; native configuration rejects a
-containing-app process, selects `.reactNativeIOS`, and retains a
-`LatchwayExtensionClient` with no direct App Attest provider. iOS extensions
-cannot call `DCAppAttestService.generateKey`, and the containing application
-must not attest on their behalf. The extension can use only independently
-keyed, component-scoped delegated sessions. React Native v1 exposes no
-JavaScript component request operation. A second bridge operation returns only
-`LatchwayComponentDiagnostics`; direct-attestation trust-source decoders are
-retained for protocol compatibility but are not reachable proof claims. The
-identity callback is not invoked, and component credentials and DPoP material
-never cross the TurboModule. Both platforms report `attestation_unsupported`
-for the legacy direct operation.
+Native retains the credential-bearing request and response task. JS receives
+only an opaque response handle, status, allowlisted safe headers and pulled
+response bytes. Authorization, DPoP, access/refresh tokens, private keys and
+attestation evidence never appear in native outputs. The supplied external ID
+token is accepted only by the explicit identity operation, never as an arbitrary
+request credential.
 
-The example App Intents extension has no React Native runtime or TurboModule
-bridge. Its Debug target optionally links `Latchway/AppExtensions` and calls the
-native extension client directly to prove an independently keyed delegated
-session and one fully consumed bounded Responses request. The root publishes a
-nonsecret exact-run shared-Keychain challenge immediately before waiting. The
-intent captures it before client construction, rechecks it immediately before
-echoing the run in a bounded receipt, and cannot publish for a superseded run.
-The containing app accepts only its native-captured exact run and deletes both
-challenge and receipt before descriptor-bound family retirement and sign-out;
-abort also deletes both artifacts. This is local integration proof. In Release the
-AppExtensions pod is absent, no executable Latchway client path is compiled,
-and the intent fails closed. Both variants retain distinct root/extension
-bundle identities and provisioning profiles, private-first/shared-second root
-Keychain entitlements, and a shared-only extension entitlement. The root's
-first/default group keeps its key, identity, and session state outside the
-extension's reach.
+Requests have an 8 MiB bridge ceiling; the gateway may impose a lower limit.
+Pulling a WHATWG stream supplies bounded backpressure. Abort, disposal, logout,
+expiry and stream cancellation fence delivery and release native work.
+JavaScript never clones/replays an authenticated request. Native may retry once
+only for a canonical rejection proving no upstream dispatch; iOS caps that
+rejection classification at 64 KiB before exposing bytes.
 
-The bridge intentionally implements a bounded fetch subset: method, headers,
-an at-most-8-MiB buffered request body, cancellation, response metadata, and a
-pull-driven response stream. Browser cookie/cache modes, service workers,
-redirect following, streaming uploads, response trailers, and native response
-URL metadata are outside this transport. Framework compatibility therefore
-depends on a real custom-fetch seam and the framework's React Native support;
-the presence of `fetchFor` alone is not a version-support claim.
+The fetch subset excludes browser cookies/cache, service workers, redirects,
+streaming uploads, trailers and native response URL metadata.
+`fetchFor(feature)` fixes the protocol/feature and aliases the canonical
+`X-Latchway-Request-ID` as `X-Request-ID` for framework correlation. The runtime
+owns framework/caller attribution; callers cannot spoof protocol headers.
 
-`fetchFor(feature)` also maps the canonical safe
-`X-Latchway-Request-ID` response header to the conventional `X-Request-ID`
-alias without reading the body, so provider SDK failures retain server
-correlation. The native runtime remains the framework identity reported to the
-gateway (`react-native-fetch`); an underlying JavaScript library cannot spoof a
-different SDK/framework pair through caller headers.
+## Current Apple components
 
-Feature binding is also protocol binding: a Responses feature cannot dispatch
-Chat Completions, Embeddings, or Anthropic Messages. A consumer set spanning
-those protocols constructs a separate `fetchFor` transport for each configured
-feature instead of multiplexing incompatible endpoints through one identifier.
+The configured app's immutable allowlist approves delegated component groups.
+Each differs from the signed root-private group. Host provisioning is
+account-bound and records the public coordinate before creating a key/grant.
+The extension receives a native-produced opaque account handoff, not an ID
+token, key or root session. The native handoff binds the same gateway, app,
+environment and generation; the extension checks its live persistent fence.
 
-## Coordination
+Root/component retirement and revision-checked Keychain writes prevent stale
+cross-process refresh completion or buffered bytes from reviving a retired
+account. An old descriptor cannot open a new account. Closing one extension
+handle does not log out its containing app.
 
-A module-global root lease map is keyed by native-module identity plus gateway/application/environment scope. A separate component lease map adds the component definition and never aliases the root map. Equivalent clients reuse one native client and configuration promise; conflicting security configuration for an active scope is rejected. Reference-counted disposal drops the native object only after the last JavaScript client leaves. The native iOS actor and Android coordinator/mutex prevent session establishment and refresh stampedes.
+Only the containing iOS app produces App Attest for itself. Extensions use
+independent delegated sessions and never receive its private Keychain group.
+The current extension initializer requires an account descriptor; it cannot
+adopt unbound storage. The bridge has no direct-extension-attestation producer.
+A Swift App Intent can use the native extension SDK without hosting RN.
 
-Native persistence namespaces include `react_native_ios` or `react_native_android`. The bridge configures the paired runtime identity, so challenge/grant platform and `X-Latchway-SDK: react-native` cannot disagree. Native compatibility JSON is checked against released contract 1.0.0 and current wire protocol 2 before any operation.
+## Dependency and verification boundary
 
-## TurboModule boundary
+Resolve one native SDK in each host. Source overrides are development-only;
+published dependency checks must use real npm, CocoaPods and Maven artifacts.
+A separate SPM copy plus the RN pod is not a shared registry. Codegen output is
+disposable plumbing, not a public API.
 
-The handwritten spec carries root and component configuration as distinct
-operations, a bounded request description, the root client's transient
-application identity token, opaque response-handle start/read/close operations,
-quota/diagnostic results, public component descriptors for lifecycle and
-delegated-session compatibility, cancellation, and disposal. Root lifecycle
-mutations carry identity transiently; root-side and extension-side component
-diagnostics do not. The legacy direct-attestation operation remains
-ABI-compatible but fails closed. Extension-process component operations have no
-identity-token argument. The spec has no authorization-envelope operation and
-does not return or accept provider attestation evidence, Play request hashes,
-App Attest client-data hashes, session tokens, DPoP proofs, or key material.
-Generated Objective-C++ and Java specs are disposable codegen output, not
-public API.
+Deterministic tests cover identity acquisition, expiry, account races, disposal,
+bridge validation, response cancellation and redaction. Native builds prove
+compilation; registry consumers prove package resolution. Neither proves real
+App Attest, Play distribution or extension-process entitlement/race behavior.
+Previously recorded release/device evidence does not automatically cover this
+new source-breaking cleanup.
 
-## Native dependencies
-
-Published package metadata pins release coordinates. CocoaPods consumes `Latchway/AppAttest` 1.0.0. Gradle consumes `dev.latchway:latchway-okhttp:1.0.0` and `dev.latchway:latchway-play-integrity:1.0.0`. Development may point `LATCHWAY_NATIVE_REPOSITORY` or `-PlatchwayNativeRepository` at a locally published Maven repository; local file links never enter npm metadata.
-
-## Diagnostics and errors
-
-Diagnostics contain version compatibility, platform, secure key-storage category, attestation support/provider, session state/expiration, installation ID/status, server version, and last request/error identifiers. Component diagnostics add only family/component IDs, public definition/access-group identifiers, key/session/grant availability, trust provenance/expiry, and a containing-app action flag. Native key IDs, JWK thumbprints, tokens, proofs, and evidence are excluded. Native errors are bounded, control-character stripped, secret-pattern redacted, and mapped to the shared `LatchwayError` taxonomy. A server-originated native error must carry the exact `https://docs.latchway.dev/errors/<hyphenated-code>` documentation URL; missing or mismatched links fail closed. `operation_indeterminate` alone carries a required canonical reconciliation ID through both native bridges; malformed, missing, contradictory, or otherwise attached operation metadata fails closed.
-
-## Verification boundary
-
-Unit and Node conformance tests own public request shaping, fail-closed
-credential-output checks, response pull/backpressure, error projection,
-cancellation, coordination, strict-CSP behavior, and
-canonical vectors. Reproducible code generation proves the handwritten schema
-remains valid. Native consumer builds prove released dependency resolution and
-bridge compilation. Physical-device conformance proves real App Attest and Play
-Integrity behavior, session rotation, quota, streaming, diagnostics, and
-revocation against the exact core image.
-
-## Non-goals
-
-This package does not own server policy, provider routing, quota enforcement,
-user-authentication UI, AI request modeling, upstream secrets, native
-cryptography, native attestation verification, or an independent session store.
+Errors expose bounded, redacted metadata. Canonical documentation URLs must
+match their codes. Preserve `operation_indeterminate`'s validated operation ID
+for reconciliation; never treat an uncertain dispatch as safe to replay.

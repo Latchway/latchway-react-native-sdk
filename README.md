@@ -1,364 +1,174 @@
 # Latchway React Native SDK
 
-Version 1.3.0 adds `await app.signOut()`: one app-level operation to sign out the
-shared native/React Native account, including pending sign-in and persisted
-cleanup, without first acquiring an account or generation ID. Native auth owners
-use the same operation even when no React Native or AI screen is mounted.
+One fetch-shaped API for a self-hosted Latchway gateway, with shared native/RN
+accounts and application-supplied identity. Either native or React Native can
+configure first. Matching configuration reuses the same native app and account;
+no native authentication coordinator or Firebase dependency is required.
 
-It includes the 1.2.1 native Fetch response parsing fix for non-streaming OpenAI and
-LangChain calls, including HTTP error bodies. See the
-[patch upgrade guidance](docs/langchain.md#response-handling-in-121).
+**Version 2.0.0** removes legacy constructors, identity-authority setup, and old
+storage migration paths. It retains app-level `signOut()` and the native Fetch
+response parsing fix. Rebuild JavaScript and native apps together; this is not
+an over-the-air JavaScript-only upgrade. Historical releases remain unchanged.
 
-Version 1.2.0 adds [shared accounts with developer-supplied identity](docs/supplied-identity.md).
-Native or RN can configure first. No Firebase dependency, auth authority setup
-or native-team Latchway bootstrap is required in the new integration.
+Installation keys, DPoP signing, refresh credentials and App Attest/Play Integrity
+stay in the native SDKs. The SDK never accepts an upstream AI-provider key.
 
-`@latchway/react-native` gives iOS and Android applications one fetch-shaped API for a self-hosted Latchway gateway. The JavaScript layer never accepts an upstream AI-provider key. P-256 installation keys, DPoP signing, refresh-token storage, and platform attestation stay in the native Latchway SDKs.
-
-Version 1.3.x supports a minimum host of React Native 0.74 / React 18.2 with
-New Architecture and host-aligned native dependencies. It retains exact API URL
-handling and keeps the base SDK small: only `@latchway/client` and a private
-`web-streams-polyfill` fallback are required runtime dependencies. Babel and
-global polyfills are application-owned; follow the [LangChain quickstart](docs/langchain.md)
-only if using that integration. Native SDK dependencies are iOS 1.3.0 and
-Android 1.2.0; `@latchway/client` remains 1.1.0. Shared apps require server 1.1.1+
-with explicit host caller policy. Install Pods and rebuild both native apps
-when upgrading from 1.2.x; this update is not JavaScript-only.
-
-**Upgrading from 1.1.0:** `/polyfills` and `/babel` remain as deprecated opt-in
-entrypoints, but their dependencies are no longer installed automatically. Apps
-using either must follow the [1.1.1 migration](docs/langchain.md#upgrading-from-110).
-This is a dependency-installation change, not a zero-action patch for helper users.
-Ordinary SDK imports and native authentication APIs are unchanged.
-
-**Upgrading from 1.1.1:** update the package and recopy the app-owned runtime
-files linked in the LangChain guide. Upgrading npm alone cannot update files
-already copied into your host app. Server 1.0.3 allows native and React Native
-roots to share their signed iOS bundle or Android package without relaxing
-attestation or platform-specific root selection.
-
-For a standalone npm-only consumer with Firebase login, LangChain weather tools,
-streaming chat and direct-fetch Settings, see
-[LatchwayChat](Examples/LatchwayChat/README.md). The existing `example/` remains
-the separate workspace/conformance application.
-
-## Requirements
-
-- React Native `>=0.74.0 <1.0.0` with the New Architecture enabled; React 18.2 minimum,
-  paired with the React version required by the chosen React Native release
-- iOS 15 or newer, an App Attest-capable application entitlement, and `Latchway/AppAttest` 1.3.0
-- Android API 24 or newer, Play Integrity configured for the application, and the `dev.latchway` 1.2.0 artifacts
-- Node 24.19.0 and pnpm 10.15.0 for repository development
-
-Starting in 1.1.3, the minimum host is React Native 0.74.0 with
-React 18.2.0. Older React Native app templates need native toolchain updates;
-changing the two JavaScript versions alone is insufficient. See
-[React Native compatibility](docs/react-native-compatibility.md) for the exact
-settings, checks, and distinction between the SDK and the Firebase/LangChain
-example. The repository's main development/example baseline remains 0.82.
-The broader peer range permits newer 0.x releases; it does not imply every
-minor release has been tested. Current validation covers 0.74.0 and 0.82.0.
-
-The repository example additionally pins React Native Firebase 25.1.0, Firebase
-Apple SDK 12.15.0, and Firebase Android BoM 34.15.0. These are example identity
-provider dependencies, not runtime dependencies of the published Latchway
-package. Repository installs use pnpm's hoisted linker because React Native's
-CocoaPods static-framework exclusions require conventional `node_modules`
-paths.
-
-## Recommended usage
+## Configure and use
 
 ```ts
 import {Latchway, firebaseProject} from '@latchway/react-native';
 
 const app = await Latchway.configure({
-  baseURL, applicationID, environment,
-  identity: firebaseProject({projectID}),
-  ...platformSecurity,
+  baseURL: 'https://gateway.example.com',
+  applicationID: 'app_01J00000000000000000000000',
+  environment: 'production',
+  identity: firebaseProject({projectID: 'your-project-id'}),
+  apple: {rootKeychainAccessGroup: 'YOURTEAM.com.example.app'},
+  android: {playIntegrityCloudProjectNumber: '123456789012'},
 });
-const account = await app.signIn({getIdToken: () => yourAuth.getIdToken()});
+
+const account = await app.signIn({
+  getIdToken: () => yourAuth.getIdToken(),
+});
 const client = await account.makeClient();
-```
 
-Your application supplies and refreshes the ID token; no Firebase SDK is imported
-by Latchway. For native-first attachment, use `app.makeClient()` without signing
-in again. See [configure, refresh, logout and LangChain](docs/supplied-identity.md).
-
-In your serialized application sign-out flow, stop UI/tool work and await:
-
-```ts
-await app.signOut();
-await yourAuth.signOut(); // Your provider remains application-owned.
-```
-
-`signOut()` also works before sign-in returns or after a restart, and retries
-unfinished native cleanup when called again. A secure-storage failure still
-rejects: keep the app signed out and retry cleanup before accepting another
-login. Native and RN callers share this boundary; screen disposal alone does
-not sign out the account. Latchway does not sign out Firebase/other providers,
-reset per-user quotas or remotely log out other devices.
-
-## Legacy constructor usage
-
-```ts
-import { createLatchwayClient } from "@latchway/react-native";
-
-const latchway = createLatchwayClient({
-  baseURL: "https://gateway.example.com",
-  // Generated by the Latchway Admin API; names/slugs are not accepted.
-  applicationID: "app_01J00000000000000000000000",
-  environment: "production",
-  getIdentityToken: async () => {
-    const token = await applicationIdentity.currentToken();
-    if (token === undefined) throw new Error("The user must sign in before calling Latchway.");
-    return token;
-  },
-  apple: {
-    rootKeychainAccessGroup: applicationConfiguration.rootPrivateKeychainAccessGroup,
-    legacySharedKeychainAccessGroups: applicationConfiguration.extensionSharedKeychainAccessGroups,
-  },
-  android: {
-    playIntegrityCloudProjectNumber: applicationConfiguration.googleCloudProjectNumber,
-  },
+const response = await client.fetch('/v1/responses', {
+  method: 'POST',
+  latchwayFeature: 'assistant',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({model: 'server-configured', input: 'Hello'}),
 });
-
-const response = await latchway.fetch("/v1/responses", {
-  method: "POST",
-  latchwayFeature: "habit_assistant",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    model: "assistant-default",
-    input: "Plan tomorrow",
-  }),
-});
-
-// OpenAI-compatible clients, Vercel OpenAI/Anthropic providers, and LangChain
-// adapters receive a normal fetch function permanently scoped to one feature.
-const habitAssistantFetch = latchway.fetchFor("habit_assistant");
 ```
 
-`gatewayURL` exposes only the canonical non-secret gateway origin for framework
-constructors that require a base URL. `fetchFor` keeps the feature fixed,
-preserves the pull-driven response stream, and aliases the canonical
-`X-Latchway-Request-ID` as `X-Request-ID` for provider SDK error correlation.
-It never uses or replaces global `fetch`.
+The application owns `yourAuth`. `firebaseProject` formats public issuer/audience
+metadata only; it imports no Firebase module and obtains no token. Generic
+identity uses `{providerID, issuer, audience, tenantID?}` configured on the gateway.
+Use the actual signed root-private Keychain group, not a guessed Team ID prefix.
 
-The example contains runnable consumers for the exact locally tested versions
-of the official OpenAI JavaScript SDK (7.8.0), Vercel AI SDK (7.0.85 with
-`@ai-sdk/openai` 4.0.52 and `@ai-sdk/anthropic` 4.0.46), and LangChain
-JavaScript (`@langchain/openai` 1.5.10):
+`configure` never logs in. On application-auth restoration, call
+`app.restore({getIdToken})`; a persisted logout requires an accepted new login
+through `signIn`. Another surface can attach with `app.makeClient()` without
+another sign-in.
 
 ```ts
-import {
-  createFrameworkConsumers,
-  runFrameworkConsumerSmoke,
-} from "./framework-consumers";
-
-const frameworks = createFrameworkConsumers(latchway, {
-  responses: "habit_responses",
-  chat: "habit_chat",
-  embeddings: "habit_embeddings",
-  anthropic: "habit_anthropic",
-});
-const result = await runFrameworkConsumerSmoke(frameworks, "Plan tomorrow");
+await account.updateIdToken({getIdToken: () => yourAuth.getIdToken()});
+await app.signOut(); // Current account and unfinished cleanup; native/RN fenced.
+// Your application signs out its external auth provider separately.
+await client.dispose(); // Releases this surface only; not shared logout.
 ```
 
-These are compatibility consumers, not another LLM abstraction and not a
-blanket support claim for every package feature. They execute Responses, Chat
-Completions, embeddings, Anthropic Messages, and SSE through native networking.
-Each identifier above must name a separately configured Latchway feature whose
-protocol matches that request family; one feature cannot represent multiple
-protocols.
-Local conformance also covers tools, JSON-schema request preservation, errors,
-framework retry dispatches, explicit refresh, restricted opaque routes, and
-cancellation. Automatic pre-dispatch session recovery remains a native/device
-evidence claim. Audio, images, uploads, Realtime, browser-only middleware,
-streaming request bodies, and any framework path that does not honor the
-injected fetch remain unsupported here. The core
-`compatibility/frameworks.yaml` registry is the canonical release-status and
-version source; `react-native-fetch` remains experimental until hosted and
-physical-device gates pass.
+Acquisition callbacks are one-shot and cancellation-aware, not permanent JS
+identity owners. Native memory holds only gateway-verified fresh identity.
+Expiry suspends work with `identity_refresh_required`; a same-account update
+resumes it. Old handles cannot follow a different login. Report all external
+auth changes and keep application login/logout mutations serialized.
 
-The official `@anthropic-ai/sdk` 0.120.0 package is not claimed as a React
-Native consumer. Its credential-chain module contains Node filesystem imports
-that Metro resolves even when a static constructor placeholder is supplied.
-The runnable Anthropic Messages path therefore uses the custom-fetch seam in
-`@ai-sdk/anthropic`; no Node-module shim or provider credential is bundled.
+See [supplied identity](docs/supplied-identity.md) and
+[shared native apps](docs/shared-native-apps.md) for complete lifecycle examples.
 
-`applicationID` is the generated application resource ID returned by the
-Admin API, not an app name, package/bundle identifier, or user-chosen slug.
-On iOS, `apple.rootKeychainAccessGroup` is required, fully resolved, and must
-be the first access group in the signed root application. Put every explicit
-extension-shared group in `legacySharedKeychainAccessGroups`; native code scans
-only exact root-record coordinates and surfaces `storage_unavailable` if stale
-implicit root state requires an explicit migration.
+## Requirements and installation
 
-Call `dispose()` when the owning application scope is destroyed. Disposal drops the in-memory native client; secure installation state remains available to later instances. `refresh()` explicitly rotates session credentials without exposing them. `revokeCurrentInstallation()` removes only the root installation and leaves independently provisioned family components addressable.
+- React Native `>=0.74.0 <1.0.0`, New Architecture, and React `^18.2.0 || ^19.0.0`.
+  Pair React with the version required by the selected RN release.
+- iOS 15 or newer, the signed root-private Keychain group, and a physical
+  App Attest-capable device for real attestation.
+- Android API 24 or newer, with Play Integrity configured for the signed app.
+  Native libraries use compile SDK 34; other host dependencies may require more.
+- Server 1.1.1 or later, contract 1.1.0 / wire 3, `supplied_identity_v1`, and
+  explicit required-attestation `sharedNativeCallers` policy.
+- Node 24.19+ and pnpm 10.15 for repository development.
 
-The root application manages the complete native iOS component lifecycle with
-public descriptors:
+Install `@latchway/react-native@2.0.0`, update Pods, and rebuild both native apps.
+Native pins are iOS 2.0.0 and Android 1.2.1; the JavaScript client stays 1.1.0.
+Use one native SDK implementation. RN and native must not link separate iOS
+CocoaPods and SPM copies. See [native installation](docs/native-installation.md)
+and [minimum-host toolchain](docs/react-native-compatibility.md).
 
-```ts
-import type { ReactNativeIOSComponent } from "@latchway/react-native";
+The supported minimum is not a promise that every RN minor or every optional
+Firebase/LangChain dependency has been tested. The main example uses RN 0.82 /
+React 19.1. The SDK does not install Firebase, LangChain, a Babel plugin or global
+polyfills. Its required JavaScript dependencies are `@latchway/client` and a
+private `web-streams-polyfill` fallback. Optional integration tooling remains
+application-owned; see [LangChain](docs/langchain.md).
 
-const appIntent: ReactNativeIOSComponent = {
-  definitionID: "habit_app_intent",
-  kind: "app_intent_extension",
-  keychainAccessGroup: "ABCDE12345.com.example.app.app-intent",
-  requestedFeatures: ["habit_assistant"],
-};
+## Feature-bound transports
 
-const [prepared] = await latchway.prepareComponents([appIntent]);
-const replaced = await latchway.replaceComponent(appIntent);
-const localState = await latchway.componentDiagnostics(appIntent);
-await latchway.revokeComponent(appIntent);
+`client.fetchFor(feature)` supplies a normal feature-bound fetch function to
+frameworks with custom-fetch support. `gatewayURL` exposes the non-secret
+canonical origin. Neither replaces global fetch. The server selects the route
+and actual model; each feature must match its request protocol.
 
-// On sign-out, native code retires every durably registered component.
-await latchway.revokeCurrentInstallationFamily();
+Structured routes are POST-only: `/v1/responses`, `/v1/chat/completions`,
+`/v1/embeddings` and `/v1/messages`. Opaque requests are restricted to the exact
+`/proxy/{feature}/<safe-relative-path>` and allowed methods. Credentials in
+headers/query, unsafe paths and redirects fail closed.
 
-// The descriptor overload remains available for pre-registry legacy state.
-await latchway.revokeCurrentInstallationFamily([appIntent]);
-```
+Requests are buffered at the bridge with an 8 MiB client ceiling; the gateway
+may impose a lower body limit. Responses are pull-streamed with cancellation
+and backpressure. JavaScript never replays an authenticated request. Native
+transport may retry once only when the canonical server rejection proves no
+upstream dispatch. Unknown outcomes and partial responses are not retried.
 
-Each descriptor contains exactly a definition ID, kind, fully resolved Keychain
-access group, and requested feature IDs. Its access group must be signed into
-both targets and listed in `apple.legacySharedKeychainAccessGroups`.
-Preparation, replacement, component revocation, and family retirement acquire
-the root identity only transiently inside native code. Root-side
-`componentDiagnostics` reads redacted local state without acquiring identity.
-Inputs are normalized before asynchronous work, and all component credentials,
-keys, grants, and sessions remain native. Before component-local state can be
-created, the iOS SDK records its validated, non-secret Keychain coordinate in
-the root application's private Keychain group. No-argument family retirement
-uses that durable registry across launches, removes entries only after both the
-component credential and key are erased, and retains failed entries for retry.
-The optional descriptor overload can additionally retire legacy component
-state that predates the registry.
+The supported fetch subset includes method, headers, body, abort, status and
+a readable response stream. Browser cookies/cache, service workers, streaming
+uploads, redirects and response trailers are not implemented. Framework support
+requires its actual React Native-compatible custom-fetch path, not merely an
+API shaped like fetch. See [LangChain examples](docs/langchain.md).
 
-An independently executing iOS action or SSO extension whose containing app
-has already provisioned its component descriptor can inspect its isolated,
-independently keyed delegated-session state without moving credentials through
-JavaScript:
+## Apple components
 
-```ts
-import { createLatchwayComponentClient } from "@latchway/react-native";
+Current delegated components remain supported. Declare authorized groups in
+`apple.sharedKeychainAccessGroups` at first registration, distinct from the
+root-private group. Host component provisioning, replacement, diagnostics and
+revocation operate through the captured account's client. An extension requires
+an explicit non-secret account handoff and retains its own key and delegated
+session; it never receives root credentials.
 
-const component = {
-  definitionID: "action_extension",
-  kind: "action_extension",
-  keychainAccessGroup: "ABCDE12345.com.example.app.action-extension",
-  requestedFeatures: ["habit_assistant"],
-} as const;
+iOS application extensions cannot generate App Attest keys. They are
+delegated-only; the containing app must not attest on their behalf. Current
+root/component retirement journals, cross-process revision checks and account
+cancellation remain enforced. See [native installation](docs/native-installation.md).
 
-// Construct this only in the JavaScript runtime hosted by the signed .appex.
-// It is deliberately separate from the containing app's root client.
-const componentClient = createLatchwayComponentClient({
-  baseURL: "https://gateway.example.com",
-  applicationID: "app_01J00000000000000000000000",
-  environment: "production",
-  component,
-  apple: {
-    rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-    legacySharedKeychainAccessGroups: [component.keychainAccessGroup],
-  },
-});
+## Storage and security
 
-const componentState = await componentClient.diagnostics();
-// This is diagnostics only; RN v1 exposes no component request operation.
-```
+Current source starts in account-scoped storage. It does not scan/import
+earlier SDK sessions or accept old-store inventory and cleanup callbacks.
+Logout persists retirement, fences buffered bytes and preserves retryable local
+cleanup. It does not reset server per-user quotas or revoke other devices.
 
-The access group must be fully resolved and present in both signed entitlement
-sets; build-setting expressions such as `$(AppIdentifierPrefix)` are rejected.
-Configuration fails unless the current process is an iOS `.appex`. The root
-application may establish App Attest only for itself; it must not attest for an
-extension, and an iOS application extension cannot call
-`DCAppAttestService.generateKey`. The extension client therefore constructs no
-App Attest provider. It has no identity callback or root API and retains only
-component-key and delegated-session isolation inside the pinned iOS SDK. The
-legacy `establishDirectAttestation()` entry point and direct-attestation trust
-source decoders remain for wire/API compatibility, but invocation fails closed
-with `attestation_unsupported`; their presence is not a claim that iOS can
-produce that state. Only redacted component diagnostics return. Android also
-fails closed for direct component attestation.
+External ID tokens are the only application credentials supplied to the native
+identity operation. Refresh/access tokens, DPoP proofs, private keys and
+attestation evidence never return to JavaScript. Caller-owned authorization,
+cookies, provider API keys and protocol headers are rejected or stripped;
+a provider SDK's placeholder key is never forwarded.
 
-The example's `AppIntents.appex` does not host a React Native JavaScript runtime.
-In Debug only, its separate CocoaPods target links `Latchway/AppExtensions`
-(Swift module `Latchway`) and constructs a native `LatchwayExtensionClient` with
-runtime `react_native_ios`. After the root prepares the descriptor, the intent
-publishes a nonsecret exact-run challenge in the shared Keychain immediately
-before its waiting marker. The intent captures that challenge before creating
-its client, proves an independently keyed delegated session, fully consumes one
-successful bounded Responses body, rechecks that the challenge is still current,
-and then echoes it in a bounded shared-Keychain receipt. Resume accepts only the
-native-captured exact run and deletes both challenge and receipt. The receipt
-contains only the nonsecret `dev_<32hex>` run nonce, status booleans, and a
-timestamp; it contains no component, installation, or user IDs, tokens, proofs,
-request body, or response body. The intent never receives the root identity or
-root-private Keychain state.
+Errors expose only safe codes, status, request IDs and canonical documentation
+links. Preserve `operation_indeterminate`'s operation ID for reconciliation
+instead of automatic retry. See [security](docs/security.md),
+[architecture](docs/architecture.md) and [SECURITY.md](SECURITY.md).
 
-The Release fixture has no AppExtensions dependency or executable Latchway
-client path and its intent fails closed with an unsupported error. Both variants
-retain private-first/shared-second root entitlements and a shared-only extension
-entitlement. The local Debug intent is integration proof only and does not
-broaden or replace the protected Release physical-evidence claim.
+## Examples and verification
 
-Equivalent clients in one JavaScript runtime share one native client and contract compatibility check. Native SDK actors/mutexes own session establishment and refresh single-flight. JavaScript never clones or replays an authenticated request; any bounded pre-dispatch retry is exclusively a native transport decision. Android installs the locked Latchway OkHttp interceptor, origin guard, and authenticator. iOS uses the locked feature transport, whose private redirect-rejecting URL session classifies at most 64 KiB of one canonical pre-dispatch rejection before its single safe retry.
-
-The fetch surface is intentionally bounded. It dispatches only to the configured origin. The structured paths `/v1/responses`, `/v1/chat/completions`, `/v1/embeddings`, and `/v1/messages` are POST-only. Opaque integrations may use GET, POST, PUT, PATCH, or DELETE only below `/proxy/{feature}/<safe-relative-path>` with an exact feature match and no query; empty segments, traversal, encoded separators, backslashes, and absolute-URL-shaped suffixes fail closed. Fragments and credential-shaped query names fail before identity acquisition. Request bodies are buffered to cross the New Architecture bridge and are limited to 8 MiB. Response bodies remain pull-streamed in chunks with cancellation and backpressure, while native retains the network task and credential-bearing request. Redirects are refused, and JavaScript receives only status, a strict safe-header allowlist, an opaque response handle, and response bytes.
-
-The compatible subset guarantees request method, headers, body, `AbortSignal`, response status/headers, and a pull-driven `ReadableStream`. It does not provide browser cookie or cache modes, service-worker behavior, redirect following, streaming request uploads, response trailers, or native `Response.url`/`redirected` metadata. Frameworks must expose a custom-fetch hook and use one of the allowed data-plane paths; browser-only framework features remain unsupported in React Native. A provider SDK's required placeholder authorization header is discarded, never forwarded. Consult the released framework compatibility registry before claiming support for a specific OpenAI, Vercel AI, or LangChain version.
-
-`errorFromResponse` is re-exported for explicit conversion of a returned problem response. Every resulting `LatchwayError.documentationURL` uses `https://docs.latchway.dev/errors/<hyphenated-code>`, and a server-originated native failure is accepted only when its documentation URL matches its code exactly. An `operation_indeterminate` error includes a required canonical `operationID`; preserve it with the request ID and reconcile the operation before deciding whether to retry.
-
-## Security boundary
-
-The root client's only application credential sent into the TurboModule is the external identity JWT returned by `getIdentityToken`, and it is retained only for the duration of a native operation that requires identity. Root component descriptors and extension-client descriptors contain only definition ID, kind, fully resolved Keychain access group, and requested feature IDs. Root-side and extension-side component diagnostics do not acquire identity. The separate component client cannot acquire the containing app's native root lease. The bridge does not accept App Attest objects, Play Integrity tokens, `client_data_hash`, request hashes, DPoP private keys, access tokens, or refresh tokens as inputs. Native code attaches Authorization and DPoP, sends the request, and owns the response stream. Authorization, DPoP, access tokens, refresh tokens, private keys, attestation evidence, and reusable credentials never return to JavaScript.
-
-Caller-supplied `Authorization`, `DPoP`, cookies, API-key headers, transport-owned headers, and Latchway protocol headers are removed before the request crosses the bridge. This permits SDKs that require a placeholder API-key option without forwarding that placeholder or a real provider credential. Provider-credential query names are rejected, including percent-encoded and case-varied names. Insecure HTTP is limited to explicitly enabled loopback conformance.
-
-See [native installation](docs/native-installation.md), [security details](docs/security.md), and [architecture](docs/architecture.md).
-Release ordering and immutable publication gates are in [releasing](docs/releasing.md).
-
-## Development
+[LatchwayChat](Examples/LatchwayChat/README.md) demonstrates app-owned Firebase
+login, native-first or RN-first configuration, LangChain weather tools and
+temporary streaming chat. It distinguishes registry-release receipts from
+source-development and actual device evidence.
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm check
-pnpm verify:compatibility
+pnpm build
+pnpm typecheck
+pnpm test
+pnpm codegen:check
 pnpm pack:check
-pnpm verify:reproducible
 ```
 
-For a release-candidate checkout, `pnpm verify:compatibility --sources` also
-requires the exact core, JavaScript, iOS, and Android commits recorded in
-`release-compatibility.json`. `pnpm verify:bundle -- /path/to/latchway-contract-<version>.tar.gz`
-verifies the complete immutable contract archive, and `pnpm consumer:check`
-installs the packed JavaScript and React Native archives in a clean temporary
-consumer before compiling it.
+Native tests, package resolution and physical device checks are separate.
+Use the explicit testing bridge only in tests, never production. Preserve
+signed entitlement checks, native protocol fixtures and real-device evidence;
+a simulator or local build does not prove App Attest or Play Integrity.
+Release procedures are in [releasing](docs/releasing.md).
 
-`pnpm codegen:check` parses the handwritten TurboModule spec and regenerates both platform surfaces in a disposable directory. Node tests use the explicit `@latchway/react-native/testing` bridge; production applications must never install a test bridge.
-
-`pnpm example:bundle:check` creates production Metro bundles for both iOS and
-Android in a disposable directory. It is part of `pnpm check` so framework
-packages that typecheck but import Node-only modules fail the normal source
-gate.
-
-The example in [`example`](example/README.md) demonstrates Firebase Authentication, environment-supplied deployment configuration, raw fetch, real framework consumers, quota, diagnostics, and lifecycle cleanup without storing or logging credentials.
-
-## Contract lock
-
-Version 1.3.x consumes released contract `1.1.0`: shared apps use wire `3`,
-legacy constructors retain wire `2`, and the server supports `[1, 2, 3]`.
-Core commit `0a60cbef57d904664430e235e1e165fea14f610b` fixes the bundle SHA-256
-`deb25aaae5160a7342bfae0efa4a9ce0403d8c40ed8da74eb2c99be4d4ede293`.
-Exact dependency releases and source revisions are recorded in
-`release-compatibility.json` and `contract.lock`.
-`pnpm verify:contracts` checks the active lock and vendored canonical fixtures
-byte-for-byte, including the installation-family and component-attestation
-binding v2 fixtures. The current publication workflow builds and publishes;
-these local verification commands are not mandatory CI gates. A successful
-publish does not imply physical-device or cloud verification.
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Local iOS/TestFlight and Android Google testing policies require server 1.1.3+;
+see [development attestation](docs/development-attestation.md). App Attest
+`any` is a gateway acceptance policy, not an SDK or Apple entitlement value.

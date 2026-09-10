@@ -12,14 +12,14 @@ interface RenewableClient {
  */
 export async function freshClientAfterRevocation<T extends RenewableClient>(
   current: T,
-  create: () => T,
+  create: () => T | Promise<T>,
   inspectReplacementFailure?: (replacement: T) => Promise<void>,
 ): Promise<T> {
   await current.ready;
   await current.revokeCurrentInstallation();
   await current.dispose();
 
-  const replacement = create();
+  const replacement = await create();
   try {
     await replacement.ready;
     return replacement;

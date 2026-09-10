@@ -7,17 +7,17 @@
 - Never add provider keys, service-account credentials, App Attest evidence, or Play Integrity tokens to options or request headers.
 - Use `client.fetch` or `client.fetchFor(feature)`. No credential-bearing `Request` or authorization envelope is available to JavaScript.
 - Display only `LatchwayError.code`, `documentationURL`, status, request ID, canonical operation ID, retryability, and the already-sanitized message. Documentation links use `https://docs.latchway.dev/errors/<hyphenated-code>`; native server metadata fails closed unless its URL matches the code exactly. Preserve an `operation_indeterminate` operation ID for reconciliation rather than automatic replay.
-- Call `revokeCurrentInstallation()` for explicit removal of the current installation. Call no-argument `revokeCurrentInstallationFamily()` when sign-out must revoke every component in the wire-v2 family and retire the root native key. The iOS SDK discovers previously prepared components through a bounded, validated, non-secret descriptor registry in the root-private Keychain group; failed local erasures remain registered for retry. `dispose()` alone deliberately preserves secure installation state.
+- Use `app.signOut()` for normal sign-out: current-account retirement is offline-capable, fences native/RN work and current components, cancels pending identity acquisition, and preserves failed cleanup for retry. Use `account.logout()` only to target a captured account generation. Neither calls external auth sign-out or resets quotas. Installation/family revocation is a separate explicit security action. `dispose()` releases only the current surface.
 
 ## Key policy
 
 iOS defaults to Secure Enclave with software fallback disallowed. Android defaults to StrongBox preferred with software-backed keys disallowed. Relaxation is explicit (`apple.softwareKeyFallbackPolicy: "allow"` or `android.keyPolicy: "software_allowed"`) and changes the trust properties reported by the server. Do not silently enable fallback after a native failure.
 
-The iOS root client and App Attest provider receive the same explicit private
-Keychain group and the same bounded list of extension-shared groups. Root
-keys, sessions, and App Attest state never use an implicit shared group. The
-App Intents/component path continues to use only its exact shared component
-group and constructs no root App Attest provider.
+The iOS app configures an explicit root-private Keychain group and current
+approved component groups. Root keys, sessions and App Attest state never use
+an implicit shared group. Storage is account-scoped; no earlier session is
+imported. An extension receives an explicit opaque account descriptor and uses
+only its exact shared component group, without a root App Attest provider.
 
 On iOS, sign the root target with its private app-ID Keychain group first and
 the shared component group second. Keychain calls without an explicit access
@@ -35,16 +35,14 @@ An iOS application extension cannot call `DCAppAttestService.generateKey`.
 Only the containing root application establishes App Attest for itself, and it
 must never attest on an extension's behalf. The separate extension-process
 client therefore constructs no App Attest provider and cannot acquire the root
-lease; it retains independently keyed, component-scoped delegated sessions and
-returns only redacted diagnostics. Direct-attestation entry points and trust
-source decoders remain for API/wire compatibility, but invocation fails closed
-with `attestation_unsupported` on both platforms and must not be treated as a
-reachable trust result.
+lease; it retains independently keyed, account-scoped delegated sessions and
+returns only redacted diagnostics. There is no public direct-extension-
+attestation operation. A server protocol vocabulary entry is not evidence that
+the iOS runtime can produce that trust result.
 
-React Native v1 has no delegated component request API. The example App
-Intents target does not host React Native or call the component bridge and its
-intent fails closed; do not treat its build, installation, or invocation as
-delegated-request evidence.
+The example App Intents target does not host React Native. Its native integration
+and the RN-hosted extension surface have distinct build/evidence scopes. Do not
+treat a component diagnostic, build or installation as delegated-request proof.
 
 ## Dispatch, replay, and redirects
 

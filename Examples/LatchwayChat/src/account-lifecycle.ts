@@ -116,6 +116,26 @@ export class ChatAccountLifecycle {
   /** An auth observer only retires old work. It never activates a new login. */
   identityChanged(): Promise<void> { return this.logout(); }
 
+  /** Explicit application sign-out also cleans up an unobserved or retiring
+   * account. Auth observers must keep using captured-generation logout above. */
+  signOut(): Promise<void> {
+    this.fence();
+    return this.serial(async () => {
+      const app = await this.app();
+      try {
+        await app.signOut();
+        await this.client?.dispose();
+        this.client = undefined;
+        this.generation = undefined;
+        this.account = undefined;
+        this.cleanupError = undefined;
+      } catch (error) {
+        this.cleanupError = error;
+        throw error;
+      }
+    });
+  }
+
   /** Closing one RN surface releases its own lease. It never logs out the host. */
   disposeSurface(): Promise<void> {
     this.fence();

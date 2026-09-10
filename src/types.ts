@@ -2,12 +2,6 @@ import type { LatchwayError } from "@latchway/client";
 
 export type ReactNativePlatform = "react_native_ios" | "react_native_android";
 
-export interface IdentityTokenProvider {
-  getIdentityToken(): Promise<string>;
-}
-
-export type GetIdentityToken = () => Promise<string>;
-
 export type AppleSoftwareKeyFallbackPolicy = "disallow" | "allow";
 
 export type AndroidKeyPolicy =
@@ -18,12 +12,8 @@ export type AndroidKeyPolicy =
 export interface AppleSecurityOptions {
   /** Fully resolved private app-ID Keychain group; required on iOS and first in the signed root app. */
   rootKeychainAccessGroup: string;
-  /** Every explicit extension-shared group, scanned at exact root coordinates but never mutated. */
-  legacySharedKeychainAccessGroups?: readonly string[];
   /** App Attest is enabled by default. Disabling it fails closed unless the server accepts another provider. */
   appAttestEnabled?: boolean;
-  /** A non-secret namespace for caller-managed App Attest accepted-key state. */
-  storageNamespace?: string;
   softwareKeyFallbackPolicy?: AppleSoftwareKeyFallbackPolicy;
 }
 
@@ -36,21 +26,6 @@ export interface AndroidSecurityOptions {
 export type LatchwayFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 /** @deprecated Use `LatchwayFetch`; JavaScript fetch injection is no longer a client option. */
 export type FetchImplementation = LatchwayFetch;
-
-export interface LatchwayOptions {
-  baseURL: string;
-  applicationID: string;
-  environment: string;
-  /** Supplied transiently to native operations; native consumes it only when session work needs identity. */
-  getIdentityToken?: GetIdentityToken;
-  identityTokenProvider?: IdentityTokenProvider;
-  identityProvider?: string;
-  appVersion?: string;
-  apple?: AppleSecurityOptions;
-  android?: AndroidSecurityOptions;
-  /** Limited to loopback HTTP origins for local conformance. */
-  allowInsecureLoopback?: boolean;
-}
 
 export interface LatchwayFetchInit extends RequestInit {
   latchwayFeature?: string;
@@ -75,8 +50,8 @@ export interface QuotaSnapshot {
 export interface ReactNativeDiagnostics {
   sdkVersion: string;
   nativeSDKVersion: string;
-  contractVersion: "1.0.0" | "1.1.0";
-  protocolVersion: 2 | 3;
+  contractVersion: "1.1.0";
+  protocolVersion: 3;
   platform: ReactNativePlatform;
   keyStorage: string;
   attestation: {
@@ -123,42 +98,15 @@ export interface ReactNativeIOSComponent {
   requestedFeatures: readonly string[];
 }
 
-/** iOS component kinds retained for delegated-session protocol compatibility. */
-export type ReactNativeDirectAttestationComponentKind =
-  | "action_extension"
-  | "sso_extension";
-
-/**
- * Public, non-secret descriptor for one independently keyed iOS component.
- *
- * `keychainAccessGroup` must be the fully resolved access group present in the
- * signed entitlements of both the containing application and the component.
- */
-export interface ReactNativeDirectAttestationComponent {
-  definitionID: string;
-  kind: ReactNativeDirectAttestationComponentKind;
-  keychainAccessGroup: string;
-  requestedFeatures: readonly string[];
-}
-
-export interface ReactNativeComponentAppleOptions {
-  /** The containing application's fully resolved private root Keychain group. */
-  rootKeychainAccessGroup: string;
-  /** Shared groups scanned for legacy root state; must include this component's exact group. */
-  legacySharedKeychainAccessGroups: readonly string[];
-  /** A non-secret namespace retained for component state compatibility. */
-  storageNamespace?: string;
-  softwareKeyFallbackPolicy?: AppleSoftwareKeyFallbackPolicy;
-}
-
 /** Configuration for JavaScript executing inside the signed iOS extension bundle. */
 export interface LatchwayComponentOptions {
   baseURL: string;
   applicationID: string;
   environment: string;
-  component: ReactNativeDirectAttestationComponent;
+  component: ReactNativeIOSComponent;
+  /** Opaque non-secret account/generation handoff from the containing native account. */
+  account: string;
   appVersion?: string;
-  apple: ReactNativeComponentAppleOptions;
   /** Limited to loopback HTTP origins for local conformance. */
   allowInsecureLoopback?: boolean;
 }
@@ -193,12 +141,6 @@ export interface ReactNativeComponentDiagnostics {
  */
 export interface LatchwayComponentClient {
   readonly ready: Promise<void>;
-  /**
-   * Retained for API compatibility. iOS application extensions cannot call
-   * the platform App Attest key-generation API, so this fails closed with
-   * `attestation_unsupported`; use independently keyed delegated sessions.
-   */
-  establishDirectAttestation(): Promise<void>;
   diagnostics(): Promise<ReactNativeComponentDiagnostics>;
   dispose(): Promise<void>;
 }
@@ -221,6 +163,8 @@ export interface LatchwayClient {
    * Creates or restores independent native iOS component keys and delegated
    * provisioning grants. Descriptor fields are public; credentials remain native.
    */
+  /** Captures the current account for a separately keyed signed iOS extension. No credential is exported. */
+  componentAccount(): Promise<string>;
   prepareComponents(components: readonly ReactNativeIOSComponent[]): Promise<ReactNativeComponentDiagnostics[]>;
   /** Replaces one component key and its delegated provisioning grant. */
   replaceComponent(component: ReactNativeIOSComponent): Promise<ReactNativeComponentDiagnostics>;
@@ -233,9 +177,9 @@ export interface LatchwayClient {
   /**
    * Revokes the complete Installation Family and retires the root plus every
    * native-registered component, including registrations from earlier app
-   * launches. `retiring` remains available for pre-registry legacy state.
+   * launches.
    */
-  revokeCurrentInstallationFamily(retiring?: readonly ReactNativeIOSComponent[]): Promise<void>;
+  revokeCurrentInstallationFamily(): Promise<void>;
   /** Releases this JavaScript instance. Secure installation state remains until revocation. */
   dispose(): Promise<void>;
 }

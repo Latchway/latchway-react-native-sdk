@@ -1,9 +1,11 @@
+import { sharedFixtureClient, sharedDescriptor } from "./shared-fixture.js";
+import type { LatchwayAppOptions } from "../src/app.js";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LatchwayError } from "@latchway/client";
 import type { LatchwayErrorCode } from "@latchway/client";
-import { createLatchwayClient, createLatchwayComponentClient, errorFromResponse } from "../src/index.js";
+import { createLatchwayComponentClient, errorFromResponse } from "../src/index.js";
 import { fromNativeError } from "../src/errors.js";
 import type { LatchwayClient, LatchwayComponentClient, ReactNativeIOSComponent } from "../src/types.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
@@ -76,7 +78,7 @@ interface InstallationFamilyFixture {
 
 interface NativeRequestRecord {
   encoded: string;
-  identityToken: string;
+  identityToken?: never;
   operationID: string;
   request: {
     url: string;
@@ -156,7 +158,7 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.requests[0]?.request.headers).toContainEqual(["content-type", "application/json"]);
     expect(decodeBase64(native.requests[0]?.request.bodyBase64)).toBe('{"prompt":"hello"}');
     expect(native.requests[0]?.encoded).not.toContain("app-owned-identity-token");
-    expect(native.requests[0]?.identityToken).toBe("app-owned-identity-token");
+    expect(native.requests[0]?.identityToken).toBe(undefined);
   });
 
   it("restores the native pull stream when React Native Response omits body", async () => {
@@ -359,7 +361,7 @@ describe("React Native Latchway native-owned fetch", () => {
       latchwayFeature: "chat",
       headers: { Authorization: "Bearer provider-secret" },
     });
-    expect(getIdentityToken).toHaveBeenCalledTimes(1);
+    expect(getIdentityToken).not.toHaveBeenCalled();
     expect(native.requests[0]?.request.headers).toEqual([]);
 
     await client.fetch("/v1/responses", {
@@ -574,17 +576,17 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.closeCalls).toHaveLength(1);
   });
 
-  it("shares one compatible native client and disposes it after the final JavaScript lease", async () => {
+  it("keeps independent disposable native leases on the same shared account", async () => {
     const native = new FakeNativeModule();
     install(native);
     const first = create();
     const second = create();
     await Promise.all([first.ready, second.ready]);
-    expect(native.configureCalls).toBe(1);
+    expect(native.configureCalls).toBe(2);
     await first.dispose();
-    expect(native.disposeCalls).toBe(0);
-    await second.dispose();
     expect(native.disposeCalls).toBe(1);
+    await second.dispose();
+    expect(native.disposeCalls).toBe(2);
   });
 
   it("fails closed on a native contract mismatch and disposes partial state", async () => {
@@ -593,7 +595,7 @@ describe("React Native Latchway native-owned fetch", () => {
     install(native);
     const client = create();
     await expect(client.ready).rejects.toMatchObject({ code: "protocol_response_invalid" });
-    expect(native.disposeCalls).toBe(1);
+    expect(native.disposeCalls).toBe(0);
   });
 
   it("fails closed if native compatibility metadata contains credential fields", async () => {
@@ -605,7 +607,7 @@ describe("React Native Latchway native-owned fetch", () => {
       code: "protocol_response_invalid",
       message: "Latchway native output crossed the credential boundary.",
     });
-    expect(native.disposeCalls).toBe(1);
+    expect(native.disposeCalls).toBe(0);
   });
 
   it("maps quota and redacted diagnostics without credential material", async () => {
@@ -620,24 +622,23 @@ describe("React Native Latchway native-owned fetch", () => {
     const diagnostics = await client.diagnostics();
     expect(diagnostics).toMatchObject({
       platform: "react_native_ios",
-      contractVersion: "1.0.0",
-      protocolVersion: 2,
+      contractVersion: "1.1.0",
+      protocolVersion: 3,
       keyStorage: "secure_enclave",
       session: { state: "active" },
     });
     expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private/iu);
   });
 
-  it("performs direct component attestation entirely inside iOS native code", async () => {
+  it("opens an account-bound delegated component without root credentials", async () => {
     const native = new FakeNativeModule();
     install(native);
     const client = createComponent();
 
-    await client.establishDirectAttestation();
+    await client.ready;
     const diagnostics = await client.diagnostics();
 
     expect(native.componentConfigureInputs).toHaveLength(1);
-    expect(native.directAttestationCalls).toBe(1);
     const configured = native.componentConfigureInputs[0];
     expect(JSON.parse(configured?.componentJSON ?? "null")).toEqual(DIRECT_COMPONENT);
     expect(configured?.configurationJSON).not.toMatch(/identity|token|evidence|proof|client.?data|request.?hash/iu);
@@ -657,11 +658,38 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(JSON.stringify(diagnostics)).not.toMatch(/token|proof|evidence|private|client.?data|request.?hash/iu);
   });
 
+  it("exports only a captured component handoff and permits a later generation to open independently", async () => {
+    const native = new FakeNativeModule();
+    install(native);
+    const root = create();
+    const account = await root.componentAccount();
+    expect(account).toBe(componentOptions().account);
+    const first = createComponent();
+    await first.ready;
+    const second = createLatchwayComponentClient({...componentOptions(), account: btoa(JSON.stringify({
+      generationID: "41fa3a6c-c52e-4a51-a42e-77dc1949aada", appScope: "a".repeat(64), accountScope: "b".repeat(64),
+    }))});
+    componentClients.push(second);
+    await second.ready;
+    expect(native.componentConfigureInputs).toHaveLength(2);
+    expect(native.componentConfigureInputs[0]?.configurationJSON).not.toContain("rootKeychainAccessGroup");
+    await first.dispose();
+    expect((await second.diagnostics()).grantAvailable).toBe(true);
+  });
+
+  it("requires an account-bound component configuration with no legacy root options", () => {
+    for (const account of ["", "not base64", "a".repeat(4097)]) {
+      expect(() => createLatchwayComponentClient({...componentOptions(), account}))
+        .toThrow(expect.objectContaining({code: "client_configuration_invalid"}));
+    }
+    expect(() => createLatchwayComponentClient({...componentOptions(), apple: {rootKeychainAccessGroup: "TEAM.root"}} as never))
+      .toThrow(expect.objectContaining({code: "client_configuration_invalid"}));
+  });
+
   it("rejects malformed or evidence-bearing component descriptors before native dispatch", async () => {
     const native = new FakeNativeModule();
     install(native);
     const invalid = [
-      { ...DIRECT_COMPONENT, kind: "widget" },
       { ...DIRECT_COMPONENT, kind: "watch_extension" },
       { ...DIRECT_COMPONENT, keychainAccessGroup: "$(AppIdentifierPrefix).unsafe" },
       { ...DIRECT_COMPONENT, requestedFeatures: ["habit_assistant", "habit_assistant"] },
@@ -674,28 +702,6 @@ describe("React Native Latchway native-owned fetch", () => {
       );
     }
     expect(native.componentConfigureInputs).toHaveLength(0);
-  });
-
-  it("requires one consistent root-private and component-shared Keychain boundary", () => {
-    const options = componentOptions();
-    expect(() => createLatchwayComponentClient({
-      ...options,
-      apple: {
-        rootKeychainAccessGroup: options.apple.rootKeychainAccessGroup,
-        legacySharedKeychainAccessGroups: [],
-      },
-    })).toThrow(/component Keychain group/iu);
-    expect(() => createLatchwayComponentClient({
-      ...options,
-      apple: {
-        rootKeychainAccessGroup: DIRECT_COMPONENT.keychainAccessGroup,
-        legacySharedKeychainAccessGroups: [DIRECT_COMPONENT.keychainAccessGroup],
-      },
-    })).toThrow(/other than the root group/iu);
-    expect(() => createLatchwayComponentClient({
-      ...options,
-      apple: undefined,
-    } as never)).toThrow(/root Keychain configuration is required/iu);
   });
 
   it("fails closed if component diagnostics contain credential material", async () => {
@@ -804,16 +810,6 @@ describe("React Native Latchway native-owned fetch", () => {
     }
   });
 
-  it("maps explicit root Keychain migration failures to bounded storage unavailability", () => {
-    expect(fromNativeError({
-      code: "secure_state_unavailable",
-      message: "Legacy root Keychain state requires explicit migration.",
-    })).toMatchObject({
-      code: "storage_unavailable",
-      message: "Legacy root Keychain state requires explicit migration.",
-    });
-  });
-
   it("fails closed if a native rejection envelope contains credential fields", async () => {
     const native = new FakeNativeModule();
     native.error = Object.assign(new Error("synthetic failure"), {
@@ -834,22 +830,7 @@ describe("React Native Latchway native-owned fetch", () => {
     const client = create();
     await client.refresh();
     expect(native.refreshCalls).toBe(1);
-    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
-  });
-
-  it("FW-AUTH-104 reacquires external identity for each native refresh operation", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const getIdentityToken = vi.fn()
-      .mockResolvedValueOnce("external-identity-one")
-      .mockResolvedValueOnce("external-identity-two");
-    const client = create({ getIdentityToken });
-
-    await client.refresh();
-    await client.refresh();
-
-    expect(getIdentityToken).toHaveBeenCalledTimes(2);
-    expect(native.identityTokens).toEqual(["external-identity-one", "external-identity-two"]);
+    expect(native.lastIdentityToken).toBe(undefined);
   });
 
   it("prepares native iOS components with only a public descriptor crossing JavaScript", async () => {
@@ -862,7 +843,7 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.prepareComponentInputs).toHaveLength(1);
     expect(JSON.parse(native.prepareComponentInputs[0]?.componentsJSON ?? "null"))
       .toEqual([APP_INTENT_COMPONENT]);
-    expect(native.prepareComponentInputs[0]?.identityToken).toBe("app-owned-identity-token");
+    expect(native.prepareComponentInputs[0]?.identityToken).toBe(undefined);
     expect(diagnostics).toEqual([{
       familyID: "fam_0000000000000001",
       componentID: "cmp_0000000000000001",
@@ -918,8 +899,7 @@ describe("React Native Latchway native-owned fetch", () => {
 
     expect(native.replaceComponentInputs).toEqual([{
       componentJSON: JSON.stringify(APP_INTENT_COMPONENT),
-      identityToken: "app-owned-identity-token",
-    }]);
+          }]);
     expect(diagnostics).toMatchObject({
       definitionID: APP_INTENT_COMPONENT.definitionID,
       keyStorage: "secure_enclave",
@@ -930,7 +910,7 @@ describe("React Native Latchway native-owned fetch", () => {
   it("reads root-side component diagnostics without requesting identity", async () => {
     const native = new FakeNativeModule();
     install(native);
-    const identity = vi.fn(async () => "app-owned-identity-token");
+    const identity = vi.fn(async () => "unused-identity");
     const client = create({ getIdentityToken: identity });
     await client.ready;
     identity.mockClear();
@@ -954,11 +934,13 @@ describe("React Native Latchway native-owned fetch", () => {
         ...APP_INTENT_COMPONENT,
         requestedFeatures: [...APP_INTENT_COMPONENT.requestedFeatures],
       };
+      const client = create();
+      await client.ready;
       const result = operation === "prepare"
-        ? create().prepareComponents([component])
+        ? client.prepareComponents([component])
         : operation === "replace"
-          ? create().replaceComponent(component)
-          : create().componentDiagnostics(component);
+          ? client.replaceComponent(component)
+          : client.componentDiagnostics(component);
       component.definitionID = "mutated_definition";
       (component.requestedFeatures as string[])[0] = "mutated_feature";
       release();
@@ -974,7 +956,7 @@ describe("React Native Latchway native-owned fetch", () => {
   it("rejects component descriptor batches larger than the native bridge limit", async () => {
     const native = new FakeNativeModule();
     install(native);
-    const identity = vi.fn(async () => "app-owned-identity-token");
+    const identity = vi.fn(async () => "unused-identity");
     const client = create({ getIdentityToken: identity });
     const features = Array.from({ length: 128 }, (_, index) => `feature_${index}`);
     const components: ReactNativeIOSComponent[] = Array.from({ length: 256 }, (_, index) => ({
@@ -999,8 +981,7 @@ describe("React Native Latchway native-owned fetch", () => {
 
     expect(native.revokeComponentInputs).toEqual([{
       componentJSON: JSON.stringify(APP_INTENT_COMPONENT),
-      identityToken: "app-owned-identity-token",
-    }]);
+          }]);
   });
 
   it("FW-AUTH-105 uses native durable component discovery for family revocation", async () => {
@@ -1010,22 +991,7 @@ describe("React Native Latchway native-owned fetch", () => {
     await client.prepareComponents([APP_INTENT_COMPONENT]);
     await client.revokeCurrentInstallationFamily();
     expect(native.revokeFamilyCalls).toBe(1);
-    expect(native.revokeFamilyComponentInputs).toHaveLength(0);
-    expect(native.lastIdentityToken).toBe("app-owned-identity-token");
-  });
-
-  it("retires supplied component state during complete family revocation", async () => {
-    const native = new FakeNativeModule();
-    install(native);
-    const client = create();
-
-    await client.revokeCurrentInstallationFamily([APP_INTENT_COMPONENT]);
-
-    expect(native.revokeFamilyCalls).toBe(0);
-    expect(native.revokeFamilyComponentInputs).toEqual([{
-      componentsJSON: JSON.stringify([APP_INTENT_COMPONENT]),
-      identityToken: "app-owned-identity-token",
-    }]);
+    expect(native.lastIdentityToken).toBe(undefined);
   });
 
   it("exports canonical HTTP problem conversion", async () => {
@@ -1055,35 +1021,7 @@ describe("React Native Latchway native-owned fetch", () => {
     });
   });
 
-  it("rejects insecure and ambiguous configuration synchronously", () => {
-    expect(() => createLatchwayClient(baseOptions({ baseURL: "http://gateway.example.test" })))
-      .toThrow(LatchwayError);
-    expect(() => createLatchwayClient(baseOptions({
-      getIdentityToken: async () => "one",
-      identityTokenProvider: { getIdentityToken: async () => "two" },
-    }))).toThrow(/either getIdentityToken or identityTokenProvider/iu);
-    expect(() => createLatchwayClient(baseOptions({
-      android: { playIntegrityCloudProjectNumber: "not-a-project-number" },
-    }))).toThrow(/Google Cloud project number/iu);
-    for (const apple of [
-      { rootKeychainAccessGroup: "$(AppIdentifierPrefix).unsafe" },
-      {
-        rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-        legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app"],
-      },
-      {
-        rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-        legacySharedKeychainAccessGroups: [
-          "ABCDE12345.com.example.app.shared",
-          "ABCDE12345.com.example.app.shared",
-        ],
-      },
-    ]) {
-      expect(() => createLatchwayClient(baseOptions({ apple }))).toThrow(/Keychain|access group/iu);
-    }
-  });
-
-  it("serializes the exact root and legacy Keychain groups to native", async () => {
+  it("serializes the exact root and current component Keychain groups to native", async () => {
     const native = new FakeNativeModule();
     install(native);
     const client = create();
@@ -1093,7 +1031,7 @@ describe("React Native Latchway native-owned fetch", () => {
     }).apple;
     expect(apple).toMatchObject({
       rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-      legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
+      sharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
     });
   });
 
@@ -1190,8 +1128,8 @@ function install(native: FakeNativeModule): void {
   restoreNative = installNativeModuleForTesting(native);
 }
 
-function create(overrides: Partial<Parameters<typeof createLatchwayClient>[0]> = {}): LatchwayClient {
-  const client = createLatchwayClient(baseOptions(overrides));
+function create(overrides: Partial<LatchwayAppOptions & {getIdentityToken?: () => Promise<string>}> = {}): LatchwayClient {
+  const client = sharedFixtureClient(baseOptions(overrides));
   clients.push(client);
   return client;
 }
@@ -1210,26 +1148,22 @@ function componentOptions(
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
     component,
-    apple: {
-      rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-      legacySharedKeychainAccessGroups: [component.keychainAccessGroup],
-    },
+    account: btoa(JSON.stringify({ generationID: sharedDescriptor.generationID, appScope: "a".repeat(64), accountScope: "b".repeat(64) })),
   };
 }
 
 function baseOptions(
-  overrides: Partial<Parameters<typeof createLatchwayClient>[0]> = {},
-): Parameters<typeof createLatchwayClient>[0] {
+  overrides: Partial<LatchwayAppOptions & {getIdentityToken?: () => Promise<string>}> = {},
+): LatchwayAppOptions & {getIdentityToken?: () => Promise<string>} {
   return {
     baseURL: "https://gateway.example.test",
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
-    getIdentityToken: async () => "app-owned-identity-token",
     apple: {
       rootKeychainAccessGroup: "ABCDE12345.com.example.app",
-      legacySharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
+      sharedKeychainAccessGroups: ["ABCDE12345.com.example.app.shared"],
     },
-    ...overrides,
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "getIdentityToken")),
   };
 }
 
@@ -1239,14 +1173,18 @@ function decodeBase64(value: string | null | undefined): string | undefined {
 }
 
 class FakeNativeModule {
-  async appCommand(): Promise<string> { throw new Error("Shared apps are outside this legacy fixture"); }
+  async appCommand(encoded: string): Promise<string> {
+    const input = JSON.parse(encoded) as Record<string, unknown>;
+    if (input.operation === "configure") { this.configureInputs.push(encoded); this.configureCalls++; }
+    if (input.operation === "componentAccount") return JSON.stringify({account: componentOptions().account});
+    return JSON.stringify({...sharedDescriptor, ...this.compatibility});
+  }
   configureCalls = 0;
   disposeCalls = 0;
   refreshCalls = 0;
   revokeFamilyCalls = 0;
   readCalls = 0;
   lastIdentityToken: string | undefined;
-  readonly identityTokens: string[] = [];
   error: Error | undefined;
   startGate: Promise<string> | undefined;
   readGate: Promise<void> | undefined;
@@ -1256,14 +1194,12 @@ class FakeNativeModule {
   preparedComponentDiagnosticsExtra: Record<string, unknown> = {};
   componentOperationGate: Promise<void> | undefined;
   readonly requests: NativeRequestRecord[] = [];
-  directAttestationCalls = 0;
   componentConfigureError: Error | undefined;
   readonly componentConfigureInputs: Array<{ configurationJSON: string; componentJSON: string }> = [];
-  readonly prepareComponentInputs: Array<{ componentsJSON: string; identityToken: string }> = [];
-  readonly replaceComponentInputs: Array<{ componentJSON: string; identityToken: string }> = [];
+  readonly prepareComponentInputs: Array<{ componentsJSON: string; identityToken?: never }> = [];
+  readonly replaceComponentInputs: Array<{ componentJSON: string; identityToken?: never }> = [];
   readonly rootComponentDiagnosticsInputs: string[] = [];
-  readonly revokeComponentInputs: Array<{ componentJSON: string; identityToken: string }> = [];
-  readonly revokeFamilyComponentInputs: Array<{ componentsJSON: string; identityToken: string }> = [];
+  readonly revokeComponentInputs: Array<{ componentJSON: string; identityToken?: never }> = [];
   readonly configureInputs: string[] = [];
   readonly configuredComponents = new Map<string, typeof DIRECT_COMPONENT>();
   readonly cancelCalls: string[] = [];
@@ -1279,19 +1215,6 @@ class FakeNativeModule {
   }> = {};
   private nextResponse = 1;
 
-  async configure(_clientID: string, configurationJSON: string): Promise<string> {
-    this.configureCalls += 1;
-    this.configureInputs.push(configurationJSON);
-    const config = JSON.parse(configurationJSON) as { contractVersion: string; protocolVersion: number };
-    return JSON.stringify({
-      platform: "react_native_ios",
-      nativeSDKVersion: "1.0.0",
-      contractVersion: config.contractVersion,
-      protocolVersion: config.protocolVersion,
-      ...this.compatibility,
-    });
-  }
-
   async configureComponent(
     clientID: string,
     configurationJSON: string,
@@ -1305,6 +1228,7 @@ class FakeNativeModule {
     return JSON.stringify({
       platform: "react_native_ios",
       nativeSDKVersion: "1.0.0",
+      nativeAppABI: 3,
       contractVersion: config.contractVersion,
       protocolVersion: config.protocolVersion,
     });
@@ -1313,12 +1237,10 @@ class FakeNativeModule {
   async startRequest(
     _clientID: string,
     operationID: string,
-    identityToken: string,
     encoded: string,
   ): Promise<string> {
-    this.lastIdentityToken = identityToken;
     const request = JSON.parse(encoded) as NativeRequestRecord["request"];
-    this.requests.push({ encoded, identityToken, operationID, request });
+    this.requests.push({ encoded, operationID, request });
     if (this.error !== undefined) throw this.error;
     if (this.startGate !== undefined) return this.startGate;
     const fixture = this.responses.shift() ?? {};
@@ -1354,15 +1276,12 @@ class FakeNativeModule {
     this.active.delete(responseID);
   }
 
-  async refresh(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
-    this.lastIdentityToken = identityToken;
-    this.identityTokens.push(identityToken);
+  async refresh(_clientID: string, _operationID: string): Promise<void> {
     this.refreshCalls += 1;
     if (this.error !== undefined) throw this.error;
   }
 
-  async quota(_clientID: string, _operationID: string, identityToken: string, feature: string): Promise<string> {
-    this.lastIdentityToken = identityToken;
+  async quota(_clientID: string, _operationID: string, feature: string): Promise<string> {
     if (this.error !== undefined) throw this.error;
     return JSON.stringify({
       feature,
@@ -1371,27 +1290,17 @@ class FakeNativeModule {
     });
   }
 
-  async diagnostics(_clientID: string, _operationID: string, identityToken: string): Promise<string> {
-    this.lastIdentityToken = identityToken;
+  async diagnostics(_clientID: string, _operationID: string): Promise<string> {
     if (this.error !== undefined) throw this.error;
     return JSON.stringify({
-      contractVersion: "1.0.0",
-      protocolVersion: 2,
+      contractVersion: "1.1.0",
+      protocolVersion: 3,
       keyStorage: "secure_enclave",
       attestation: { support: "supported", provider: "app_attest", trustLevel: "device_verified" },
       session: { state: "active", expiresAt: "2026-08-28T00:00:00Z", refreshAvailable: true },
       installation: { id: "ins_0000000000000001", status: "active" },
       server: { version: "1.0.0", lastRequestID: REQUEST_ID },
     });
-  }
-
-  async establishDirectAttestation(
-    clientID: string,
-    _operationID: string,
-  ): Promise<void> {
-    if (this.error !== undefined) throw this.error;
-    if (!this.configuredComponents.has(clientID)) throw new Error("component client is not configured");
-    this.directAttestationCalls += 1;
   }
 
   async componentDiagnostics(
@@ -1420,11 +1329,10 @@ class FakeNativeModule {
   async prepareComponents(
     _clientID: string,
     _operationID: string,
-    identityToken: string,
     componentsJSON: string,
   ): Promise<string> {
     if (this.error !== undefined) throw this.error;
-    this.prepareComponentInputs.push({ componentsJSON, identityToken });
+    this.prepareComponentInputs.push({ componentsJSON });
     if (this.componentOperationGate !== undefined) await this.componentOperationGate;
     const components = JSON.parse(componentsJSON) as Array<typeof APP_INTENT_COMPONENT>;
     return JSON.stringify({
@@ -1448,21 +1356,19 @@ class FakeNativeModule {
   async revokeComponent(
     _clientID: string,
     _operationID: string,
-    identityToken: string,
     componentJSON: string,
   ): Promise<void> {
     if (this.error !== undefined) throw this.error;
-    this.revokeComponentInputs.push({ componentJSON, identityToken });
+    this.revokeComponentInputs.push({ componentJSON });
   }
 
   async replaceComponent(
     _clientID: string,
     _operationID: string,
-    identityToken: string,
     componentJSON: string,
   ): Promise<string> {
     if (this.error !== undefined) throw this.error;
-    this.replaceComponentInputs.push({ componentJSON, identityToken });
+    this.replaceComponentInputs.push({ componentJSON });
     if (this.componentOperationGate !== undefined) await this.componentOperationGate;
     const component = JSON.parse(componentJSON) as typeof APP_INTENT_COMPONENT;
     return JSON.stringify(componentDiagnosticsFixture(component, this.preparedComponentDiagnosticsExtra));
@@ -1480,25 +1386,13 @@ class FakeNativeModule {
     return JSON.stringify(componentDiagnosticsFixture(component, this.preparedComponentDiagnosticsExtra));
   }
 
-  async revoke(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
-    this.lastIdentityToken = identityToken;
+  async revoke(_clientID: string, _operationID: string): Promise<void> {
     if (this.error !== undefined) throw this.error;
   }
 
-  async revokeFamily(_clientID: string, _operationID: string, identityToken: string): Promise<void> {
-    this.lastIdentityToken = identityToken;
+  async revokeFamily(_clientID: string, _operationID: string): Promise<void> {
     this.revokeFamilyCalls += 1;
     if (this.error !== undefined) throw this.error;
-  }
-
-  async revokeFamilyWithComponents(
-    _clientID: string,
-    _operationID: string,
-    identityToken: string,
-    componentsJSON: string,
-  ): Promise<void> {
-    if (this.error !== undefined) throw this.error;
-    this.revokeFamilyComponentInputs.push({ componentsJSON, identityToken });
   }
 
   cancel(_clientID: string, operationID: string): void {

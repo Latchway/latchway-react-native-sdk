@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and releases will follow Semantic
 Versioning once package publication begins.
 
+## [2.0.0] - 2026-09-10
+
+### Attestation development
+
+- Document local iOS/TestFlight and Google Play testing workflows against
+  explicit server 1.1.3 policies, including App Attest `any`, with no new JS evidence or Firebase dependency.
+  Add configuration-boundary tests rejecting caller-asserted Apple environment,
+  Google testing status and trust level. Native SDKs still own attestation and
+  bounded key recovery; production release evidence requirements are unchanged.
+
+### Breaking changes
+
+- Use only the supplied-identity shared app/account API. Remove the old root
+  client constructor, identity-authority transfer/activation API, migration
+  options and per-request identity-token callbacks.
+- Require native bridge ABI 3 and wire protocol 3; rebuild JavaScript and native
+  code together. Historical published artifacts and dependency locks are unchanged.
+- Open delegated iOS components with an opaque current-account handoff, without
+  access to root credentials. Remove legacy component inventories and the
+  unsupported direct-attestation API.
+- Preserve idempotent native/RN configuration, account isolation, local logout,
+  App Attest, streaming and current component retirement fences. No existing
+  device storage is adopted, scanned or migrated.
+
+### Compatibility
+
+- Pin iOS 2.0.0 and Android 1.2.1; keep JavaScript client/contract 1.1.0,
+  React Native >=0.74 <1 and React 18.2 / 19 peers unchanged.
+- Preserve the published native Fetch response fix and app-level `signOut`,
+  including pending identity cancellation and cleanup retry.
+- Physical Apple/TestFlight, Google testing response and production distribution
+  evidence are separate from local package/native bridge checks.
+
 ## [1.3.0] - 2026-09-09
 
 ### Added

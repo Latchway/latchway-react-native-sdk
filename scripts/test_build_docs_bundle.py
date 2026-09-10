@@ -41,12 +41,14 @@ class DocumentationBundleTests(unittest.TestCase):
             # release notes must include historical entries as the file grows.
             self.assertEqual(source.get("end_line", line_count), line_count)
 
-        legacy = documents["quickstart/create-client.tsx"]
-        legacy_lines = (ROOT / legacy["file"]).read_text(encoding="utf-8").splitlines()
-        legacy_region = legacy_lines[legacy["start_line"] - 1:legacy["end_line"]]
-        self.assertTrue(legacy_region[0].startswith("function makeClient()"))
-        self.assertEqual(legacy_region[-1], "}")
-        self.assertIn("createLatchwayClient", "\n".join(legacy_region))
+        current = documents["quickstart/create-client.tsx"]
+        current_lines = (ROOT / current["file"]).read_text(encoding="utf-8").splitlines()
+        current_region = current_lines[current["start_line"] - 1:current["end_line"]]
+        self.assertTrue(current_region[0].startswith("async function makeClient()"))
+        self.assertEqual(current_region[-1], "}")
+        self.assertIn("Latchway.configure", "\n".join(current_region))
+        self.assertIn("app.signIn", "\n".join(current_region))
+        self.assertIn("account.makeClient", "\n".join(current_region))
 
         streaming = documents["quickstart/streaming-fetch.tsx"]
         lines = (ROOT / streaming["file"]).read_text(encoding="utf-8").splitlines()
@@ -130,20 +132,21 @@ class DocumentationBundleTests(unittest.TestCase):
                     ]
                     self.assertIn(row["name"], line)
             symbols = {row["name"] for row in catalogs["public-symbols.json"]}
-            self.assertTrue({
+            expected_symbols = {
                 "gatewayURL", "ready", "fetch", "fetchFor", "quota", "diagnostics",
                 "refresh", "prepareComponents", "replaceComponent", "componentDiagnostics",
                 "revokeComponent", "revokeCurrentInstallation", "revokeCurrentInstallationFamily",
-                "dispose", "establishDirectAttestation", "installNativeModuleForTesting",
+                "dispose", "componentAccount", "installNativeModuleForTesting",
                 "NativeLatchwayModule", "configure", "configureComponent", "startRequest",
                 "readResponseChunk", "closeResponse", "rootComponentDiagnostics", "revoke",
-                "revokeFamily", "revokeFamilyWithComponents", "cancel",
+                "revokeFamily", "cancel",
                 "Latchway", "LatchwayApp", "LatchwayAccount", "LatchwayTokenInput",
                 "LatchwayIdentityConfiguration", "LatchwayAuthEvent", "LatchwayAuthBinding",
                 "signIn", "signOut", "restore", "currentAccount", "makeClient", "updateIdToken", "logout",
                 "firebaseProject", "jwtIdentity", "bindLatchwayAuth",
                 "LatchwayLifecycleError", "LatchwayLifecycleCode",
-            } <= symbols)
+            }
+            self.assertEqual(expected_symbols - symbols, set())
             self.assertTrue({
                 "DefaultLatchwayClient", "DefaultLatchwayComponentClient", "RuntimeConfiguration",
                 "RuntimeComponentConfiguration", "NativeLease", "Spec", "acquire",

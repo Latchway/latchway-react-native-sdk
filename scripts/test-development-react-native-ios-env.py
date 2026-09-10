@@ -37,7 +37,7 @@ def valid_values() -> dict[str, str]:
         "LATCHWAY_CONFORMANCE_AUTORUN": "false",
         "LATCHWAY_DEVELOPMENT_DEVICE_BOOTSTRAP": "true",
         "LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP": ROOT_GROUP,
-        "LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS": SHARED_GROUP,
+        "LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS": SHARED_GROUP,
     }
 
 
@@ -105,8 +105,8 @@ class DevelopmentReactNativeIOSEnvironmentTests(unittest.TestCase):
             VALIDATOR.validate_environment(candidate, BUNDLE, PREFIX, SHARED_GROUP)
 
         candidate = valid_values()
-        candidate["LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS"] = ROOT_GROUP
-        with self.assertRaisesRegex(VALIDATOR.InvalidEnvironment, "legacy shared"):
+        candidate["LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS"] = ROOT_GROUP
+        with self.assertRaisesRegex(VALIDATOR.InvalidEnvironment, "component"):
             VALIDATOR.validate_environment(candidate, BUNDLE, PREFIX, SHARED_GROUP)
 
         with self.assertRaisesRegex(VALIDATOR.InvalidEnvironment, "App ID Prefix"):

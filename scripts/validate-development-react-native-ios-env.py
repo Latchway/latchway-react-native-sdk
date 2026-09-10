@@ -24,7 +24,7 @@ REQUIRED_NAMES = frozenset({
     "LATCHWAY_ENVIRONMENT",
     "LATCHWAY_ERROR_MAPPING_FEATURE",
     "LATCHWAY_FEATURE",
-    "LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS",
+    "LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS",
     "LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP",
     "LATCHWAY_MODEL",
     "LATCHWAY_PACKAGE_OR_BUNDLE_IDENTIFIER",
@@ -111,8 +111,8 @@ def validate_environment(
         raise InvalidEnvironment("development environment must opt into the Debug device bootstrap")
     if values["LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP"] != expected_root_group:
         raise InvalidEnvironment("development root Keychain access group mismatch")
-    if values["LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS"] != expected_shared_group:
-        raise InvalidEnvironment("development legacy shared Keychain access groups mismatch")
+    if values["LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS"] != expected_shared_group:
+        raise InvalidEnvironment("development component Keychain access groups mismatch")
     if IDENTIFIER.fullmatch(values["LATCHWAY_APPINTENT_COMPONENT_DEFINITION_ID"]) is None:
         raise InvalidEnvironment("development App Intent component definition ID is invalid")
 

@@ -1,3 +1,4 @@
+import { sharedDescriptor } from "../../test/shared-fixture.js";
 import type { NativeLatchwayModule } from "../../src/testing.js";
 
 export interface CapturedNativeRequest {
@@ -45,7 +46,11 @@ const REQUEST_ID = "req_framework_case_123";
  * real bridge accepts and pull-streams fixture response bytes back to JS.
  */
 export class NativeFrameworkGateway implements NativeLatchwayModule {
-  async appCommand(): Promise<string> { throw new Error("Shared apps are outside this legacy fixture"); }
+  async appCommand(encoded: string): Promise<string> {
+    const command = JSON.parse(encoded) as Record<string, unknown>;
+    if (command.operation === "client") this.configureInputs.push(command);
+    return JSON.stringify(sharedDescriptor);
+  }
   readonly requests: CapturedNativeRequest[] = [];
   readonly cancelCalls: string[] = [];
   readonly closeCalls: string[] = [];
@@ -56,8 +61,8 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   disposeCalls = 0;
   private nextResponse = 1;
   private readonly active = new Map<string, ActiveResponse>();
-  private frameworkID = "";
-  private frameworkVersion = "";
+  private frameworkID = "react-native-fetch";
+  private frameworkVersion = "0.82.0";
   private sessionExpired = false;
 
   constructor(private responder: NativeFrameworkResponder = defaultFrameworkReply) {}
@@ -70,23 +75,6 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
     this.sessionExpired = true;
   }
 
-  async configure(_clientID: string, configurationJSON: string): Promise<string> {
-    const configuration = JSON.parse(configurationJSON) as Readonly<Record<string, unknown>>;
-    if (typeof configuration.frameworkID !== "string" ||
-        typeof configuration.frameworkVersion !== "string") {
-      throw new Error("Native framework metadata is missing from the React Native configuration.");
-    }
-    this.frameworkID = configuration.frameworkID;
-    this.frameworkVersion = configuration.frameworkVersion;
-    this.configureInputs.push(configuration);
-    return JSON.stringify({
-      platform: "react_native_ios",
-      nativeSDKVersion: "1.0.0",
-      contractVersion: configuration.contractVersion,
-      protocolVersion: configuration.protocolVersion,
-    });
-  }
-
   async configureComponent(): Promise<string> {
     throw new Error("The framework fixture does not configure component clients.");
   }
@@ -94,7 +82,6 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   async startRequest(
     _clientID: string,
     operationID: string,
-    _identityToken: string,
     requestJSON: string,
   ): Promise<string> {
     if (this.sessionExpired) {
@@ -156,7 +143,7 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
     this.active.delete(responseID);
   }
 
-  async refresh(_clientID: string, _operationID: string, _identityToken: string): Promise<void> {
+  async refresh(_clientID: string, _operationID: string): Promise<void> {
     this.nativeSessionEvents.push("explicit-refresh");
     this.refreshCalls += 1;
     this.sessionExpired = false;
@@ -165,7 +152,6 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   async quota(
     _clientID: string,
     _operationID: string,
-    _identityToken: string,
     feature: string,
   ): Promise<string> {
     return JSON.stringify({
@@ -177,18 +163,14 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
 
   async diagnostics(): Promise<string> {
     return JSON.stringify({
-      contractVersion: "1.0.0",
-      protocolVersion: 2,
+      contractVersion: "1.1.0",
+      protocolVersion: 3,
       keyStorage: "secure_enclave",
       attestation: { support: "supported", provider: "app_attest", trustLevel: "app_verified" },
       session: { state: "active", refreshAvailable: true },
       installation: { id: "ins_0000000000000001", status: "active" },
       server: { version: "1.0.0", lastRequestID: REQUEST_ID },
     });
-  }
-
-  async establishDirectAttestation(): Promise<void> {
-    throw new Error("The framework fixture does not attest components.");
   }
 
   async componentDiagnostics(): Promise<string> {
@@ -214,10 +196,6 @@ export class NativeFrameworkGateway implements NativeLatchwayModule {
   async revoke(): Promise<void> {}
 
   async revokeFamily(): Promise<void> {}
-
-  async revokeFamilyWithComponents(): Promise<void> {
-    throw new Error("The framework fixture does not retire native iOS component descriptors.");
-  }
 
   cancel(_clientID: string, operationID: string): void {
     this.cancelCalls.push(operationID);

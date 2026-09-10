@@ -1,10 +1,10 @@
 import { LatchwayError } from "@latchway/client";
-import type { RuntimeComponentConfiguration, RuntimeConfiguration } from "./config.js";
+import type { RuntimeComponentConfiguration } from "./config.js";
 import { fromNativeError, nativeUnavailable } from "./errors.js";
 import { assertNoCredentialFields } from "./native-output.js";
 import { nativeModule, type NativeLatchwayModule } from "./native/bridge.js";
 import type { ReactNativePlatform } from "./types.js";
-import { CONTRACT_VERSION, PROTOCOL_VERSION, SDK_VERSION } from "./version.js";
+import { SDK_VERSION } from "./version.js";
 
 interface Compatibility {
   platform: ReactNativePlatform;
@@ -28,59 +28,10 @@ export interface NativeLease {
   release(): Promise<void>;
 }
 
-const entries = new Map<string, Entry>();
 const componentEntries = new Map<string, Entry>();
 const moduleIDs = new WeakMap<object, number>();
 let nextModuleID = 1;
 let nextClientID = 1;
-
-export async function acquire(config: RuntimeConfiguration): Promise<NativeLease> {
-  let module: NativeLatchwayModule;
-  try {
-    module = await nativeModule();
-  } catch (cause) {
-    throw nativeUnavailable(cause);
-  }
-  const moduleID = identityFor(module);
-  const key = `${moduleID}|${config.scope}`;
-  const existing = entries.get(key);
-  if (existing !== undefined) {
-    if (existing.fingerprint !== config.fingerprint) {
-      throw new LatchwayError(
-        "client_configuration_invalid",
-        "Conflicting Latchway native configuration is active for this application scope.",
-      );
-    }
-    existing.references += 1;
-    return lease(entries, key, existing);
-  }
-
-  const clientID = `latchway-rn-${nextClientID++}`;
-  const entry: Entry = {
-    clientID,
-    fingerprint: config.fingerprint,
-    module,
-    references: 1,
-    ready: Promise.resolve({
-      platform: "react_native_ios",
-      nativeSDKVersion: "",
-      contractVersion: "",
-      protocolVersion: 0,
-    }),
-  };
-  entry.ready = module.configure(clientID, config.nativeJSON)
-    .then(parseCompatibility)
-    .catch(async (cause: unknown) => {
-      if (entries.get(key) === entry) entries.delete(key);
-      // configure may have created native state before compatibility parsing
-      // failed. Disposal is idempotent on both bridges and its failure must not
-      // hide the original configuration error.
-      try { await module.dispose(clientID); } catch { /* preserve the original failure */ }
-      throw fromNativeError(cause);
-    });
-  entries.set(key, entry);
-  return lease(entries, key, entry);
-}
 
 export async function acquireComponent(config: RuntimeComponentConfiguration): Promise<NativeLease> {
   let module: NativeLatchwayModule;
@@ -156,11 +107,11 @@ function emptyCompatibility(): Promise<Compatibility> {
 function parseCompatibility(encoded: string): Compatibility {
   const value = parseRecord(encoded, "native compatibility");
   assertNoCredentialFields(value);
-  if (!hasOnlyKeys(value, ["platform", "nativeSDKVersion", "contractVersion", "protocolVersion"]) ||
+  if (!hasOnlyKeys(value, ["platform", "nativeSDKVersion", "contractVersion", "protocolVersion", "nativeAppABI"]) ||
       (value.platform !== "react_native_ios" && value.platform !== "react_native_android") ||
       typeof value.nativeSDKVersion !== "string" || value.nativeSDKVersion.length === 0 ||
       value.nativeSDKVersion.length > 128 || /\p{Cc}/u.test(value.nativeSDKVersion) ||
-      value.contractVersion !== CONTRACT_VERSION || value.protocolVersion !== PROTOCOL_VERSION) {
+      value.nativeAppABI !== 3 || value.contractVersion !== "1.1.0" || value.protocolVersion !== 3) {
     throw new LatchwayError(
       "protocol_response_invalid",
       `The native Latchway SDK is incompatible with JavaScript SDK ${SDK_VERSION}.`,

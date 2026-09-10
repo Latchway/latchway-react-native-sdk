@@ -1,11 +1,14 @@
 # LangChain on React Native
 
-Use `@latchway/react-native@1.2.1` for native authenticated transport and
+Use the current RN SDK's supplied-identity account client for transport and
 `@latchway/langchain@1.1.0` for the optional LangChain adapter. No provider key
 belongs in the application. Secure Enclave/Keystore, App Attest/Play Integrity,
 DPoP and refresh credentials stay native.
 
 ## Install
+
+This guide targets the 2.0.0 supplied-identity API. Upgrade JavaScript and native
+apps together; older constructors and authority callbacks are no longer exposed.
 
 The complete LangChain example is tested on React Native 0.82 / React 19.1,
 New Architecture. Starting in 1.1.3, the base SDK's expanded minimum is RN 0.74 /
@@ -14,7 +17,7 @@ require downgrading the example or guarantee every third-party dependency on
 the minimum host.
 
 ```sh
-npm install --save-exact @latchway/react-native@1.2.1 @latchway/langchain@1.1.0 \
+npm install --save-exact @latchway/react-native@2.0.0 @latchway/langchain@1.1.0 \
   @latchway/client@1.1.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
@@ -22,7 +25,7 @@ Keep the lockfile. LangChain is not a dependency of the base React Native SDK.
 The base has only two required runtime dependencies: `@latchway/client` for
 shared transport/errors and `web-streams-polyfill` for a private native-response
 stream fallback. That fallback does not replace global streams.
-The native dependencies are iOS 1.2.0 and Android 1.1.0. Normal native
+The native dependencies are iOS 2.0.0 and Android 1.2.1. Normal native
 signing, Firebase/other identity and gateway platform policy setup still applies.
 
 ## Application-owned runtime and Babel setup
@@ -89,20 +92,12 @@ This avoids a premature `instanceof` check before LangChain initializes its fiel
 Classes must still be constructed with
 `new`; LangChain's own type checks are not removed.
 
-## Upgrading from 1.1.0
+## Optional integration helpers
 
-For an existing 1.1.1 application, upgrade to 1.2.1 and recopy both runtime files
-linked above. The corrected probe checks exact Responses and Chat Completions
-paths; the older app-owned copy is not replaced by an npm package update.
-Do not fix a trailing-slash rejection by widening the SDK destination allowlist.
-
-1.1.1 removes four convenience packages from required dependencies. This
-changes installation behavior even though the core APIs are unchanged: helper
-users must act before updating. Prefer the application-owned setup above; the
-example shows the full migration and does not import either deprecated helper.
-
-For the smallest migration, retain the 1.1.0 imports and declare their packages
-in your **host application's** manifest first:
+Application-owned runtime setup above is the minimal dependency boundary. The
+optional `/polyfills` and `/babel` entrypoints are separate integration tooling,
+not an identity or storage compatibility mode. If using them, declare their
+packages in the host application's manifest:
 
 ```sh
 # Required only if you import @latchway/react-native/polyfills:
@@ -110,18 +105,18 @@ npm install --save-exact react-native-get-random-values@1.11.0 \
   react-native-url-polyfill@2.0.0 text-encoding@0.7.0
 # Required only if you use @latchway/react-native/babel:
 npm install --save-dev --save-exact @babel/plugin-transform-export-namespace-from@7.29.7
-npm install --save-exact @latchway/react-native@1.2.1
+
 cd ios && pod install && cd ..
 ```
 
-The old `/polyfills` and `/babel` exports remain available but deprecated. Their
+The `/polyfills` and `/babel` exports remain optional. Their
 dependencies are marked as **optional peers** so npm does not automatically
 install them for core-only users. They are not `optionalDependencies` (which
 would still normally install). When present, peer versions must satisfy the
 declared ranges; exact example versions are the tested baseline, not a claim
 that all combinations are verified. See [npm's optional-peer behavior](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#peerdependenciesmeta).
 
-The legacy bootstrap still statically imports all three runtime peers, even if
+The optional polyfill entrypoint statically imports its runtime peers, even if
 the app already has compatible globals. Missing peers cause module-resolution
 errors; the Babel helper reports the plugin install command. Existing lockfiles
 may mask missing direct dependencies: verify a clean install and native rebuild.
@@ -149,17 +144,14 @@ const latchway = await account.makeClient();
 ```
 
 Report refreshed tokens with `account.updateIdToken`, and call
-`account.logout()` on sign-out. Disposing a client only closes that surface.
+`app.signOut()` on sign-out. Disposing a client only closes that surface.
 The metadata helper does not import Firebase or obtain a token for you.
 
-For legacy constructors on gateway 1.0.3+, one directly App Attest-verified `ios` / `react_native_ios`
-main-app root pair can share a bundle, and one directly Play Integrity-verified
-`android` / `react_native_android` app-root pair can share a package. Configure
-each platform explicitly with its own root and required attestation policy.
-This does not enable all platforms automatically, merge installations, or grant
-another quota allowance. Firebase authentication remains separate from native
-attestation. Use a Play-distributed physical Android build for real Integrity
-verification; do not replace it with a debug bypass or Firebase App Check.
+Enable `sharedNativeCallers` on the configured native-host policy. Native and RN
+then share the account/session and per-user quota without relaxing required
+attestation. This does not automatically enable other platforms. Use a
+Play-distributed physical Android build for real Integrity verification; do not
+replace it with a debug bypass or Firebase App Check.
 
 Pass the client directly—no transport wrapper:
 

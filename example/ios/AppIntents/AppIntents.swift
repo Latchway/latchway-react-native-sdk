@@ -21,8 +21,10 @@ struct LatchwayDelegatedRequestIntent: AppIntent {
             accessGroup: proof.component.keychainAccessGroup
         )
         let client = try LatchwayExtensionClient(
-            configuration: proof.latchway,
-            component: proof.component
+            baseURL: proof.latchway.baseURL, applicationID: proof.latchway.applicationID,
+            environment: proof.latchway.environment, component: proof.component,
+            account: try LatchwayDebugIntentProofStore.readAccount(accessGroup: proof.component.keychainAccessGroup),
+            runtime: .reactNativeIOS
         )
 
         // An iOS application extension is delegated-only. It receives neither
@@ -135,7 +137,6 @@ private struct LatchwayDebugIntentConfiguration {
                 applicationID: applicationID,
                 environment: environment,
                 rootKeychainAccessGroup: rootGroup,
-                legacySharedKeychainAccessGroups: [sharedGroup],
                 identityProvider: "firebase",
                 clientRuntime: .reactNativeIOS,
                 softwareKeyFallbackPolicy: .disallow
@@ -165,6 +166,19 @@ private enum LatchwayDebugIntentProofStore {
     static let challengeAccount = "challenge-v1"
     static let receiptAccount = "receipt-v1"
     static let notification = "dev.latchway.debug.app-intent-proof-complete"
+
+    static func readAccount(accessGroup: String) throws -> LatchwayComponentAccount {
+        var query = keychainCoordinates(accessGroup: accessGroup, account: "account-handoff-v1")
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        query[kSecAttrSynchronizable] = false
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data, data.count <= 4096 else {
+            throw LatchwayDebugIntentError.challengeUnavailable
+        }
+        return try JSONDecoder().decode(LatchwayComponentAccount.self, from: data)
+    }
 
     static func readChallenge(accessGroup: String) throws -> String {
         var query = keychainCoordinates(accessGroup: accessGroup, account: challengeAccount)

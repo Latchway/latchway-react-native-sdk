@@ -3,7 +3,7 @@ import type {LatchwayAccount, LatchwayApp, LatchwayAppSnapshot, LatchwayClient} 
 import {ChatAccountLifecycle} from '../Examples/LatchwayChat/src/account-lifecycle.js';
 
 function fixture() {
-  let state: LatchwayAppSnapshot = {appInstanceID: 'app', authorityInstanceID: 'owner', revision: 0, state: 'inactive'};
+  let state: LatchwayAppSnapshot = {appInstanceID: 'app', revision: 0, state: 'inactive'};
   let generation = 0;
   const clients: Array<{dispose: ReturnType<typeof vi.fn>}> = [];
   function account(id: string): LatchwayAccount {
@@ -22,6 +22,9 @@ function fixture() {
     logout: vi.fn(async (id: string) => {
       if (state.generationID === id) state = {...state, state: 'loggedOut', revision: state.revision + 1};
     }),
+    signOut: vi.fn(async () => {
+      state = {appInstanceID: state.appInstanceID, state: 'loggedOut', revision: state.revision + 1};
+    }),
     makeClient: vi.fn(async () => {
       const client = {dispose: vi.fn(async () => undefined)};
       clients.push(client);
@@ -33,6 +36,36 @@ function fixture() {
 }
 
 describe('runnable chat account integration', () => {
+  it('explicit sign-out cleans up without a captured account and can be repeated', async () => {
+    const f = fixture();
+    await f.app.signIn(); // Native signed in before this RN surface existed.
+    f.app.snapshot.mockClear();
+    await f.lifecycle.signOut();
+    await f.lifecycle.signOut();
+    expect(f.app.signOut).toHaveBeenCalledTimes(2);
+    expect(f.app.snapshot).not.toHaveBeenCalled();
+    expect(f.app.logout).not.toHaveBeenCalled();
+    await expect(f.lifecycle.connection()).rejects.toThrow('Resume chat');
+    await f.lifecycle.activate();
+    expect((await f.app.snapshot()).state).toBe('active');
+  });
+
+  it('explicit sign-out fences UI and retries actual cleanup failure', async () => {
+    const f = fixture();
+    await f.lifecycle.activate();
+    await f.lifecycle.connection();
+    const epoch = f.lifecycle.capture();
+    f.app.signOut.mockRejectedValueOnce(new Error('storage unavailable'));
+    const retiring = f.lifecycle.signOut();
+    expect(f.lifecycle.isCurrent(epoch)).toBe(false);
+    await expect(retiring).rejects.toThrow('storage unavailable');
+    await expect(f.lifecycle.activate()).rejects.toThrow('storage unavailable');
+    await f.lifecycle.signOut();
+    expect(f.clients[0]?.dispose).toHaveBeenCalledOnce();
+    await f.lifecycle.activate();
+    expect((await f.app.snapshot()).generationID).toBe('2');
+  });
+
   it('never activates from connection or surface remount, and disposal is not logout', async () => {
     const f = fixture();
     await expect(f.lifecycle.connection()).rejects.toThrow('Resume chat');

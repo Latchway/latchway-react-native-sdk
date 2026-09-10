@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureLatchwayApp } from "../src/app.js";
+import * as publicAPI from "../src/index.js";
 import { bindLatchwayAuth, firebaseProject, jwtIdentity, type LatchwayAuthEvent } from "../src/identity.js";
 import { installNativeModuleForTesting, type NativeLatchwayModule } from "../src/testing.js";
 
 const APP = "0e5244a0-4c04-4bcf-a4da-6102a25ad8c1";
-const OWNER = "65267a94-2a5f-4f76-84ca-e697a21b44e5";
 const A = "58da9766-77db-42a0-a4dd-b0f71abae5db";
 const B = "41fa3a6c-c52e-4a51-a42e-77dc1949aada";
 const TICKET = "bedc5cb2-275d-46f8-9962-fa6d7b1c3e4b";
@@ -15,9 +15,9 @@ let restore: (() => void) | undefined;
 afterEach(() => restore?.());
 
 function fixture() {
-  const state = { nativeAppABI: 2, identityMode: "supplied", contractVersion: "1.1.0", protocolVersion: 3,
+  const state = { nativeAppABI: 3, identityMode: "supplied", contractVersion: "1.1.0", protocolVersion: 3,
     nativeSDKVersion: "1.2.0", baseURL: options.baseURL, applicationID: options.applicationID, environment: options.environment,
-    platform: "react_native_ios", appInstanceID: APP, authorityInstanceID: OWNER,
+    platform: "react_native_ios", appInstanceID: APP,
     state: "inactive", revision: 0, generationID: undefined as string | undefined };
   const calls: Array<Record<string, unknown>> = [];
   let cancelled = false;
@@ -54,6 +54,29 @@ function fixture() {
 }
 
 describe("developer-supplied identity (mock bridge)", () => {
+  it("does not export legacy client construction or auth-owner transitions", async () => {
+    fixture();
+    expect(publicAPI).not.toHaveProperty("createLatchwayClient");
+    const app = await configureLatchwayApp(options);
+    expect(app).not.toHaveProperty("activate");
+    expect(app).not.toHaveProperty("transferIdentityAuthority");
+    expect(await app.snapshot()).not.toHaveProperty("authorityInstanceID");
+  });
+
+  it.each([1, 2, 4])("rejects bridge ABI %i before creating or activating a client", async abi => {
+    const f = fixture();
+    f.state.nativeAppABI = abi;
+    await expect(configureLatchwayApp(options)).rejects.toMatchObject({code: "native_version_incompatible"});
+    expect(f.calls.some(call => ["beginIdentity", "client"].includes(String(call.operation)))).toBe(false);
+  });
+
+  it.each(["legacySharedKeychainAccessGroups", "legacyAttestationNamespaces", "legacyComponents", "storageNamespace"])(
+    "rejects removed Apple option %s instead of silently inheriting it", async key => {
+      const f = fixture();
+      await expect(configureLatchwayApp({...options, apple: {[key]: []}}))
+        .rejects.toMatchObject({code: "configuration_conflict"});
+      expect(f.calls).toHaveLength(0);
+    });
   it("formats metadata without installing a provider or fetching a token", async () => {
     const f = fixture();
     await configureLatchwayApp(options);
@@ -66,7 +89,7 @@ describe("developer-supplied identity (mock bridge)", () => {
 
   it("rejects a supplied config mixed with legacy callback ownership", async () => {
     const f = fixture();
-    await expect(configureLatchwayApp({ ...options, getIdentitySnapshot: async () => null })).rejects.toMatchObject({ code: "configuration_conflict" });
+    await expect(configureLatchwayApp({ ...options, getIdentitySnapshot: async () => null } as never)).rejects.toMatchObject({ code: "configuration_conflict" });
     expect(f.calls).toHaveLength(0);
   });
 
@@ -152,8 +175,7 @@ describe("developer-supplied identity (mock bridge)", () => {
   it("requires the new native ABI for supplied operations", async () => {
     const f = fixture();
     f.state.nativeAppABI = 1;
-    const app = await configureLatchwayApp(options);
-    await expect(app.signIn({ idToken: "token-a" })).rejects.toMatchObject({ code: "native_version_incompatible" });
+    await expect(configureLatchwayApp(options)).rejects.toMatchObject({ code: "native_version_incompatible" });
   });
 
   it("observers keep independent cursors even when another command sees a revision", async () => {

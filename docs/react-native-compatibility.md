@@ -1,5 +1,12 @@
 # React Native compatibility
 
+The peer/toolchain baseline below remains applicable, but its versioned links
+and recorded consumer results describe already-published releases. Current
+version 2.0.0's fresh-account cleanup changes the private RN bridge
+to ABI 3 with 17 methods; it must be rebuilt and retested with matching native
+sources. Historical 20-method Codegen/package receipts do not validate this new
+bridge, and published ABI-2 installations are rejected rather than adopted.
+
 The expanded range below starts in `@latchway/react-native@1.1.3`.
 Versions through 1.1.2 declare React Native 0.82 / React 19.1.
 
@@ -14,8 +21,9 @@ The package admits React Native `>=0.74.0 <1.0.0` and React
 `^18.2.0 || ^19.0.0`. These are not independently interchangeable: use the React
 version required by your React Native release. The broader RN peer range allows
 newer 0.x releases without requiring a package metadata update. It is not a
-guarantee that every minor release has been tested: current validation covers
-0.74.0 and 0.82.0 as described below. RN 1.0 and later remain excluded.
+guarantee that every minor release has been tested: recorded release validation
+covers 0.74.0 and 0.82.0. Current-source changes need the separate checks below.
+RN 1.0 and later remain excluded.
 RN 0.73 and earlier lack the Android `BaseReactPackage`
 API used by this bridge and are not supported. Legacy Architecture is not
 supported, including on React Native releases where it remains the default.
@@ -26,9 +34,9 @@ React Native 0.82, React 19.1 and Firebase dependency locks.
 
 ## Android host settings
 
-### Version 1.2.0 setup
+### Version 2.0.0 setup
 
-The Android 1.1.0 SDK and RN 1.2.0 bridge compile against API
+The Android 1.2.1 SDK and RN 2.0.0 bridge compile against API
 34, with `minCompileSdk = 34` in their AAR metadata. Android native runtime
 minimum remains 23; the RN bridge runtime minimum remains 24. No Firebase,
 Play Integrity or Kotlin dependency downgrade is part of this change.
@@ -131,23 +139,41 @@ Swift compatibility libraries needed by the native pods. The fixture's Podfile
 adds its [Swift compilation unit](https://github.com/Latchway/latchway-react-native-sdk/blob/v1.2.0/integration/minimum-host/ios/HelloWorld/SwiftRuntime.swift)
 to the target. Hosts that already contain Swift do not need another dummy file.
 
-## Verify the minimum locally
+## Verify current source at the minimum
 
-Build and pack this checkout, then run the isolated host:
+The current checkout and consumer scripts target the 2.0.0 fresh-account
+API and its 17-method ABI-3 bridge. Build a new archive from this checkout;
+do not pass an old 1.x archive as proof of
+the changed API. These checks deliberately reject the older bridge surface.
+These checks do not publish packages or change installed application dependencies.
 
 ```sh
 pnpm build
-pnpm pack --pack-destination /absolute/path/to/archives
-pnpm compatibility:minimum --tarball /absolute/path/to/archives/latchway-react-native-1.2.0.tgz --keep
+pnpm pack --pack-destination /absolute/path/to/current-source-archives
+pnpm compatibility:minimum --tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.0.tgz --keep
 ```
 
-The check installs the actual archive with strict npm peer validation, asserts
-that the SDK resolves React 18.2.0 and RN 0.74.0 from the host, type-checks its
-public API, generates all 20 native methods, and bundles both platforms with
-the 0.74 Metro configuration. The RN template and native Latchway dependencies
-come from published packages, not sibling source overrides.
+The check installs that archive with strict npm peer validation, asserts that
+the SDK resolves React 18.2.0 and RN 0.74.0 from the host, type-checks the current
+public API (including removal of old constructors and authority options),
+generates all 17 native methods and bundles both platforms with the 0.74 Metro
+configuration. These default checks do not compile native code. React, React
+Native and the shared JS client use their locked registry dependencies.
 
-Add `--android` and/or `--ios` to build the real application. `--ios --ios-device`
+For a current-source iOS native build, add `--shared-native-development --ios`.
+Keep the matching fresh-only `latchway-ios-sdk` checkout next to this repository.
+The script changes only the disposable host's CocoaPods resolution to that
+explicit sibling source. Omit the source flag for registry-only native resolution
+against pinned iOS 2.0.0 after publication. Android uses native 1.2.1; no local
+Maven repository is required for a published consumer.
+
+The core-only package consumer can also check a freshly packed archive with
+`pnpm consumer:check --published --react-native-tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.0.tgz`.
+Here `--published` selects the registry **shared JS client dependency** only.
+It does not mean the React Native archive is published or prove a native build.
+
+Add `--android` to build the real Android application, or the explicit iOS flags
+above. `--ios --ios-device`
 selects an unsigned device-target build when no simulator platform is installed;
 it does not install or run the app on a device. `JAVA_HOME`,
 `ANDROID_HOME` and optionally `DEVELOPER_DIR` must select installed compatible
@@ -168,7 +194,10 @@ The package's existing Node 24.19+ engine requirement is unchanged.
 
 ## Verification scope
 
-Run the checks above for the selected release and keep their output as evidence.
+Keep new current-source receipts separate from historical release receipts.
+To reproduce published 1.2.0 or earlier results, use that release's versioned
+checkout and verification scripts with its original registry dependencies.
+Historical 20-method receipts do not establish current ABI-3 compatibility.
 Package/type/Codegen/Metro checks do not imply a native build; native builds do
 not imply physical App Attest or Play Integrity acceptance. Historical 1.1.3
 minimum-host builds used native 1.0.0; do not reuse those receipts as proof of

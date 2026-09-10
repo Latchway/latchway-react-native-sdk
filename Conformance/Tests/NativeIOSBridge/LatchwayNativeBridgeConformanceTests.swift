@@ -4,16 +4,34 @@ import Latchway
 import XCTest
 
 final class LatchwayNativeBridgeConformanceTests: XCTestCase {
+    func testCallerCannotSelectAppleEvidenceEnvironmentThroughTheNativeBridge() async throws {
+        let store = LatchwayBridgeStore()
+        for key in ["appAttestEnvironment", "environment", "allowTestingResponses", "isTestingResponse"] {
+            let encoded = """
+            {"operation":"configure","identityMode":"supplied",
+             "baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000",
+             "environment":"development","apple":{"\(key)":"any"}}
+            """
+            do {
+                _ = try await store.appCommand(encoded)
+                XCTFail("An evidence-policy option crossed the native boundary")
+            } catch {
+                XCTAssertEqual(error as? LatchwayLifecycleError, .configurationConflict)
+            }
+        }
+        await store.invalidate()
+    }
+
     func testRuntimeInvalidationClosesOnlyOwnedLeasesAndRejectsLaterCommands() async throws {
         let native = RecordingNativeClient()
-        let store = LatchwayBridgeStore(makeClient: { _ in native })
-        _ = try await store.configure(clientID: "owned", encoded: Self.configurationJSON)
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "owned", context: native)
         await store.invalidate()
         await store.invalidate()
         let events = await native.events()
         XCTAssertEqual(events, [.close])
         do {
-            _ = try await store.configure(clientID: "late", encoded: Self.configurationJSON)
+            try await store.register(clientID: "late", context: native)
             XCTFail("Invalidated runtime reopened")
         } catch { XCTAssertEqual(error as? LatchwayLifecycleError, .disposed) }
         do {
@@ -27,20 +45,16 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         } catch { XCTAssertEqual(error as? LatchwayLifecycleError, .disposed) }
     }
 
-    func testFWAUTH101And102PublicBridgeConfiguresAndDispatchesNativeRequest() async throws {
+    func testFWAUTH101And102PublicBridgeDispatchesThroughRegisteredNativeLease() async throws {
         let native = RecordingNativeClient()
-        let bridge = LatchwayNativeBridge(makeClient: { _ in native })
-
-        let metadata = try await configure(bridge)
-        let metadataObject = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any]
-        )
-        XCTAssertEqual(metadataObject["platform"] as? String, "react_native_ios")
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
 
         let request = #"{"url":"https://gateway.example.test/v1/responses","method":"POST","feature":"assistant","headers":[]}"#
         let response = try await startRequest(
             bridge,
-            identityToken: "identity-bootstrap-token",
+
             requestJSON: request
         )
 
@@ -48,34 +62,36 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         let events = await native.events()
         XCTAssertEqual(
             events,
-            [.start(identityToken: "identity-bootstrap-token", requestJSON: request)]
+            [.start(requestJSON: request)]
         )
     }
 
-    func testFWAUTH103And104PublicBridgeForwardsFreshIdentityToExplicitRefresh() async throws {
+    func testFWAUTH103And104PublicBridgeRefreshNeverAcceptsIdentity() async throws {
         let native = RecordingNativeClient()
-        let bridge = LatchwayNativeBridge(makeClient: { _ in native })
-        _ = try await configure(bridge)
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
 
-        try await refresh(bridge, identityToken: "fresh-external-identity")
+        try await refresh(bridge)
 
         let events = await native.events()
         XCTAssertEqual(
             events,
-            [.refresh(identityToken: "fresh-external-identity")]
+            [.refresh]
         )
     }
 
     func testFWAUTH105And106PublicBridgeForwardsFamilyAndComponentRevocation() async throws {
         let native = RecordingNativeClient()
-        let bridge = LatchwayNativeBridge(makeClient: { _ in native })
-        _ = try await configure(bridge)
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
         let component = #"{"definitionID":"intent","kind":"app_intent_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
 
-        try await revokeFamily(bridge, identityToken: "family-identity")
+        try await revokeFamily(bridge)
         try await revokeComponent(
             bridge,
-            identityToken: "component-identity",
+
             componentJSON: component
         )
 
@@ -83,21 +99,22 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         XCTAssertEqual(
             events,
             [
-                .revokeFamily(identityToken: "family-identity"),
-                .revokeComponent(identityToken: "component-identity", componentJSON: component),
+                .revokeFamily,
+                .revokeComponent(componentJSON: component),
             ]
         )
     }
 
     func testFWBEH104PublicBridgeKeepsFrameworkRetryInsideNativeTransport() async throws {
         let native = RecordingNativeClient()
-        let bridge = LatchwayNativeBridge(makeClient: { _ in native })
-        _ = try await configure(bridge)
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
         let request = #"{"url":"https://gateway.example.test/v1/responses","method":"POST","feature":"assistant","headers":[]}"#
 
         _ = try await startRequest(
             bridge,
-            identityToken: "retry-identity",
+
             requestJSON: request
         )
 
@@ -106,7 +123,7 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         XCTAssertEqual(startCount, 1)
         XCTAssertEqual(
             events,
-            [.start(identityToken: "retry-identity", requestJSON: request)]
+            [.start(requestJSON: request)]
         )
     }
 
@@ -135,29 +152,14 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    func testLegacyComponentInventoryDoesNotRequireResupplyingInheritedRootCopyGroups() throws {
-        let component = #"{"definitionID":"intent","kind":"app_intent_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
-        // This is the exact decoder used by configure when legacy root-copy
-        // groups are omitted. The native registry owns immutable inheritance.
-        let inventory = try NativeHostComponentInput.decodeLegacyInventory("[\(component)]")
-        XCTAssertEqual(inventory.map(\.keychainAccessGroup), ["ABCDE12345.dev.latchway.shared"])
-        XCTAssertEqual(try NativeHostComponentInput.decodeLegacyInventory("[]"), [])
-        // Current provisioning still requires explicit native-authorized groups.
-        XCTAssertThrowsError(try NativeHostComponentInput.decodeMany("[\(component)]", sharedKeychainAccessGroups: []))
-        XCTAssertEqual(try NativeHostComponentInput.decodeMany("[\(component)]",
-            sharedKeychainAccessGroups: ["ABCDE12345.dev.latchway.shared"]), inventory)
-        XCTAssertThrowsError(try NativeHostComponentInput.decodeLegacyInventory("[\(component),\(component)]"))
-        XCTAssertThrowsError(try NativeHostComponentInput.decodeLegacyInventory(
-            "[\(component.replacingOccurrences(of: "ABCDE12345.dev.latchway.shared", with: "*"))]"))
-    }
-
     func testDisposingComponentAwaitsItsLeaseCloseAndLeavesRootUsable() async throws {
         let native = RecordingNativeClient()
         let component = RecordingNativeComponent()
-        let bridge = LatchwayNativeBridge(makeClient: { _ in native }, makeComponent: { _, _ in component })
-        _ = try await configure(bridge)
+        let store = LatchwayBridgeStore(makeComponent: { _, _ in component })
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
         let componentJSON = #"{"definitionID":"action","kind":"action_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
-        let configuration = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","appVersion":"1.0.0","sdkVersion":"1.2.0","contractVersion":"1.1.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":["ABCDE12345.dev.latchway.shared"],"softwareKeyFallbackPolicy":"allow"}}"#
+        let configuration = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","appVersion":"1.0.0","sdkVersion":"1.2.0","contractVersion":"1.1.0","protocolVersion":3,"nativeAppABI":3,"allowInsecureLoopback":false,"account":"\#(Self.componentAccount)"}"#
         _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
             bridge.configureComponent(clientID: "child", configurationJSON: configuration, componentJSON: componentJSON,
                 resolve: { continuation.resume(returning: $0) },
@@ -169,9 +171,39 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         try await dispose(bridge, clientID: "child")
         let repeated = await component.closeCount()
         XCTAssertEqual(repeated, 1)
-        _ = try await startRequest(bridge, identityToken: "root-still-active", requestJSON: "{}")
+        _ = try await startRequest(bridge, requestJSON: "{}")
         let events = await native.events()
-        XCTAssertEqual(events, [.start(identityToken: "root-still-active", requestJSON: "{}")])
+        XCTAssertEqual(events, [.start(requestJSON: "{}")])
+    }
+
+    private static var componentAccount: String {
+        let payload = ["generationID": "58da9766-77db-42a0-a4dd-b0f71abae5db",
+            "appScope": String(repeating: "a", count: 64), "accountScope": String(repeating: "b", count: 64)]
+        return try! JSONSerialization.data(withJSONObject: payload).base64EncodedString()
+    }
+
+    func testFreshComponentConfigurationRejectsOldABIAndUnscopedOrOversharingHandoffs() throws {
+        let config: [String: Any] = ["baseURL": "https://gateway.example.test",
+            "applicationID": "app_01J00000000000000000000000", "environment": "production",
+            "appVersion": "1.2.0", "sdkVersion": "1.2.0", "contractVersion": "1.1.0",
+            "protocolVersion": 3, "nativeAppABI": 3, "allowInsecureLoopback": false, "account": Self.componentAccount]
+        func encoded(_ changes: [String: Any]) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: config.merging(changes) { _, new in new }), as: UTF8.self)
+        }
+        XCTAssertNoThrow(try NativeComponentConfiguration.decode(encoded([:])))
+        for changes: [String: Any] in [["nativeAppABI": 2], ["account": "e30="], ["apple": [:]],
+            ["account": "not-base64"], ["account": String(repeating: "a", count: 4097)]] {
+            XCTAssertThrowsError(try NativeComponentConfiguration.decode(encoded(changes)))
+        }
+    }
+
+    func testCurrentComponentDescriptorsRequireExplicitNativeGroups() throws {
+        let component = #"{"definitionID":"intent","kind":"app_intent_extension","keychainAccessGroup":"ABCDE12345.dev.latchway.shared","requestedFeatures":["assistant"]}"#
+        let groups: Set<String> = ["ABCDE12345.dev.latchway.shared"]
+        XCTAssertEqual(try NativeHostComponentInput.decodeMany("[\(component)]", sharedKeychainAccessGroups: groups).count, 1)
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeMany("[\(component)]", sharedKeychainAccessGroups: []))
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeMany("[]", sharedKeychainAccessGroups: groups))
+        XCTAssertThrowsError(try NativeHostComponentInput.decodeMany("[\(component),\(component)]", sharedKeychainAccessGroups: groups))
     }
 
     private func dispose(_ bridge: LatchwayNativeBridge, clientID: String) async throws {
@@ -181,29 +213,14 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    private func configure(_ bridge: LatchwayNativeBridge) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            bridge.configure(
-                clientID: "rn-ios-conformance",
-                configurationJSON: Self.configurationJSON,
-                resolve: { continuation.resume(returning: $0) },
-                reject: { code, message, error in
-                    continuation.resume(throwing: BridgeFailure(code: code, message: message, error: error))
-                }
-            )
-        }
-    }
-
     private func startRequest(
         _ bridge: LatchwayNativeBridge,
-        identityToken: String,
         requestJSON: String
     ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             bridge.startRequest(
                 clientID: "rn-ios-conformance",
                 operationID: "request-\(UUID().uuidString)",
-                identityToken: identityToken,
                 requestJSON: requestJSON,
                 resolve: { continuation.resume(returning: $0) },
                 reject: { code, message, error in
@@ -213,12 +230,11 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    private func refresh(_ bridge: LatchwayNativeBridge, identityToken: String) async throws {
+    private func refresh(_ bridge: LatchwayNativeBridge) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             bridge.refresh(
                 clientID: "rn-ios-conformance",
                 operationID: "refresh-\(UUID().uuidString)",
-                identityToken: identityToken,
                 resolve: { continuation.resume() },
                 reject: { code, message, error in
                     continuation.resume(throwing: BridgeFailure(code: code, message: message, error: error))
@@ -227,12 +243,11 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    private func revokeFamily(_ bridge: LatchwayNativeBridge, identityToken: String) async throws {
+    private func revokeFamily(_ bridge: LatchwayNativeBridge) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             bridge.revokeFamily(
                 clientID: "rn-ios-conformance",
                 operationID: "family-\(UUID().uuidString)",
-                identityToken: identityToken,
                 resolve: { continuation.resume() },
                 reject: { code, message, error in
                     continuation.resume(throwing: BridgeFailure(code: code, message: message, error: error))
@@ -243,14 +258,12 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
 
     private func revokeComponent(
         _ bridge: LatchwayNativeBridge,
-        identityToken: String,
         componentJSON: String
     ) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             bridge.revokeComponent(
                 clientID: "rn-ios-conformance",
                 operationID: "component-\(UUID().uuidString)",
-                identityToken: identityToken,
                 componentJSON: componentJSON,
                 resolve: { continuation.resume() },
                 reject: { code, message, error in
@@ -260,7 +273,7 @@ final class LatchwayNativeBridgeConformanceTests: XCTestCase {
         }
     }
 
-    private static let configurationJSON = #"{"baseURL":"https://gateway.example.test","applicationID":"app_01J00000000000000000000000","environment":"production","identityProvider":"custom_jwt","appVersion":"1.0.0","sdkVersion":"1.2.0","frameworkID":"react-native-fetch","frameworkVersion":"0.82.0","contractVersion":"1.1.0","protocolVersion":2,"allowInsecureLoopback":false,"apple":{"appAttestEnabled":false,"rootKeychainAccessGroup":"ABCDE12345.dev.latchway.example","legacySharedKeychainAccessGroups":[],"softwareKeyFallbackPolicy":"allow"},"android":{"keyPolicy":"strongbox_preferred"}}"#
+
 }
 
 private struct BridgeFailure: Error, @unchecked Sendable {
@@ -271,10 +284,10 @@ private struct BridgeFailure: Error, @unchecked Sendable {
 
 private actor RecordingNativeClient: NativeClientOperating {
     enum Event: Equatable, Sendable {
-        case start(identityToken: String, requestJSON: String)
-        case refresh(identityToken: String)
-        case revokeFamily(identityToken: String)
-        case revokeComponent(identityToken: String, componentJSON: String)
+        case start(requestJSON: String)
+        case refresh
+        case revokeFamily
+        case revokeComponent(componentJSON: String)
         case close
     }
 
@@ -284,8 +297,8 @@ private actor RecordingNativeClient: NativeClientOperating {
     func events() -> [Event] { recordedEvents }
     func startCount() -> Int { recordedEvents.filter { if case .start = $0 { true } else { false } }.count }
 
-    func startRequest(identityToken: String, encoded: String) async throws -> String {
-        recordedEvents.append(.start(identityToken: identityToken, requestJSON: encoded))
+    func startRequest(encoded: String) async throws -> String {
+        recordedEvents.append(.start(requestJSON: encoded))
         return Self.responseMetadata
     }
 
@@ -295,33 +308,31 @@ private actor RecordingNativeClient: NativeClientOperating {
 
     func closeResponse(responseID _: String) async {}
     func close() async { recordedEvents.append(.close) }
-    func quota(identityToken _: String, feature _: String) async throws -> String { "{}" }
-    func diagnostics(identityToken _: String) async throws -> String { "{}" }
+    func quota(feature _: String) async throws -> String { "{}" }
+    func diagnostics() async throws -> String { "{}" }
 
-    func refresh(identityToken: String) async throws {
-        recordedEvents.append(.refresh(identityToken: identityToken))
+    func refresh() async throws {
+        recordedEvents.append(.refresh)
     }
 
-    func prepareComponents(identityToken _: String, encoded _: String) async throws -> String { "{}" }
+    func prepareComponents(encoded _: String) async throws -> String { "{}" }
 
-    func revokeComponent(identityToken: String, encoded: String) async throws {
-        recordedEvents.append(.revokeComponent(identityToken: identityToken, componentJSON: encoded))
+    func revokeComponent(encoded: String) async throws {
+        recordedEvents.append(.revokeComponent(componentJSON: encoded))
     }
 
-    func replaceComponent(identityToken _: String, encoded _: String) async throws -> String { "{}" }
+    func replaceComponent(encoded _: String) async throws -> String { "{}" }
     func componentDiagnostics(encoded _: String) async throws -> String { "{}" }
-    func revokeCurrentInstallation(identityToken _: String) async throws {}
+    func revokeCurrentInstallation() async throws {}
 
-    func revokeCurrentInstallationFamily(identityToken: String) async throws {
-        recordedEvents.append(.revokeFamily(identityToken: identityToken))
+    func revokeCurrentInstallationFamily() async throws {
+        recordedEvents.append(.revokeFamily)
     }
 
-    func revokeFamily(identityToken _: String, encoded _: String) async throws {}
 }
 
 private actor RecordingNativeComponent: NativeComponentOperating {
     private var closed = 0
-    func establishDirectAttestation() async throws {}
     func diagnostics() async throws -> String { "{}" }
     func close() async { closed += 1 }
     func closeCount() -> Int { closed }

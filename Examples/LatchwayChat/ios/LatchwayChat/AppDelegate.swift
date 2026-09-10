@@ -115,7 +115,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     app = try await LatchwayApp.configure(.init(baseURL: url, applicationID: appID, environment: environment,
       rootKeychainAccessGroup: rootGroup,
       suppliedIdentity: try .firebaseProject(projectID: project),
-      exposeToReactNative: true, legacyComponents: []), name: "latchway-chat")
+      exposeToReactNative: true), name: "latchway-chat")
     authKey = identityKey()
     if let app {
       observation = Task { [weak self] in
@@ -141,12 +141,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     try await retire()
     authKey = next
   }
-  private func retire() async throws {
+  private func retire(signOutCurrent: Bool = false) async throws {
     epoch += 1; requestTask?.cancel(); output.text = ""
     guard let app else { throw LatchwayLifecycleError.appNotConfigured }
-    let snapshot = await app.snapshot()
-    if let account { try await account.logout() }
-    else if let captured = snapshot.generationID { try await app.logout(generationID: captured) }
+    if signOutCurrent { try await app.signOut() }
+    else if let account { try await account.logout() }
+    else if let captured = (await app.snapshot()).generationID { try await app.logout(generationID: captured) }
     await client?.close(); client = nil; account = nil
   }
   private func activate() async throws {
@@ -187,7 +187,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
   @objc private func resume() { enqueue { try await self.activate() } }
   @objc private func signOut() {
     epoch += 1; requestTask?.cancel()
-    enqueue { try await self.retire(); try self.auth.signOut(); self.authKey = nil; self.output.text = "Signed out locally and from Firebase." }
+    enqueue { try await self.retire(signOutCurrent: true); try self.auth.signOut(); self.authKey = nil; self.output.text = "Signed out locally and from Firebase." }
   }
   @objc private func openReactNative() {
     guard app != nil else { output.text = "Wait for native configuration."; return }

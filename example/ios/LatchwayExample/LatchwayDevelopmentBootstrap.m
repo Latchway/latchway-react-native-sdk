@@ -242,7 +242,7 @@ static NSData *LatchwayDevelopmentReadAppIntentItem(NSString *accessGroup, NSStr
 
 static BOOL LatchwayDevelopmentDeleteAppIntentArtifacts(NSString *accessGroup) {
   BOOL deleted = YES;
-  for (NSString *account in @[LatchwayDevelopmentChallengeAccount, LatchwayDevelopmentReceiptAccount]) {
+  for (NSString *account in @[LatchwayDevelopmentChallengeAccount, LatchwayDevelopmentReceiptAccount, @"account-handoff-v1"]) {
     OSStatus status = SecItemDelete((__bridge CFDictionaryRef)
       LatchwayDevelopmentAppIntentCoordinates(accessGroup, account));
     if (status != errSecSuccess && status != errSecItemNotFound) deleted = NO;
@@ -262,6 +262,26 @@ static BOOL LatchwayDevelopmentWriteAppIntentChallenge(NSString *accessGroup, NS
   if (removal != errSecSuccess && removal != errSecItemNotFound) return NO;
   NSMutableDictionary *item = [coordinates mutableCopy];
   item[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+  item[(__bridge id)kSecValueData] = data;
+  return SecItemAdd((__bridge CFDictionaryRef)item, NULL) == errSecSuccess;
+}
+
+// This is opaque non-secret metadata produced by the native SDK, not a token.
+// The extension validates its scope and current retirement record through SDK APIs.
+static BOOL LatchwayDevelopmentWriteAccountHandoff(NSString *accessGroup, NSString *encoded) {
+  if (![encoded isKindOfClass:NSString.class] || encoded.length > 8192) return NO;
+  NSData *data = [[NSData alloc] initWithBase64EncodedString:encoded options:0];
+  if (data == nil || data.length == 0 || data.length > 4096) return NO;
+  NSDictionary *value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![value isKindOfClass:NSDictionary.class] ||
+      ![[NSSet setWithArray:value.allKeys] isEqualToSet:[NSSet setWithArray:@[@"appScope", @"accountScope", @"generationID"]]] ||
+      !LatchwayDevelopmentMatches(value[@"appScope"], @"^[0-9a-f]{64}$") ||
+      !LatchwayDevelopmentMatches(value[@"accountScope"], @"^[0-9a-f]{64}$") ||
+      ![value[@"generationID"] isKindOfClass:NSString.class] ||
+      [[NSUUID alloc] initWithUUIDString:value[@"generationID"]] == nil) return NO;
+  NSMutableDictionary *item = [LatchwayDevelopmentAppIntentCoordinates(accessGroup, @"account-handoff-v1") mutableCopy];
+  item[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+  item[(__bridge id)kSecAttrSynchronizable] = @NO;
   item[(__bridge id)kSecValueData] = data;
   return SecItemAdd((__bridge CFDictionaryRef)item, NULL) == errSecSuccess;
 }
@@ -382,6 +402,7 @@ RCT_REMAP_METHOD(clearDevelopmentAppIntentArtifacts,
 
 RCT_REMAP_METHOD(markDevelopmentAppIntentWaiting,
                  markDevelopmentAppIntentWaiting:(NSString *)accessGroup
+                 account:(NSString *)account
                  resolve:(RCTPromiseResolveBlock)resolve
                  reject:(RCTPromiseRejectBlock)reject) {
   if (!LatchwayDevelopmentRuntimeValid() || LatchwayDevelopmentResume || LatchwayDevelopmentAbort ||
@@ -405,6 +426,7 @@ RCT_REMAP_METHOD(markDevelopmentAppIntentWaiting,
     @"status": @"waiting_for_app_intent",
   };
   if (runID == nil || !LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup) ||
+      !LatchwayDevelopmentWriteAccountHandoff(accessGroup, account) ||
       !LatchwayDevelopmentWriteAppIntentChallenge(accessGroup, runID)) {
     LatchwayDevelopmentDeleteAppIntentArtifacts(accessGroup);
     reject(@"development_verification_invalid", @"The exact-run Debug App Intent challenge was not written.", nil);

@@ -3,7 +3,6 @@ import { TurboModuleRegistry } from "react-native";
 
 export interface Spec extends TurboModule {
   appCommand(commandJSON: string): Promise<string>;
-  configure(clientID: string, configurationJSON: string): Promise<string>;
   configureComponent(
     clientID: string,
     configurationJSON: string,
@@ -12,7 +11,6 @@ export interface Spec extends TurboModule {
   startRequest(
     clientID: string,
     operationID: string,
-    identityToken: string,
     requestJSON: string,
   ): Promise<string>;
   readResponseChunk(
@@ -22,18 +20,13 @@ export interface Spec extends TurboModule {
     maximumBytes: number,
   ): Promise<string>;
   closeResponse(clientID: string, responseID: string): Promise<void>;
-  refresh(clientID: string, operationID: string, identityToken: string): Promise<void>;
+  refresh(clientID: string, operationID: string): Promise<void>;
   quota(
     clientID: string,
     operationID: string,
-    identityToken: string,
     feature: string,
   ): Promise<string>;
-  diagnostics(clientID: string, operationID: string, identityToken: string): Promise<string>;
-  establishDirectAttestation(
-    clientID: string,
-    operationID: string,
-  ): Promise<void>;
+  diagnostics(clientID: string, operationID: string): Promise<string>;
   componentDiagnostics(
     clientID: string,
     operationID: string,
@@ -41,13 +34,11 @@ export interface Spec extends TurboModule {
   prepareComponents(
     clientID: string,
     operationID: string,
-    identityToken: string,
     componentsJSON: string,
   ): Promise<string>;
   replaceComponent(
     clientID: string,
     operationID: string,
-    identityToken: string,
     componentJSON: string,
   ): Promise<string>;
   rootComponentDiagnostics(
@@ -58,17 +49,10 @@ export interface Spec extends TurboModule {
   revokeComponent(
     clientID: string,
     operationID: string,
-    identityToken: string,
     componentJSON: string,
   ): Promise<void>;
-  revoke(clientID: string, operationID: string, identityToken: string): Promise<void>;
-  revokeFamily(clientID: string, operationID: string, identityToken: string): Promise<void>;
-  revokeFamilyWithComponents(
-    clientID: string,
-    operationID: string,
-    identityToken: string,
-    componentsJSON: string,
-  ): Promise<void>;
+  revoke(clientID: string, operationID: string): Promise<void>;
+  revokeFamily(clientID: string, operationID: string): Promise<void>;
   cancel(clientID: string, operationID: string): void;
   dispose(clientID: string): Promise<void>;
 }

@@ -28,13 +28,6 @@ RCT_EXPORT_MODULE(NativeLatchway)
   return self;
 }
 
-- (void)configure:(NSString *)clientID
- configurationJSON:(NSString *)configurationJSON
-          resolve:(RCTPromiseResolveBlock)resolve
-           reject:(RCTPromiseRejectBlock)reject {
-  [_bridge configureWithClientID:clientID configurationJSON:configurationJSON resolve:resolve reject:reject];
-}
-
 - (void)configureComponent:(NSString *)clientID
           configurationJSON:(NSString *)configurationJSON
               componentJSON:(NSString *)componentJSON
@@ -45,11 +38,10 @@ RCT_EXPORT_MODULE(NativeLatchway)
 
 - (void)startRequest:(NSString *)clientID
          operationID:(NSString *)operationID
-       identityToken:(NSString *)identityToken
          requestJSON:(NSString *)requestJSON
              resolve:(RCTPromiseResolveBlock)resolve
               reject:(RCTPromiseRejectBlock)reject {
-  [_bridge startRequestWithClientID:clientID operationID:operationID identityToken:identityToken requestJSON:requestJSON resolve:resolve reject:reject];
+  [_bridge startRequestWithClientID:clientID operationID:operationID requestJSON:requestJSON resolve:resolve reject:reject];
 }
 
 - (void)readResponseChunk:(NSString *)clientID
@@ -70,34 +62,24 @@ RCT_EXPORT_MODULE(NativeLatchway)
 
 - (void)refresh:(NSString *)clientID
      operationID:(NSString *)operationID
-    identityToken:(NSString *)identityToken
           resolve:(RCTPromiseResolveBlock)resolve
            reject:(RCTPromiseRejectBlock)reject {
-  [_bridge refreshWithClientID:clientID operationID:operationID identityToken:identityToken resolve:^{ resolve(nil); } reject:reject];
+  [_bridge refreshWithClientID:clientID operationID:operationID resolve:^{ resolve(nil); } reject:reject];
 }
 
 - (void)quota:(NSString *)clientID
    operationID:(NSString *)operationID
-  identityToken:(NSString *)identityToken
         feature:(NSString *)feature
         resolve:(RCTPromiseResolveBlock)resolve
          reject:(RCTPromiseRejectBlock)reject {
-  [_bridge quotaWithClientID:clientID operationID:operationID identityToken:identityToken feature:feature resolve:resolve reject:reject];
+  [_bridge quotaWithClientID:clientID operationID:operationID feature:feature resolve:resolve reject:reject];
 }
 
 - (void)diagnostics:(NSString *)clientID
          operationID:(NSString *)operationID
-        identityToken:(NSString *)identityToken
               resolve:(RCTPromiseResolveBlock)resolve
                reject:(RCTPromiseRejectBlock)reject {
-  [_bridge diagnosticsWithClientID:clientID operationID:operationID identityToken:identityToken resolve:resolve reject:reject];
-}
-
-- (void)establishDirectAttestation:(NSString *)clientID
-                       operationID:(NSString *)operationID
-                           resolve:(RCTPromiseResolveBlock)resolve
-                            reject:(RCTPromiseRejectBlock)reject {
-  [_bridge establishDirectAttestationWithClientID:clientID operationID:operationID resolve:^{ resolve(nil); } reject:reject];
+  [_bridge diagnosticsWithClientID:clientID operationID:operationID resolve:resolve reject:reject];
 }
 
 - (void)componentDiagnostics:(NSString *)clientID
@@ -109,20 +91,18 @@ RCT_EXPORT_MODULE(NativeLatchway)
 
 - (void)prepareComponents:(NSString *)clientID
               operationID:(NSString *)operationID
-            identityToken:(NSString *)identityToken
            componentsJSON:(NSString *)componentsJSON
                   resolve:(RCTPromiseResolveBlock)resolve
                    reject:(RCTPromiseRejectBlock)reject {
-  [_bridge prepareComponentsWithClientID:clientID operationID:operationID identityToken:identityToken componentsJSON:componentsJSON resolve:resolve reject:reject];
+  [_bridge prepareComponentsWithClientID:clientID operationID:operationID componentsJSON:componentsJSON resolve:resolve reject:reject];
 }
 
 - (void)replaceComponent:(NSString *)clientID
               operationID:(NSString *)operationID
-            identityToken:(NSString *)identityToken
             componentJSON:(NSString *)componentJSON
                   resolve:(RCTPromiseResolveBlock)resolve
                    reject:(RCTPromiseRejectBlock)reject {
-  [_bridge replaceComponentWithClientID:clientID operationID:operationID identityToken:identityToken componentJSON:componentJSON resolve:resolve reject:reject];
+  [_bridge replaceComponentWithClientID:clientID operationID:operationID componentJSON:componentJSON resolve:resolve reject:reject];
 }
 
 - (void)rootComponentDiagnostics:(NSString *)clientID
@@ -135,36 +115,24 @@ RCT_EXPORT_MODULE(NativeLatchway)
 
 - (void)revokeComponent:(NSString *)clientID
              operationID:(NSString *)operationID
-           identityToken:(NSString *)identityToken
            componentJSON:(NSString *)componentJSON
                  resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject {
-  [_bridge revokeComponentWithClientID:clientID operationID:operationID identityToken:identityToken componentJSON:componentJSON resolve:^{ resolve(nil); } reject:reject];
+  [_bridge revokeComponentWithClientID:clientID operationID:operationID componentJSON:componentJSON resolve:^{ resolve(nil); } reject:reject];
 }
 
 - (void)revoke:(NSString *)clientID
     operationID:(NSString *)operationID
-   identityToken:(NSString *)identityToken
          resolve:(RCTPromiseResolveBlock)resolve
           reject:(RCTPromiseRejectBlock)reject {
-  [_bridge revokeWithClientID:clientID operationID:operationID identityToken:identityToken resolve:^{ resolve(nil); } reject:reject];
+  [_bridge revokeWithClientID:clientID operationID:operationID resolve:^{ resolve(nil); } reject:reject];
 }
 
 - (void)revokeFamily:(NSString *)clientID
           operationID:(NSString *)operationID
-         identityToken:(NSString *)identityToken
                resolve:(RCTPromiseResolveBlock)resolve
                 reject:(RCTPromiseRejectBlock)reject {
-  [_bridge revokeFamilyWithClientID:clientID operationID:operationID identityToken:identityToken resolve:^{ resolve(nil); } reject:reject];
-}
-
-- (void)revokeFamilyWithComponents:(NSString *)clientID
-                       operationID:(NSString *)operationID
-                     identityToken:(NSString *)identityToken
-                    componentsJSON:(NSString *)componentsJSON
-                           resolve:(RCTPromiseResolveBlock)resolve
-                            reject:(RCTPromiseRejectBlock)reject {
-  [_bridge revokeFamilyWithComponentsWithClientID:clientID operationID:operationID identityToken:identityToken componentsJSON:componentsJSON resolve:^{ resolve(nil); } reject:reject];
+  [_bridge revokeFamilyWithClientID:clientID operationID:operationID resolve:^{ resolve(nil); } reject:reject];
 }
 
 - (void)cancel:(NSString *)clientID operationID:(NSString *)operationID {

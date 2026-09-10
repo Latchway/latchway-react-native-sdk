@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { assertEqual, readJSON } from "./release-metadata.mjs";
+import { assertCurrentNativeSpec } from "./current-consumer-contract.mjs";
 import {
   isolatedRegistryEnvironment,
   pnpmRegistryArguments,
@@ -16,6 +17,8 @@ import {
 const compatibility = await readJSON("release-compatibility.json");
 const packageJSON = await readJSON("package.json");
 const publishedMode = process.argv.includes("--published");
+// This flag selects the shared-client dependency source, not publication status
+// of the supplied React Native archive or native compatibility evidence.
 const npmMode = process.argv.includes("--npm");
 if (npmMode && !publishedMode) throw new Error("--npm requires --published (registry shared-client dependency).");
 const reactNativeArchive = resolve(option("--react-native-tarball") ??
@@ -80,6 +83,7 @@ try {
     join(temporary, "node_modules", "@latchway", "react-native", "package.json"),
     "utf8",
   ));
+  assertCurrentNativeSpec(await readFile(join(temporary, "node_modules/@latchway/react-native/src/native/NativeLatchway.ts"), "utf8"));
   assertEqual(installed.name, compatibility.react_native.package, "installed consumer package name");
   assertEqual(installed.version, compatibility.react_native.version, "installed consumer package version");
   assertEqual(installed.dependencies?.[compatibility.javascript.package], compatibility.javascript.version,
@@ -89,7 +93,8 @@ try {
   for (const name of ["react-native-get-random-values", "react-native-url-polyfill", "text-encoding", "@langchain/openai"]) {
     assert.throws(() => consumerRequire.resolve(name), { code: "MODULE_NOT_FOUND" }, `${name} leaked into core-only install`);
   }
-  console.log(`${npmMode ? "npm" : "pnpm"} core-only archive consumer passed: types resolve without native randomness, URL/encoding polyfills or LangChain.`);
+  console.log(`${npmMode ? "npm" : "pnpm"} current-source archive consumer passed: fresh-account types and 17-method native spec; no native randomness, URL/encoding polyfills or LangChain.`);
+  console.log("Archive/type checks do not prove publication, native compilation or physical-device acceptance; --published selects registry shared-client dependencies only.");
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }

@@ -1,7 +1,8 @@
 # Shared accounts with developer-supplied identity
 
-Release line: React Native 1.3.0, iOS 1.3.0, Android 1.2.0, JavaScript client
-1.1.0 and server 1.1.1 or later (contract 1.1.0).
+This guide describes React Native 2.0.0's fresh supplied-identity account model,
+with iOS 2.0.0 and Android 1.2.1. The gateway requirement is server
+1.1.1 or later, contract 1.1.0 / wire 3 with `supplied_identity_v1`.
 
 The same integration works in a standalone RN app or an RN screen embedded in
 a native app. Either side can configure first. Matching public configuration
@@ -11,12 +12,9 @@ or embedded-mode switch in this integration.
 
 ## Configure
 
-Install `@latchway/react-native@1.3.0`, install Pods, and rebuild both native apps.
-The native dependencies are pinned to compatible releases. Keep one native SDK
-copy if the host already uses Latchway directly. React Native autolinking installs
-the native modules; there is no additional runtime Latchway bootstrap. Signed
-App Attest/Keychain capabilities and Play Integrity configuration are still
-required in the host application.
+Install `@latchway/react-native@2.0.0`, update Pods and rebuild both native apps.
+JavaScript and native bridge ABI 3 must be upgraded together; no JS-only update.
+Keep one native SDK copy if the host already uses Latchway directly.
 
 ```ts
 import {Latchway, firebaseProject} from '@latchway/react-native';
@@ -183,15 +181,16 @@ See [the LangChain guide](https://docs.latchway.dev/clients/react-native/framewo
 tool execution and UI updates and clear in-memory chat history. The SDK handles
 native account isolation; it does not own your screen's state.
 
-## Migration and limits
+## Fresh storage and limits
 
 - Shared mode requires an explicit `sharedNativeCallers` policy with the same
   required host attestation. Upgrading the server does not widen app policies.
-- `createLatchwayClient` and explicit authority APIs remain compatibility paths.
-  Do not silently change an active legacy authority into supplied identity.
-- SDK-owned legacy storage uses the native migration journal. Applications with
-  custom stores or delegated extensions must inventory their actual storage and
-  groups; an invented empty list is not a migration strategy.
+- The current public entry point is `Latchway.configure`, followed by
+  `signIn`/`restore` and opaque account handles. There is no direct root-client
+  constructor, identity-owner transfer or old-session adoption path.
+- Storage is account-scoped from first use. No old-store inventory or cleanup
+  callback is required. Current component allowlists, root-private Keychain
+  isolation, persistent logout and cleanup-retry journals remain enforced.
 - Logout never resets server-side per-user quotas or logs out other devices.
 - Android libraries compile against API 34; the host's target SDK and other
   dependencies can require a newer compile SDK. React Native 0.74+/React 18.2+

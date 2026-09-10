@@ -7,7 +7,8 @@ import {
   streamingChatReply,
   type NativeFrameworkReply,
 } from "../Conformance/framework/native-gateway.js";
-import { createLatchwayClient, type LatchwayClient } from "../src/index.js";
+import type { LatchwayClient } from "../src/index.js";
+import { sharedFixtureClient } from "./shared-fixture.js";
 import { installNativeModuleForTesting } from "../src/testing.js";
 
 const require = createRequire(import.meta.url);
@@ -131,11 +132,10 @@ function install(reply: NativeFrameworkReply): {
 } {
   const gateway = new NativeFrameworkGateway(() => reply);
   restoreNative = installNativeModuleForTesting(gateway);
-  const client = createLatchwayClient({
+  const client = sharedFixtureClient({
     baseURL: "https://gateway.example.test",
     applicationID: "app_01J00000000000000000000000",
     environment: "production",
-    getIdentityToken: async () => "fixture-identity-token-never-returned",
     apple: { rootKeychainAccessGroup: "ABCDE12345.dev.latchway.example" },
   });
   clients.push(client);

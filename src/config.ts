@@ -1,30 +1,15 @@
 import { LatchwayError } from "@latchway/client";
 import type {
   LatchwayComponentOptions,
-  LatchwayOptions,
-  ReactNativeDirectAttestationComponent,
   ReactNativeIOSComponent,
 } from "./types.js";
 import {
-  CONTRACT_VERSION,
-  PROTOCOL_VERSION,
-  REACT_NATIVE_FRAMEWORK_ID,
-  REACT_NATIVE_FRAMEWORK_VERSION,
   SDK_VERSION,
 } from "./version.js";
 
 export interface RuntimeConfiguration {
-  nativeIdentityAuthority?: boolean;
   baseURL: URL;
-  applicationID: string;
-  environment: string;
-  identityProvider: string;
-  appVersion: string;
-  getIdentityToken: () => Promise<string>;
   appleSharedKeychainAccessGroups: readonly string[];
-  nativeJSON: string;
-  fingerprint: string;
-  scope: string;
 }
 
 export interface RuntimeComponentConfiguration {
@@ -32,85 +17,7 @@ export interface RuntimeComponentConfiguration {
   componentJSON: string;
   fingerprint: string;
   scope: string;
-  component: ReactNativeDirectAttestationComponent;
-}
-
-export function configure(options: LatchwayOptions): RuntimeConfiguration {
-  const baseURL = parseBaseURL(options.baseURL, options.allowInsecureLoopback === true);
-  const applicationID = applicationResourceID(options.applicationID);
-  const environment = identifier(options.environment, "environment");
-  const identityProvider = identifier(options.identityProvider ?? "custom_jwt", "identityProvider");
-  const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
-  const getIdentityToken = tokenProvider(options);
-  const rootKeychainAccessGroup = options.apple?.rootKeychainAccessGroup;
-  if (options.apple !== undefined && rootKeychainAccessGroup === undefined) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "apple.rootKeychainAccessGroup is required for an Apple configuration.",
-    );
-  }
-  const legacySharedKeychainAccessGroups = options.apple?.legacySharedKeychainAccessGroups ?? [];
-  if (rootKeychainAccessGroup !== undefined) {
-    validateRootKeychainAccessGroups(rootKeychainAccessGroup, legacySharedKeychainAccessGroups);
-  }
-  const storageNamespace = options.apple?.storageNamespace;
-  if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
-  const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
-  if (appleFallback !== "disallow" && appleFallback !== "allow") {
-    throw new LatchwayError("client_configuration_invalid", "apple.softwareKeyFallbackPolicy is invalid.");
-  }
-  const androidKeyPolicy = options.android?.keyPolicy ?? "strongbox_preferred";
-  if (!new Set(["hardware_backed_required", "strongbox_preferred", "software_allowed"]).has(androidKeyPolicy)) {
-    throw new LatchwayError("client_configuration_invalid", "android.keyPolicy is invalid.");
-  }
-  const projectNumber = options.android?.playIntegrityCloudProjectNumber;
-  if (projectNumber !== undefined &&
-      (!/^[1-9][0-9]{5,18}$/u.test(projectNumber) || BigInt(projectNumber) > 9_223_372_036_854_775_807n)) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "android.playIntegrityCloudProjectNumber must be a decimal Google Cloud project number.",
-    );
-  }
-
-  const nativeConfiguration = {
-    baseURL: baseURL.href,
-    applicationID,
-    environment,
-    identityProvider,
-    appVersion,
-    sdkVersion: SDK_VERSION,
-    frameworkID: REACT_NATIVE_FRAMEWORK_ID,
-    frameworkVersion: REACT_NATIVE_FRAMEWORK_VERSION,
-    contractVersion: CONTRACT_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
-    allowInsecureLoopback: options.allowInsecureLoopback === true,
-    apple: {
-      appAttestEnabled: options.apple?.appAttestEnabled ?? true,
-      softwareKeyFallbackPolicy: appleFallback,
-      ...(rootKeychainAccessGroup === undefined ? {} : {
-        rootKeychainAccessGroup,
-        legacySharedKeychainAccessGroups: Array.from(legacySharedKeychainAccessGroups),
-      }),
-      ...(storageNamespace === undefined ? {} : { storageNamespace }),
-    },
-    android: {
-      keyPolicy: androidKeyPolicy,
-      ...(projectNumber === undefined ? {} : { playIntegrityCloudProjectNumber: projectNumber }),
-    },
-  };
-  const nativeJSON = JSON.stringify(nativeConfiguration);
-  return {
-    baseURL,
-    applicationID,
-    environment,
-    identityProvider,
-    appVersion,
-    getIdentityToken,
-    appleSharedKeychainAccessGroups: Array.from(legacySharedKeychainAccessGroups),
-    nativeJSON,
-    fingerprint: nativeJSON,
-    scope: `${baseURL.href}|${applicationID}|${environment}`,
-  };
+  component: ReactNativeIOSComponent;
 }
 
 export function encodeIOSComponentDescriptors(
@@ -154,32 +61,17 @@ function boundedComponentJSON(value: ReactNativeIOSComponent | readonly ReactNat
 }
 
 export function configureComponent(options: LatchwayComponentOptions): RuntimeComponentConfiguration {
+  if (Object.keys(options).some(key => !["baseURL", "applicationID", "environment", "component", "account", "appVersion", "allowInsecureLoopback"].includes(key))) {
+    throw new LatchwayError("client_configuration_invalid", "The component configuration contains unsupported options.");
+  }
   const baseURL = parseBaseURL(options.baseURL, options.allowInsecureLoopback === true);
   const applicationID = applicationResourceID(options.applicationID);
   const environment = identifier(options.environment, "environment");
   const appVersion = boundedString(options.appVersion ?? SDK_VERSION, "appVersion", 128);
-  const component = validateDirectAttestationComponent(options.component);
-  if (options.apple === undefined) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "apple root Keychain configuration is required for an iOS component.",
-    );
-  }
-  validateRootKeychainAccessGroups(
-    options.apple.rootKeychainAccessGroup,
-    options.apple.legacySharedKeychainAccessGroups,
-  );
-  if (!options.apple.legacySharedKeychainAccessGroups.includes(component.keychainAccessGroup)) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "The component Keychain group must be an explicit shared group of the containing root application.",
-    );
-  }
-  const storageNamespace = options.apple?.storageNamespace;
-  if (storageNamespace !== undefined) boundedString(storageNamespace, "apple.storageNamespace", 128);
-  const appleFallback = options.apple?.softwareKeyFallbackPolicy ?? "disallow";
-  if (appleFallback !== "disallow" && appleFallback !== "allow") {
-    throw new LatchwayError("client_configuration_invalid", "apple.softwareKeyFallbackPolicy is invalid.");
+  const component = validateIOSComponent(options.component, [options.component?.keychainAccessGroup]);
+  if (typeof options.account !== "string" || options.account.length > 4096 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/u.test(options.account)) {
+    throw new LatchwayError("client_configuration_invalid", "A captured native component account is required.");
   }
   const nativeJSON = JSON.stringify({
     baseURL: baseURL.href,
@@ -187,22 +79,18 @@ export function configureComponent(options: LatchwayComponentOptions): RuntimeCo
     environment,
     appVersion,
     sdkVersion: SDK_VERSION,
-    contractVersion: CONTRACT_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
+    contractVersion: "1.1.0",
+    protocolVersion: 3,
+    nativeAppABI: 3,
     allowInsecureLoopback: options.allowInsecureLoopback === true,
-    apple: {
-      rootKeychainAccessGroup: options.apple.rootKeychainAccessGroup,
-      legacySharedKeychainAccessGroups: Array.from(options.apple.legacySharedKeychainAccessGroups),
-      softwareKeyFallbackPolicy: appleFallback,
-      ...(storageNamespace === undefined ? {} : { storageNamespace }),
-    },
+    account: options.account,
   });
   const componentJSON = JSON.stringify(component);
   return {
     nativeJSON,
     componentJSON,
     fingerprint: `${nativeJSON}|${componentJSON}`,
-    scope: `${baseURL.origin}|${applicationID}|${environment}|${component.definitionID}`,
+    scope: `${baseURL.origin}|${applicationID}|${environment}|${component.definitionID}|${options.account}`,
     component,
   };
 }
@@ -216,20 +104,6 @@ function applicationResourceID(value: string): string {
     );
   }
   return applicationID;
-}
-
-function tokenProvider(options: LatchwayOptions): () => Promise<string> {
-  if (options.getIdentityToken !== undefined && options.identityTokenProvider !== undefined) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "Configure either getIdentityToken or identityTokenProvider, not both.",
-    );
-  }
-  if (typeof options.getIdentityToken === "function") return options.getIdentityToken;
-  if (typeof options.identityTokenProvider?.getIdentityToken === "function") {
-    return options.identityTokenProvider.getIdentityToken.bind(options.identityTokenProvider);
-  }
-  throw new LatchwayError("client_configuration_invalid", "getIdentityToken is required.");
 }
 
 function parseBaseURL(value: string, allowInsecureLoopback: boolean): URL {
@@ -272,48 +146,9 @@ function boundedString(value: string, field: string, maximum: number): string {
   return value;
 }
 
-function validateRootKeychainAccessGroups(root: string, legacy: readonly string[]): void {
-  if (!concreteKeychainAccessGroup(root)) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "apple.rootKeychainAccessGroup must be a fully resolved concrete dotted access group.",
-    );
-  }
-  if (!Array.isArray(legacy) || !legacy.every(concreteKeychainAccessGroup) ||
-      legacy.includes(root) || new Set(legacy).size !== legacy.length) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "apple.legacySharedKeychainAccessGroups must contain distinct concrete groups other than the root group.",
-    );
-  }
-}
-
 function concreteKeychainAccessGroup(value: unknown): value is string {
   return typeof value === "string" && value.length >= 3 && value.length <= 255 &&
     /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/u.test(value);
-}
-
-function validateDirectAttestationComponent(value: ReactNativeDirectAttestationComponent): ReactNativeDirectAttestationComponent {
-  if (!isRecord(value) ||
-      !hasOnlyKeys(value, ["definitionID", "kind", "keychainAccessGroup", "requestedFeatures"]) ||
-      typeof value.definitionID !== "string" || !validIdentifier(value.definitionID) ||
-      (value.kind !== "action_extension" && value.kind !== "sso_extension") ||
-      !concreteKeychainAccessGroup(value.keychainAccessGroup) ||
-      !Array.isArray(value.requestedFeatures) || value.requestedFeatures.length === 0 ||
-      value.requestedFeatures.length > 256 ||
-      !value.requestedFeatures.every((feature) => typeof feature === "string" && validIdentifier(feature)) ||
-      new Set(value.requestedFeatures).size !== value.requestedFeatures.length) {
-    throw new LatchwayError(
-      "client_configuration_invalid",
-      "The direct-attestation component descriptor is invalid.",
-    );
-  }
-  return {
-    definitionID: value.definitionID,
-    kind: value.kind,
-    keychainAccessGroup: value.keychainAccessGroup,
-    requestedFeatures: Array.from(value.requestedFeatures as string[]),
-  };
 }
 
 function validateIOSComponent(

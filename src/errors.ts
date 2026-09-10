@@ -4,11 +4,11 @@ import { isCanonicalRequestID } from "./request-id.js";
 import { assertNoCredentialFields } from "./native-output.js";
 
 export type LatchwayLifecycleCode = "app_not_configured" | "configuration_conflict" |
-  "identity_authority_required" | "identity_unavailable" | "identity_refresh_required" | "account_changed" |
+  "identity_unavailable" | "identity_refresh_required" | "account_changed" |
   "client_logged_out" | "cleanup_required" | "client_disposed" | "native_version_incompatible";
 
 const lifecycleCodes: ReadonlySet<string> = new Set([
-  "app_not_configured", "configuration_conflict", "identity_authority_required", "identity_unavailable", "identity_refresh_required",
+  "app_not_configured", "configuration_conflict", "identity_unavailable", "identity_refresh_required",
   "account_changed", "client_logged_out", "cleanup_required", "client_disposed", "native_version_incompatible",
 ]);
 
@@ -25,7 +25,6 @@ export class LatchwayLifecycleError extends Error {
 const knownCodeMap = {
   app_not_configured: true,
   configuration_conflict: true,
-  identity_authority_required: true,
   identity_unavailable: true,
   identity_refresh_required: true,
   account_changed: true,
@@ -99,7 +98,7 @@ const knownCodeMap = {
   protocol_response_invalid: true,
   request_not_replayable: true,
   network_error: true,
-} as const satisfies Record<LatchwayErrorCode, true>;
+} as const satisfies Record<Exclude<LatchwayErrorCode, "identity_authority_required">, true>;
 
 const knownCodes: ReadonlySet<string> = new Set(Object.keys(knownCodeMap));
 

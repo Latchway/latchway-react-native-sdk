@@ -4,7 +4,6 @@ import { bindLatchwayAuth, firebaseProject, type LatchwayAuthEvent } from "../sr
 import { installNativeModuleForTesting, type NativeLatchwayModule } from "../src/testing.js";
 
 const APP = "0e5244a0-4c04-4bcf-a4da-6102a25ad8c1";
-const OWNER = "65267a94-2a5f-4f76-84ca-e697a21b44e5";
 const A = "58da9766-77db-42a0-a4dd-b0f71abae5db";
 const B = "41fa3a6c-c52e-4a51-a42e-77dc1949aada";
 const TICKET = "bedc5cb2-275d-46f8-9962-fa6d7b1c3e4b";
@@ -21,10 +20,10 @@ function deferred<T>() {
 }
 
 function fixture(platform = "react_native_ios") {
-  const state = { nativeAppABI: 2, identityMode: "supplied", contractVersion: "1.1.0", protocolVersion: 3,
-    nativeSDKVersion: platform === "react_native_ios" ? "1.3.0" : "1.2.0",
+  const state = { nativeAppABI: 3, identityMode: "supplied", contractVersion: "1.1.0", protocolVersion: 3,
+    nativeSDKVersion: platform === "react_native_ios" ? "2.0.0" : "1.2.1",
     baseURL: options.baseURL, applicationID: options.applicationID, environment: options.environment,
-    platform, appInstanceID: APP, authorityInstanceID: OWNER,
+    platform, appInstanceID: APP,
     state: "inactive", revision: 0, generationID: undefined as string | undefined };
   const calls: Array<Record<string, unknown>> = [];
   let cancelled = false;
@@ -209,13 +208,24 @@ describe("app-level signOut (mock bridge)", () => {
     await failure;
   });
 
-  it.each([["react_native_ios", "1.2.0"], ["react_native_android", "1.1.0"]])(
+  it.each([["react_native_ios", "1.2.0"], ["react_native_ios", "1.3.0"],
+    ["react_native_android", "1.1.0"], ["react_native_android", "1.2.0"]])(
     "requires a native rebuild for %s %s", async (platform, version) => {
       const f = fixture(platform);
       f.state.nativeSDKVersion = version;
       const app = await configureLatchwayApp(options);
       await expect(app.signOut()).rejects.toMatchObject({ code: "native_version_incompatible" });
       expect(f.calls.some(call => call.operation === "signOut")).toBe(false);
+    });
+
+  it.each([["react_native_ios", "2.0.1"], ["react_native_ios", "3.0.0"],
+    ["react_native_android", "1.2.2"], ["react_native_android", "2.0.0"]])(
+    "accepts compatible newer native version %s %s", async (platform, version) => {
+      const f = fixture(platform);
+      f.state.nativeSDKVersion = version;
+      const app = await configureLatchwayApp(options);
+      await app.signOut();
+      expect(f.calls.some(call => call.operation === "signOut")).toBe(true);
     });
 
   it("auth binding signOut retires an unpublished account without currentAccount", async () => {

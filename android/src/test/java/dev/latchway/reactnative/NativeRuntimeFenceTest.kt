@@ -16,7 +16,7 @@ public class NativeRuntimeFenceTest {
     @Test
     public fun lateTicketBindingOrClientAcquisitionAfterInvalidationIsReleasedNotPublished() = runBlocking {
         // The module uses this same transaction for identity tickets, exclusive
-        // identity bindings and both shared/legacy native clients.
+        // identity bindings and account-bound native clients.
         for (kind in listOf("ticket", "binding", "client")) {
             val runtime = NativeRuntimeFence()
             val entered = CompletableDeferred<Unit>()

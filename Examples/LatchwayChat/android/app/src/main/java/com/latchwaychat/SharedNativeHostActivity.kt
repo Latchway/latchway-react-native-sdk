@@ -90,10 +90,10 @@ private object EmbeddedAccountOwner {
         retire()
         observedIdentity = next
     }
-    suspend fun retire() {
+    suspend fun retire(signOutCurrent: Boolean = false) {
         epoch++; call?.cancel(); request?.cancel()
-        val captured = generation ?: app.snapshots.value.generationId
-        if (captured != null) app.logout(captured)
+        if (signOutCurrent) app.signOut()
+        else (generation ?: app.snapshots.value.generationId)?.let { app.logout(it) }
         client?.close(); client = null; generation = null; account = null
     }
     suspend fun activate() {
@@ -140,7 +140,7 @@ class SharedNativeHostActivity : Activity() {
         button("Open React Native chat") { startActivity(Intent(this, EmbeddedChatActivity::class.java)) }
         button("Sign out") {
             owner.epoch++; owner.call?.cancel(); owner.request?.cancel(); output.text = ""
-            transition { owner.retire(); owner.auth.signOut(); owner.observedIdentity = null; output.text = "Signed out locally and from Firebase." }
+            transition { owner.retire(signOutCurrent = true); owner.auth.signOut(); owner.observedIdentity = null; output.text = "Signed out locally and from Firebase." }
         }
         layout.addView(output)
         setContentView(ScrollView(this).apply { addView(layout) })

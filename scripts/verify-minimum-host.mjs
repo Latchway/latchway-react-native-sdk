@@ -6,15 +6,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedRegistryEnvironment, writeRegistryNpmrcs } from "./npm-registry-isolation.mjs";
+import { assertCurrentNativeSpec, assertCurrentNativeSchema } from "./current-consumer-contract.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const lock = JSON.parse(await readFile(join(root, "release-compatibility.json"), "utf8"));
 const minimum = lock.react_native.minimum;
 const sharedDevelopment = process.argv.includes("--shared-native-development");
-const sourceCandidate = sharedDevelopment
-  ? JSON.parse(await readFile(join(root, "release-candidate.shared-native.json"), "utf8"))
-  : null;
 const archiveArgument = process.argv.indexOf("--tarball");
 if (archiveArgument !== -1 && !process.argv[archiveArgument + 1]?.endsWith(".tgz")) {
   throw new Error("--tarball requires an existing npm archive path.");
@@ -72,6 +70,7 @@ try {
   assert.equal(hostRequire("@react-native/gradle-plugin/package.json").version, minimum.gradle_plugin);
   assert.equal(sdkRequire("react-native/package.json").version, minimum.react_native);
   assert.equal(sdkRequire("react/package.json").version, minimum.react);
+  assertCurrentNativeSpec(await readFile(sdkRequire.resolve("./src/native/NativeLatchway.ts"), "utf8"));
   const reactNativeRoot = join(directory, "node_modules/react-native");
   for (const entry of ["android", "ios", "babel.config.js", "metro.config.js", "app.json"]) {
     await cp(join(reactNativeRoot, "template", entry), join(directory, entry), { recursive: true });
@@ -89,25 +88,7 @@ try {
     const podfile = join(directory, "ios/Podfile");
     await writeFile(podfile, (await readFile(podfile, "utf8"))
       .replace("target 'HelloWorld' do", `target 'HelloWorld' do\n  pod 'Latchway/AppAttest', :path => ${JSON.stringify(nativePath)}`));
-    if (process.argv.includes("--android")) {
-      const repository = process.env.LATCHWAY_NATIVE_REPOSITORY;
-      assert.ok(repository, "Android source verification requires LATCHWAY_NATIVE_REPOSITORY");
-      const gradle = join(directory, "android/build.gradle");
-      assert.equal(sourceCandidate.android_source_build.compile_sdk, 34);
-      const sourceBuild = (await readFile(gradle, "utf8"))
-        .replace(/compileSdkVersion = 37/u, "compileSdkVersion = 34");
-      assert.match(sourceBuild, /compileSdkVersion = 34/u);
-      await writeFile(gradle, sourceBuild + `\nallprojects {
-        configurations.configureEach { resolutionStrategy.eachDependency {
-          if (requested.group == 'dev.latchway' && requested.name in ['latchway-core', 'latchway-okhttp', 'latchway-play-integrity', 'latchway-firebase-auth', 'latchway-bom']) useVersion('1.1.0-dev')
-        } }
-        repositories { exclusiveContent {
-          forRepository { maven { url = uri(${JSON.stringify(repository)}) } }
-          filter { includeGroup('dev.latchway') }
-        } }
-      }\n`);
-    }
-    console.log("Explicit local native source overrides enabled. These are not published dependency proofs.");
+    console.log("Explicit sibling iOS source override enabled; Android retains its exact published native dependency. This is not published iOS dependency proof.");
   }
   await cp(join(root, "integration/consumer/index.ts"), join(directory, "consumer.mts"));
   const typeConfig = JSON.parse(await readFile(join(root, "integration/consumer/tsconfig.json"), "utf8"));
@@ -124,9 +105,7 @@ try {
   run(process.execPath, [codegenRequire.resolve("@react-native/codegen/lib/cli/generators/generate-all.js"), schema,
     "LatchwayReactNativeSpec", generated, "dev.latchway.reactnative", "true"]);
   const parsed = JSON.parse(await readFile(schema, "utf8"));
-  const spec = parsed.modules.NativeLatchway.spec;
-  assert.equal((spec.methods ?? spec.properties).length, 20);
-  assert.ok((spec.methods ?? spec.properties).some((method) => method.name === "appCommand"));
+  assertCurrentNativeSchema(parsed);
   for (const platform of ["ios", "android"]) {
     run(process.execPath, [join(codegenRoot, "react-native/cli.js"), "bundle", "--platform", platform,
       "--dev", "false", "--entry-file", "index.js", "--bundle-output", join(generated, `${platform}.jsbundle`),

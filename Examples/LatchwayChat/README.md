@@ -1,6 +1,12 @@
 # LatchwayChat · React Native
 
-## Published shared-account example
+## Current source and published baseline
+
+The current iOS/RN source removes previous constructor and storage-adoption
+paths. This is a source-breaking, unreleased cleanup; it does not change any
+published package or historical receipt. Use the explicit source-development
+setup below to exercise this branch, with matching native bridge sources.
+The normal registry build remains the previously published baseline:
 
 This app consumes **published npm packages**: `@latchway/react-native` 1.2.0,
 `@latchway/client` 1.1.0 and `@latchway/langchain` 1.1.0. Their native pins are
@@ -90,23 +96,23 @@ For Android, first build the sibling native SDK's local publication repository:
 
 ```sh
 cd ../../../latchway-android
-./gradlew publishPublicArtifactsToPublicationTestRepository -Platchway.version=1.1.0-dev
+./gradlew publishPublicArtifactsToPublicationTestRepository -Platchway.version=1.2.1-dev
 cd ../latchway-react-native-sdk/Examples/LatchwayChat
 export LATCHWAY_NATIVE_REPOSITORY="$PWD/../../../latchway-android/build/publication-test-repository"
 npm run android
 ```
 
 The explicit development repository exclusively resolves `dev.latchway` to
-`1.1.0-dev` for this app and must never be used as release evidence. It overrides
-the bridge's published 1.1.0 pins only in this private example build.
+`1.2.1-dev` for this app and must never be used as release evidence. It overrides
+the bridge's exact 1.2.1 pins only in this private example build.
 The release-line versions and source-build scope are recorded in
 `../../release-candidate.shared-native.json`; this override does not change the
 normal registry lockfiles.
 
 Use an explicitly configured development environment with protocol 3 and
 required native host attestation policy allowing both native and `react-native`
-callers. Native iOS/Android root definitions must match that policy. The legacy
-React-Native-only root configuration below cannot be silently adopted. Real App
+callers. Native iOS/Android root definitions must match that policy. No separate
+React-Native-only root/session is adopted by the current source. Real App
 Attest/Play Integrity still applies; simulator compilation is not attestation.
 
 ### Two-account acceptance exercise
@@ -343,13 +349,13 @@ quota-boundary, load and comprehensive security verification are separate.
 ### Dependency notes
 
 For a non-resetting iOS Debug diagnosis, launch with `--diagnose-latchway-chat`.
-It requires an existing Firebase sign-in, explicitly performs the same account
-activation as **Resume chat**, then sends one fixed Latchway question through the
-normal LangChain path. Reconciliation and activation finish before the turn
-creates its cancellation/UI scope. Activation failures are recorded separately
+It requires an existing Firebase sign-in, explicitly supplies identity with the
+same sign-in intent as **Resume chat**, then sends one fixed Latchway question
+through the normal LangChain path. Account reconciliation and sign-in finish
+before the turn creates its cancellation/UI scope. Sign-in failures are recorded separately
 and stop before dispatch; request failures keep the normal send diagnostic.
 It never creates an account, signs out Firebase, revokes an installation or
-replays a failed user prompt. Normal launches do not activate. It consumes normal
+replays a failed user prompt. Normal launches do not create a new login. It consumes normal
 provider quota if dispatched. Do not combine it with the resetting
 `--verify-latchway-chat` mode.
 

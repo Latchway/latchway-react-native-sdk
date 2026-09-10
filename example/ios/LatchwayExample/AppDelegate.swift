@@ -139,58 +139,6 @@ final class LatchwayEvidence: NSObject {
     }
   }
 
-  /// Removes only the persisted React Native iOS session so a replacement
-  /// client must establish again with the existing installation key and App
-  /// Attest state. This is an example-only, one-use physical-device diagnostic;
-  /// it never resets the installation key or App Attest accepted-key marker.
-  @objc(retireSessionForAssertionReuse:environment:rootKeychainAccessGroup:legacySharedKeychainAccessGroups:resolve:reject:)
-  func retireSessionForAssertionReuse(
-    _ applicationID: String,
-    environment: String,
-    rootKeychainAccessGroup: String,
-    legacySharedKeychainAccessGroups: [String],
-    resolve: @escaping RCTPromiseResolveBlock,
-    reject: @escaping RCTPromiseRejectBlock
-  ) {
-    let promise = EvidencePromise(resolve: resolve, reject: reject)
-    Task {
-      do {
-        guard DeviceEvidenceFacts.physical,
-              !DeviceEvidenceFacts.simulator,
-              !DeviceEvidenceFacts.debugBuild,
-              !DeviceEvidenceFacts.testing,
-              !DeviceEvidenceFacts.debuggerAttached,
-              Self.safe(applicationID, pattern: "^app_[0-7][0-9A-HJKMNP-TV-Z]{25}$"),
-              Self.safe(environment, pattern: "^[a-z][a-z0-9_-]{0,62}$"),
-              Self.safe(rootKeychainAccessGroup, pattern: "^[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$"),
-              legacySharedKeychainAccessGroups.count <= 16,
-              Set(legacySharedKeychainAccessGroups).count == legacySharedKeychainAccessGroups.count,
-              !legacySharedKeychainAccessGroups.contains(rootKeychainAccessGroup),
-              legacySharedKeychainAccessGroups.allSatisfy({
-                Self.safe($0, pattern: "^[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$")
-              }),
-              PhysicalAssertionReuseGate.consume()
-        else { throw EvidenceFailure.invalid }
-
-        let storage = LatchwayKeychainSessionStorage(
-          applicationID: applicationID,
-          environment: environment,
-          rootKeychainAccessGroup: rootKeychainAccessGroup,
-          legacySharedKeychainAccessGroups: legacySharedKeychainAccessGroups,
-          clientRuntime: .reactNativeIOS
-        )
-        try await storage.clear()
-        promise.resolve(nil)
-      } catch {
-        promise.reject(
-          "device_assertion_verification_invalid",
-          "The physical App Attest assertion verification transition failed.",
-          nil
-        )
-      }
-    }
-  }
-
   @objc(write:resolve:reject:)
   func write(
     _ encoded: String,
@@ -501,19 +449,6 @@ private final class EvidencePromise: @unchecked Sendable {
   init(resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     self.resolve = resolve
     self.reject = reject
-  }
-}
-
-private enum PhysicalAssertionReuseGate {
-  private static let lock = NSLock()
-  private static var consumed = false
-
-  static func consume() -> Bool {
-    lock.lock()
-    defer { lock.unlock() }
-    guard !consumed else { return false }
-    consumed = true
-    return true
   }
 }
 

@@ -917,7 +917,7 @@ def stage_ios(
     configuration.update(
         {
             "LATCHWAY_IOS_ROOT_KEYCHAIN_ACCESS_GROUP": private_keychain_access_group,
-            "LATCHWAY_IOS_LEGACY_SHARED_KEYCHAIN_ACCESS_GROUPS": shared_keychain_access_group,
+            "LATCHWAY_IOS_SHARED_KEYCHAIN_ACCESS_GROUPS": shared_keychain_access_group,
         }
     )
     env_file = temporary / "ios-candidate.env"
@@ -1187,7 +1187,7 @@ def stage_ios(
             "appintents_provisioning_profile_uuid": appintents_profile_uuid,
             "shared_keychain_access_group": shared_keychain_access_group,
             "root_keychain_access_group": private_keychain_access_group,
-            "legacy_shared_keychain_access_groups": [shared_keychain_access_group],
+            "component_keychain_access_groups": [shared_keychain_access_group],
             "signing_certificate_sha256": certificate_pin,
             "executable_sha256": sha256(executable),
             "javascript_bundle_sha256": sha256(javascript_bundle),
