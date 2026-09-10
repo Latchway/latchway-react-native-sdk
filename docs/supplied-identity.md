@@ -1,7 +1,7 @@
 # Shared accounts with developer-supplied identity
 
-This guide describes React Native 2.0.0's fresh supplied-identity account model,
-with iOS 2.0.0 and Android 1.2.1. The gateway requirement is server
+This guide describes React Native 2.0.1's fresh supplied-identity account model,
+with iOS 2.0.1 and Android 1.2.2. The gateway requirement is server
 1.1.1 or later, contract 1.1.0 / wire 3 with `supplied_identity_v1`.
 
 The same integration works in a standalone RN app or an RN screen embedded in
@@ -12,7 +12,7 @@ or embedded-mode switch in this integration.
 
 ## Configure
 
-Install `@latchway/react-native@2.0.0`, update Pods and rebuild both native apps.
+Install `@latchway/react-native@2.0.1`, update Pods and rebuild both native apps.
 JavaScript and native bridge ABI 3 must be upgraded together; no JS-only update.
 Keep one native SDK copy if the host already uses Latchway directly.
 

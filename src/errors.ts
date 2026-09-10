@@ -170,10 +170,19 @@ export function fromNativeError(value: unknown): Error {
     statusValues.length > 0 && statusValues.every((candidate) => candidate === 503) &&
     retryableValues.length > 0 && retryableValues.every((candidate) => candidate === true);
   const hasServerMetadata = requestIDValues.length > 0 || statusValues.length > 0;
+  const retryAfter = optionalMetadata(record, userInfo, ["retryAfter", "retry_after"], isISODate);
+  const feature = optionalMetadata(record, userInfo, ["feature"], isFeature);
+  const validationErrors = optionalMetadata(record, userInfo, ["validationErrors", "errors"], isValidationErrors);
+  const supportedProtocolVersions = optionalMetadata(
+    record, userInfo, ["supportedProtocolVersions", "supported_protocol_versions"], isProtocolVersions,
+  );
+  const instance = optionalMetadata(record, userInfo, ["instance"], isURIReference);
+  const title = optionalMetadata(record, userInfo, ["title"], isTitle);
   if ((documentationURLValues.length > 0 && !documentationURLIsValid) ||
       (hasServerMetadata && !documentationURLIsValid) ||
       (mapped === "operation_indeterminate" && !validIndeterminateMetadata) ||
-      (mapped !== "operation_indeterminate" && operationValues.length > 0)) {
+      (mapped !== "operation_indeterminate" && operationValues.length > 0) ||
+      [retryAfter, feature, validationErrors, supportedProtocolVersions, instance, title].includes(INVALID_METADATA)) {
     return new LatchwayError(
       "protocol_response_invalid",
       "Latchway returned invalid native error metadata.",
@@ -185,7 +194,61 @@ export function fromNativeError(value: unknown): Error {
     status,
     retryable,
     operationID,
+    retryAfter: retryAfter as string | undefined,
+    feature: feature as string | undefined,
+    validationErrors: (validationErrors as readonly { path: string; message: string }[] | undefined)
+      ?.map((error) => ({ path: safeMessage(error.path), message: safeMessage(error.message) })),
+    supportedProtocolVersions: supportedProtocolVersions as readonly number[] | undefined,
+    instance: instance as string | undefined,
+    title: title === undefined ? undefined : safeMessage(title as string),
   });
+}
+
+const INVALID_METADATA = Symbol("invalid native error metadata");
+
+function optionalMetadata<T>(
+  record: Record<string, unknown>,
+  userInfo: Record<string, unknown>,
+  keys: readonly string[],
+  validate: (value: unknown) => value is T,
+): T | undefined | typeof INVALID_METADATA {
+  const values = presentValues(record, userInfo, keys);
+  if (values.length === 0) return undefined;
+  const first = values[0];
+  if (!validate(first) || values.some((value) => !validate(value) || JSON.stringify(value) !== JSON.stringify(first))) {
+    return INVALID_METADATA;
+  }
+  return first;
+}
+
+function isISODate(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
+function isFeature(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,62}$/u.test(value);
+}
+
+function isTitle(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256 && !/\p{Cc}/u.test(value);
+}
+
+function isURIReference(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 2048 && !/[\s\p{Cc}]/u.test(value);
+}
+
+function isValidationErrors(value: unknown): value is readonly { path: string; message: string }[] {
+  return Array.isArray(value) && value.length <= 100 && value.every((entry) =>
+    isRecord(entry) && Object.keys(entry).length === 2 &&
+    typeof entry.path === "string" && entry.path.length <= 512 &&
+    typeof entry.message === "string" && entry.message.length <= 1024);
+}
+
+function isProtocolVersions(value: unknown): value is readonly number[] {
+  return Array.isArray(value) && value.length <= 100 && new Set(value).size === value.length &&
+    value.every((version) => Number.isSafeInteger(version) && version > 0);
 }
 
 export function nativeUnavailable(cause: unknown): LatchwayError {

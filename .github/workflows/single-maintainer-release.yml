@@ -1,4 +1,4 @@
-name: Publish React Native SDK v2.0.0
+name: Publish React Native SDK v2.0.1
 
 on:
   workflow_dispatch:
@@ -8,19 +8,19 @@ permissions:
   id-token: write
 
 concurrency:
-  group: latchway-react-native-v2.0.0-publication
+  group: latchway-react-native-v2.0.1-publication
   cancel-in-progress: false
 
 env:
   NODE_VERSION: 24.19.0
   NPM_VERSION: 11.6.2
   PNPM_VERSION: 10.15.0
-  RELEASE_TAG: v2.0.0
-  RELEASE_VERSION: 2.0.0
+  RELEASE_TAG: v2.0.1
+  RELEASE_VERSION: 2.0.1
 
 jobs:
   publish:
-    name: Pack, publish, and release v2.0.0
+    name: Pack, publish, and release v2.0.1
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -41,12 +41,12 @@ jobs:
         run: |
           npm install --global "npm@$NPM_VERSION"
           pnpm install --frozen-lockfile
-      - name: Build and pack v2.0.0
+      - name: Build and pack v2.0.1
         run: |
           pnpm build
           mkdir -p "$RUNNER_TEMP/release"
           pnpm pack --pack-destination "$RUNNER_TEMP/release"
-      - name: Publish v2.0.0 with trusted npm publishing
+      - name: Publish v2.0.1 with trusted npm publishing
         run: >-
           npm publish
           "$RUNNER_TEMP/release/latchway-react-native-$RELEASE_VERSION.tgz"
@@ -60,4 +60,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Latchway React Native SDK $RELEASE_VERSION" \
-            --notes-file docs/release/v2.0.0.md
+            --notes-file docs/release/v2.0.1.md

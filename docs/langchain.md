@@ -7,7 +7,7 @@ DPoP and refresh credentials stay native.
 
 ## Install
 
-This guide targets the 2.0.0 supplied-identity API. Upgrade JavaScript and native
+This guide targets the 2.0.1 supplied-identity API. Upgrade JavaScript and native
 apps together; older constructors and authority callbacks are no longer exposed.
 
 The complete LangChain example is tested on React Native 0.82 / React 19.1,
@@ -17,15 +17,15 @@ require downgrading the example or guarantee every third-party dependency on
 the minimum host.
 
 ```sh
-npm install --save-exact @latchway/react-native@2.0.0 @latchway/langchain@1.1.0 \
-  @latchway/client@1.1.0 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
+npm install --save-exact @latchway/react-native@2.0.1 @latchway/langchain@1.1.0 \
+  @latchway/client@1.1.1 @langchain/core@1.2.9 @langchain/openai@1.5.10 openai@7.8.0
 ```
 
 Keep the lockfile. LangChain is not a dependency of the base React Native SDK.
 The base has only two required runtime dependencies: `@latchway/client` for
 shared transport/errors and `web-streams-polyfill` for a private native-response
 stream fallback. That fallback does not replace global streams.
-The native dependencies are iOS 2.0.0 and Android 1.2.1. Normal native
+The native dependencies are iOS 2.0.1 and Android 1.2.2. Normal native
 signing, Firebase/other identity and gateway platform policy setup still applies.
 
 ## Application-owned runtime and Babel setup
@@ -184,12 +184,20 @@ Both factories default to no automatic framework retries. Native pre-dispatch
 session recovery is separate; uncertain provider dispatches must not be replayed
 casually. Explicit `chatOptions.maxRetries` is an application policy choice.
 
-## Response handling in 1.2.1
+## Error and response handling
 
-Upgrade from 1.2.0 with `npm install --save-exact @latchway/react-native@1.2.1`,
-keep the lockfile, and regenerate the app's JavaScript bundle through your usual
-build workflow. The native SDK pins, gateway configuration, account setup and
-app-owned runtime files do not change for this patch.
+Install the versions above, keep the lockfile, update Pods and rebuild both native
+apps. Version 2.0.1 preserves the native Fetch body-reader fix introduced in 1.2.1
+and adds safe error diagnostics across the native bridge. Existing account setup,
+app-owned runtime files and gateway configuration do not need new options.
+
+For custom fetch, use `errorFromResponse(response)` when `!response.ok`, then
+display `error.message`, `error.code` and `error.requestID`. Safe `validationErrors`
+explain bad tool/schema fields or attestation/quota configuration. `retryAfter`
+is an absolute reset time when the gateway knows one. Framework HTTP errors may
+wrap the same canonical gateway Problem in `error.error`; do not display raw
+provider or transport bodies. Interrupted streams retain their response request
+ID in the native transport error and are not automatically replayed.
 
 The fix makes Fetch body readers consume the underlying native bytes on React
 Native runtimes with incomplete stream-backed `Response` support. Both a normal

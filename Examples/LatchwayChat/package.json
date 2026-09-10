@@ -17,7 +17,7 @@
   "dependencies": {
     "@langchain/core": "1.2.9",
     "@langchain/openai": "1.5.10",
-    "@latchway/client": "1.1.0",
+    "@latchway/client": "1.1.1",
     "@latchway/langchain": "1.1.0",
     "@latchway/react-native": "2.0.0",
     "@react-native-firebase/app": "25.1.0",

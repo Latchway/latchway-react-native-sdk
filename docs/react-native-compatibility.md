@@ -34,9 +34,9 @@ React Native 0.82, React 19.1 and Firebase dependency locks.
 
 ## Android host settings
 
-### Version 2.0.0 setup
+### Version 2.0.1 setup
 
-The Android 1.2.1 SDK and RN 2.0.0 bridge compile against API
+The Android 1.2.2 SDK and RN 2.0.1 bridge compile against API
 34, with `minCompileSdk = 34` in their AAR metadata. Android native runtime
 minimum remains 23; the RN bridge runtime minimum remains 24. No Firebase,
 Play Integrity or Kotlin dependency downgrade is part of this change.
@@ -141,7 +141,7 @@ to the target. Hosts that already contain Swift do not need another dummy file.
 
 ## Verify current source at the minimum
 
-The current checkout and consumer scripts target the 2.0.0 fresh-account
+The current checkout and consumer scripts target the 2.0.1 fresh-account
 API and its 17-method ABI-3 bridge. Build a new archive from this checkout;
 do not pass an old 1.x archive as proof of
 the changed API. These checks deliberately reject the older bridge surface.
@@ -150,7 +150,7 @@ These checks do not publish packages or change installed application dependencie
 ```sh
 pnpm build
 pnpm pack --pack-destination /absolute/path/to/current-source-archives
-pnpm compatibility:minimum --tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.0.tgz --keep
+pnpm compatibility:minimum --tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.1.tgz --keep
 ```
 
 The check installs that archive with strict npm peer validation, asserts that
@@ -164,11 +164,11 @@ For a current-source iOS native build, add `--shared-native-development --ios`.
 Keep the matching fresh-only `latchway-ios-sdk` checkout next to this repository.
 The script changes only the disposable host's CocoaPods resolution to that
 explicit sibling source. Omit the source flag for registry-only native resolution
-against pinned iOS 2.0.0 after publication. Android uses native 1.2.1; no local
+against pinned iOS 2.0.1 after publication. Android uses native 1.2.2; no local
 Maven repository is required for a published consumer.
 
 The core-only package consumer can also check a freshly packed archive with
-`pnpm consumer:check --published --react-native-tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.0.tgz`.
+`pnpm consumer:check --published --react-native-tarball /absolute/path/to/current-source-archives/latchway-react-native-2.0.1.tgz`.
 Here `--published` selects the registry **shared JS client dependency** only.
 It does not mean the React Native archive is published or prove a native build.
 

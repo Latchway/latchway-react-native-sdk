@@ -1,7 +1,7 @@
 # Native installation
 
-React Native 2.0.0 uses the fresh shared-account model and pins iOS 2.0.0 plus
-Android 1.2.1. Install Pods and rebuild both native apps; bridge ABI 3 is not
+React Native 2.0.1 uses the fresh shared-account model and pins iOS 2.0.1 plus
+Android 1.2.2. Install Pods and rebuild both native apps; bridge ABI 3 is not
 compatible with an older JS/native bundle. Historical artifacts are unchanged.
 
 For React Native 0.74 hosts, follow the complete

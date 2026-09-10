@@ -3,7 +3,7 @@
 ## Published SDK 2.0.0
 
 This app consumes **published npm packages**: `@latchway/react-native` 2.0.0,
-`@latchway/client` 1.1.0 and `@latchway/langchain` 1.1.0. Their native pins are
+`@latchway/client` 1.1.1 and `@latchway/langchain` 1.1.0. Their native pins are
 CocoaPods Latchway 2.0.0 and Maven Central Android 1.2.1. Use gateway 1.1.3 or
 newer for the App Attest acceptance and Play testing policies. Normal Metro,
 TypeScript and autolinking resolve installed packages, not sibling SDK source.

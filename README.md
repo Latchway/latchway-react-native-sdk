@@ -78,8 +78,8 @@ See [supplied identity](docs/supplied-identity.md) and
   explicit required-attestation `sharedNativeCallers` policy.
 - Node 24.19+ and pnpm 10.15 for repository development.
 
-Install `@latchway/react-native@2.0.0`, update Pods, and rebuild both native apps.
-Native pins are iOS 2.0.0 and Android 1.2.1; the JavaScript client stays 1.1.0.
+Install `@latchway/react-native@2.0.1`, update Pods, and rebuild both native apps.
+Native pins are iOS 2.0.1 and Android 1.2.2; the JavaScript client is 1.1.1.
 Use one native SDK implementation. RN and native must not link separate iOS
 CocoaPods and SPM copies. See [native installation](docs/native-installation.md)
 and [minimum-host toolchain](docs/react-native-compatibility.md).
@@ -142,8 +142,14 @@ attestation evidence never return to JavaScript. Caller-owned authorization,
 cookies, provider API keys and protocol headers are rejected or stripped;
 a provider SDK's placeholder key is never forwarded.
 
-Errors expose only safe codes, status, request IDs and canonical documentation
-links. Preserve `operation_indeterminate`'s operation ID for reconciliation
+Errors expose safe gateway messages, codes, status, request IDs, retry-after
+times, feature and validation errors, supported protocol versions, titles,
+instance references and canonical documentation links when supplied. Unknown
+optional fields are ignored, not copied across the boundary. Use
+`errorFromResponse(response)` for an unsuccessful custom-fetch response, then
+show `error.message` and `error.requestID`; do not log the entire request or body.
+An interrupted body read preserves header correlation and is not replayable.
+Preserve `operation_indeterminate`'s operation ID for reconciliation
 instead of automatic retry. See [security](docs/security.md),
 [architecture](docs/architecture.md) and [SECURITY.md](SECURITY.md).
 

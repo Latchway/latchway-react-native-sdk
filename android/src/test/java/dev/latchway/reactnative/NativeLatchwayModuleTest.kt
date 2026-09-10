@@ -3,11 +3,13 @@ package dev.latchway.reactnative
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.BridgeReactContext
 import com.facebook.react.bridge.JavaOnlyMap
+import com.facebook.react.bridge.JavaOnlyArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableMap
 import dev.latchway.core.LATCHWAY_CONTRACT_VERSION
 import dev.latchway.core.LatchwayErrorCode
 import dev.latchway.core.LatchwayException
+import dev.latchway.core.LatchwayTransportResponse
 import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_ID
 import dev.latchway.okhttp.LATCHWAY_REACT_NATIVE_FRAMEWORK_VERSION
 import okhttp3.Authenticator
@@ -264,6 +266,37 @@ public class NativeLatchwayModuleTest {
     }
 
     @Test
+    public fun gatewayErrorsPreserveSafeDetailAndExistingProblemDiagnostics() {
+        val body = """{
+            "type":"https://docs.latchway.dev/errors/quota-exceeded",
+            "documentation_url":"https://docs.latchway.dev/errors/quota-exceeded",
+            "title":"Quota exceeded","status":429,"code":"quota_exceeded",
+            "detail":"The weekly total token allowance is exhausted.",
+            "request_id":"req_12345678","retryable":true,
+            "retry_after":"2026-09-14T00:00:00Z","feature":"chat",
+            "errors":[{"path":"quota.total_tokens","message":"The weekly user limit is exhausted."}],
+            "supported_protocol_versions":[1,2,3],"instance":"/requests/req_12345678"
+        }""".trimIndent()
+        val failure = LatchwayException.fromResponse(LatchwayTransportResponse(429,
+            mapOf("Content-Type" to listOf("application/problem+json"), "X-Latchway-Request-ID" to listOf("req_12345678")),
+            body.toByteArray()))
+        val fake = FakeNativeClientOperations()
+        fake.refreshFailures += failure
+        val rejected = configuredFixture(fake).refresh().rejection()
+        assertEquals("quota_exceeded", rejected.code)
+        assertEquals("The weekly total token allowance is exhausted.", rejected.message)
+        val info = requireNotNull(rejected.userInfo)
+        assertEquals("req_12345678", info.getString("requestID"))
+        assertEquals("2026-09-14T00:00:00Z", info.getString("retryAfter"))
+        assertEquals("chat", info.getString("feature"))
+        assertEquals("Quota exceeded", info.getString("title"))
+        assertEquals("/requests/req_12345678", info.getString("instance"))
+        assertEquals(listOf(1, 2, 3), info.getArray("supportedProtocolVersions")?.toArrayList()?.map { (it as Number).toInt() })
+        assertEquals("quota.total_tokens", info.getArray("validationErrors")?.getMap(0)?.getString("path"))
+        assertNativeIdentityPrivate(fake)
+    }
+
+    @Test
     public fun fwAuth105GeneratedSpecDelegatesFamilyRetirementAndSurfacesTerminalState() {
         // FW-AUTH-105: terminal-state enforcement is implemented by the exact
         // native SDK; this compiled test proves the generated bridge forwards it.
@@ -366,7 +399,7 @@ public class NativeLatchwayModuleTest {
         baseURL: String = "https://gateway.example.test",
     ): ModuleFixture {
         val reactContext: ReactApplicationContext = BridgeReactContext(RuntimeEnvironment.getApplication())
-        val module = NativeLatchwayModule(reactContext) { JavaOnlyMap() }
+        val module = NativeLatchwayModule(reactContext, userInfoArrayFactory = { JavaOnlyArray() }) { JavaOnlyMap() }
         val fixture = ModuleFixture(module, fake, baseURL)
         fixtures += fixture
 

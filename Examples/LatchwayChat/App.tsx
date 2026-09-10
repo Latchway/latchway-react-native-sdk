@@ -31,6 +31,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { config, validateConfig } from './src/config';
 import {accounts, identitySnapshotDiagnostic, reconcileIdentity, signOutLatchway} from './src/latchway-app';
 import {diagnosticLocation, knownFailure} from './src/diagnostic';
+import {chatErrorDetail} from './src/error-display';
 import {runExistingIdentityProbe} from './src/diagnostic-probe';
 import {
   directTurn,
@@ -80,7 +81,7 @@ function friendly(error: unknown) {
         } as Record<string, string>
       )[code] ?? 'Firebase sign-in failed. Please try again.'
     );
-  return (
+  return chatErrorDetail(error) ?? (
     'Request failed (' +
     code +
     '). Check Settings for connection details. No automatic retry was sent.'

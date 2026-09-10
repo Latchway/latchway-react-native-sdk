@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and releases will follow Semantic
 Versioning once package publication begins.
 
+## [2.0.1] - 2026-09-10
+
+- Preserve safe gateway detail and existing Problem diagnostics across iOS,
+  Android and JavaScript: retry timing, feature, field errors, supported protocol
+  versions, title and instance reference. Validate known optional fields and
+  keep native credential/error redaction boundaries intact.
+- Retain HTTP status and request ID for interrupted native response streams,
+  without automatic replay. The chat example now reads non-success Problems and
+  presents actionable error detail instead of discarding the response body.
+- Pin JavaScript client 1.1.1, iOS 2.0.1 and Android 1.2.2. React/RN minimums,
+  wire protocol, supplied identities and shared app lifecycle remain unchanged.
+
 ## [2.0.0] - 2026-09-10
 
 ### Attestation development

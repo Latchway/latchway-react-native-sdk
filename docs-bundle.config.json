@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "repository": "https://github.com/Latchway/latchway-react-native-sdk",
-  "release": "v2.0.0",
-  "version": "2.0.0",
+  "release": "v2.0.1",
+  "version": "2.0.1",
   "package": "@latchway/react-native",
   "documents": [
     {
@@ -54,12 +54,20 @@
         "file": "CHANGELOG.md",
         "start_line": 1
       }
+    },
+    {
+      "path": "frameworks/error-handling.md",
+      "kind": "framework",
+      "source": {
+        "file": "docs/release/v2.0.1.md",
+        "start_line": 1
+      }
     }
   ],
   "supported_versions": [
     {
       "name": "@latchway/react-native",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "source": {
         "file": "package.json",
         "start_line": 1,
@@ -68,7 +76,7 @@
     },
     {
       "name": "@latchway/react-native/testing",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "source": {
         "file": "package.json",
         "start_line": 1,
@@ -77,7 +85,7 @@
     },
     {
       "name": "@latchway/react-native/package.json",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "source": {
         "file": "package.json",
         "start_line": 1,
@@ -104,7 +112,7 @@
     },
     {
       "name": "@latchway/client",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "source": {
         "file": "package.json",
         "start_line": 99,
@@ -181,7 +189,7 @@
     },
     {
       "name": "Latchway iOS AppAttest",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "source": {
         "file": "LatchwayReactNative.podspec",
         "start_line": 27,
@@ -244,7 +252,7 @@
     },
     {
       "name": "Latchway Android OkHttp",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "source": {
         "file": "android/build.gradle.kts",
         "start_line": 77,
@@ -253,7 +261,7 @@
     },
     {
       "name": "Latchway Android Play Integrity",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "source": {
         "file": "android/build.gradle.kts",
         "start_line": 77,

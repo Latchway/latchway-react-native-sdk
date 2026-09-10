@@ -16,7 +16,7 @@ for (const [location, pkg] of Object.entries(lock.packages)) {
 for (const name of ['@latchway/react-native', '@latchway/client', '@latchway/langchain']) {
   const location = 'node_modules/' + name;
   const pkg = lock.packages[location];
-  const expected = {'@latchway/client': '1.1.0', '@latchway/langchain': '1.1.0', '@latchway/react-native': '2.0.0'};
+  const expected = {'@latchway/client': '1.1.1', '@latchway/langchain': '1.1.0', '@latchway/react-native': '2.0.0'};
   assert.equal(pkg.version, expected[name]);
   assert.equal(new URL(pkg.resolved).origin, 'https://registry.npmjs.org');
   assert(pkg.integrity.startsWith('sha512-'));

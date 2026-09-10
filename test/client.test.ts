@@ -485,6 +485,23 @@ describe("React Native Latchway native-owned fetch", () => {
     expect(native.closeCalls).toHaveLength(1);
   });
 
+  it("preserves response correlation and prevents replay after a failed body read", async () => {
+    const native = new FakeNativeModule();
+    native.responses.push({ headers: [["x-latchway-request-id", REQUEST_ID]], chunks: ["partial"] });
+    install(native);
+    const client = create();
+    const response = await client.fetch("/v1/responses", { method: "POST", latchwayFeature: "chat" });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("missing response stream");
+    expect((await reader.read()).done).toBe(false);
+    native.error = Object.assign(new Error("The native response stream was interrupted."), { code: "network_unavailable" });
+    await expect(reader.read()).rejects.toMatchObject({
+      code: "network_error", requestID: REQUEST_ID, status: 200, retryable: false,
+    });
+    expect(native.requests).toHaveLength(1);
+    expect(native.closeCalls).toHaveLength(1);
+  });
+
   it("cancels native dispatch when aborted before response headers", async () => {
     const native = new FakeNativeModule();
     native.startGate = new Promise<string>(() => {});
@@ -782,6 +799,34 @@ describe("React Native Latchway native-owned fetch", () => {
       ...canonical,
       documentationURL: "https://malicious.invalid/session-expired",
     })).toMatchObject({ code: "protocol_response_invalid" });
+  });
+
+  it("preserves validated native error diagnostics and rejects invalid optional metadata", () => {
+    const canonical = {
+      code: "quota_exceeded", message: "The weekly total token allowance is exhausted.",
+      userInfo: {
+        code: "quota_exceeded", requestID: REQUEST_ID, status: 429, retryable: true,
+        documentationURL: "https://docs.latchway.dev/errors/quota-exceeded",
+        retryAfter: "2026-09-14T00:00:00Z", feature: "chat", title: "Quota exceeded",
+        instance: `/requests/${REQUEST_ID}`, supportedProtocolVersions: [1, 2, 3],
+        validationErrors: [{ path: "quota.total_tokens", message: "The limit is 1000000 tokens per user per week." }],
+      },
+    };
+    expect(fromNativeError(canonical)).toMatchObject({
+      code: "quota_exceeded", message: canonical.message, requestID: REQUEST_ID,
+      retryAfter: canonical.userInfo.retryAfter, feature: "chat", title: "Quota exceeded",
+      instance: canonical.userInfo.instance, supportedProtocolVersions: [1, 2, 3],
+      validationErrors: canonical.userInfo.validationErrors,
+    });
+    for (const invalid of [
+      { retryAfter: "tomorrow" }, { feature: "../secret" }, { supportedProtocolVersions: [3, 3] },
+      { validationErrors: [{ path: 3, message: "bad" }] }, { instance: "bad uri" },
+    ]) {
+      expect(fromNativeError({ ...canonical, userInfo: { ...canonical.userInfo, ...invalid } }))
+        .toMatchObject({ code: "protocol_response_invalid", requestID: REQUEST_ID, status: 429 });
+    }
+    expect(fromNativeError({ ...canonical, retryAfter: "2026-09-15T00:00:00Z" }))
+      .toMatchObject({ code: "protocol_response_invalid" });
   });
 
   it("preserves every v1 family, component, framework, and transport native error code", () => {

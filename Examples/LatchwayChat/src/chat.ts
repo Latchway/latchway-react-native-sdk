@@ -1,5 +1,6 @@
 import { bindLatchwayTools, createLatchwayResponsesModel, toLatchwayReplayMessage } from '@latchway/langchain';
 import type { LatchwayClient } from '@latchway/react-native';
+import { errorFromResponse, LatchwayError } from '@latchway/client';
 import {
   AIMessageChunk,
   BaseMessage,
@@ -177,15 +178,16 @@ export async function directTurn(
     },
   );
   if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(
-      'Gateway rejected chat (HTTP ' +
-        response.status +
-        '). Check connection diagnostics.',
-    );
+    throw await errorFromResponse(response);
   }
+  const rawRequestID = response.headers.get('X-Latchway-Request-ID');
+  const requestID = rawRequestID && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(rawRequestID)
+    ? rawRequestID : undefined;
+  const streamFailure = (message: string) => new LatchwayError('upstream_protocol_error', message, {
+    requestID, status: response.status, retryable: false,
+  });
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('Streaming body is unavailable.');
+  if (!reader) throw streamFailure('The gateway did not provide a streaming response body.');
   const decoder = new TextDecoder();
   let buffer = '',
     answer = '',
@@ -202,14 +204,19 @@ export async function directTurn(
       doneEvent = true;
       return;
     }
-    const chunk = JSON.parse(data);
-    if (chunk.error) throw new Error('Provider stream failed.');
+    let chunk;
+    try { chunk = JSON.parse(data); }
+    catch { throw streamFailure('The response stream contained an invalid event.'); }
+    if (!chunk || typeof chunk !== 'object' || chunk.error ||
+        chunk.type === 'error' || chunk.type === 'response.failed' || chunk.type === 'response.incomplete') {
+      throw streamFailure('The upstream model could not complete the response.');
+    }
     const text = chunk.choices?.[0]?.delta?.content;
     if (typeof text === 'string') {
       answer += text;
       onText(answer);
     }
-    if (answer.length > 64_000) throw new Error('Answer exceeds demo limit.');
+    if (answer.length > 64_000) throw streamFailure('The answer exceeds the demo limit.');
   };
   try {
     while (true) {
@@ -217,7 +224,7 @@ export async function directTurn(
       const part = await reader.read();
       if (part.done) break;
       bytes += part.value.byteLength;
-      if (bytes > 2_000_000) throw new Error('Stream exceeds demo limit.');
+      if (bytes > 2_000_000) throw streamFailure('The response stream exceeds the demo limit.');
       buffer += decoder.decode(part.value, { stream: true });
       buffer = buffer.replace(/\r\n/g, '\n');
       let end;
@@ -225,21 +232,24 @@ export async function directTurn(
         consume(buffer.slice(0, end));
         buffer = buffer.slice(end + 2);
       }
-      if (buffer.length > 256_000) throw new Error('Event exceeds demo limit.');
+      if (buffer.length > 256_000) throw streamFailure('The response event exceeds the demo limit.');
     }
     buffer += decoder.decode();
     if (buffer.trim()) consume(buffer);
     if (!doneEvent || !answer.trim())
-      throw new Error('Stream ended before completion.');
+      throw streamFailure('The response stream ended before completion. The partial answer may be incomplete.');
     return {
       text: answer,
       messages: [],
       modelCalls: 1,
       toolCalls: 0,
-      requestIDs: [response.headers.get('X-Latchway-Request-ID')].filter(
-        (id): id is string => !!id,
-      ),
+      requestIDs: requestID ? [requestID] : [],
     };
+  } catch (error) {
+    if (signal.aborted || error instanceof LatchwayError) throw error;
+    throw new LatchwayError('network_error', 'The response stream was interrupted before completion.', {
+      requestID, status: response.status, retryable: false, cause: error,
+    });
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

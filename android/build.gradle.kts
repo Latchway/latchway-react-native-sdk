@@ -12,7 +12,7 @@ kotlin {
 }
 
 group = "dev.latchway"
-version = "2.0.0"
+version = "2.0.1"
 
 // Resolve from the consuming build, not this library's node_modules. npm and
 // pnpm can hoist React Native and Codegen; the host owns both versions.
@@ -74,8 +74,8 @@ dependencies {
     // Also use the host version in standalone library builds, where no app
     // plugin is present to align react-android automatically.
     implementation("com.facebook.react:react-android:$hostReactNativeVersion")
-    implementation("dev.latchway:latchway-okhttp:1.2.1")
-    implementation("dev.latchway:latchway-play-integrity:1.2.1")
+    implementation("dev.latchway:latchway-okhttp:1.2.2")
+    implementation("dev.latchway:latchway-play-integrity:1.2.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

@@ -333,6 +333,12 @@ public final class LatchwayNativeBridge: NSObject, @unchecked Sendable {
                 "operationID": failure.operationID as Any,
                 "status": failure.status as Any,
                 "retryable": failure.retryable,
+                "retryAfter": failure.retryAfter as Any,
+                "feature": failure.feature as Any,
+                "validationErrors": failure.validationErrors as Any,
+                "supportedProtocolVersions": failure.supportedProtocolVersions as Any,
+                "instance": failure.instance as Any,
+                "title": failure.title as Any,
             ])
         ))
     }
@@ -1366,6 +1372,12 @@ private struct NativeFailure {
     let operationID: String?
     let status: Int?
     let retryable: Bool
+    var retryAfter: String?
+    var feature: String?
+    var validationErrors: [[String: String]]?
+    var supportedProtocolVersions: [Int]?
+    var instance: String?
+    var title: String?
 
     init(_ error: Error) {
         if let error = error as? LatchwayLifecycleError {
@@ -1425,16 +1437,29 @@ private struct NativeFailure {
                 code = failure.code; message = failure.message
                 requestID = failure.requestID; operationID = failure.operationID
                 status = failure.status; retryable = failure.retryable
+                retryAfter = failure.retryAfter; feature = failure.feature
+                validationErrors = failure.validationErrors
+                supportedProtocolVersions = failure.supportedProtocolVersions
+                instance = failure.instance; title = failure.title
             }
+        } else if let error = error as? LatchwayHTTPResponseError {
+            code = "response_invalid"; message = "Latchway returned an invalid HTTP response."
+            requestID = error.requestID; operationID = nil; status = error.statusCode; retryable = false
         } else if let error = error as? LatchwayError {
             switch error {
             case let .server(problem):
                 code = problem.code.description
-                message = "The Latchway gateway rejected the request."
+                message = problem.detail
                 requestID = problem.requestID
                 operationID = problem.operationID
                 status = problem.status
                 retryable = problem.retryable
+                retryAfter = problem.retryAfter.map { ISO8601DateFormatter().string(from: $0) }
+                feature = problem.feature
+                validationErrors = problem.errors?.map { ["path": $0.path, "message": $0.message] }
+                supportedProtocolVersions = problem.supportedProtocolVersions
+                instance = problem.instance
+                title = problem.title
             case .invalidConfiguration:
                 code = "invalid_configuration"; message = "Latchway native configuration is invalid."
                 requestID = nil; operationID = nil; status = nil; retryable = false

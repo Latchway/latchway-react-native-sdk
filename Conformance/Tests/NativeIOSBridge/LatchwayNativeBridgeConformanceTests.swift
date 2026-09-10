@@ -4,6 +4,51 @@ import Latchway
 import XCTest
 
 final class LatchwayNativeBridgeConformanceTests: XCTestCase {
+    func testGatewayProblemPreservesSafeDetailAndDiagnosticsAcrossBridge() async throws {
+        let problem = LatchwayProblem(code: .init(rawValue: "quota_exceeded"), title: "Quota exceeded",
+            detail: "The weekly total token allowance is exhausted.", status: 429,
+            requestID: "req_12345678", retryable: true,
+            retryAfter: Date(timeIntervalSince1970: 1_789_344_000), feature: "chat",
+            errors: [.init(path: "quota.total_tokens", message: "The weekly user limit is exhausted.")],
+            supportedProtocolVersions: [1, 2, 3], instance: "/requests/req_12345678")
+        let native = RecordingNativeClient(failure: LatchwayError.server(problem))
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        let bridge = LatchwayNativeBridge(store: store)
+        do {
+            try await refresh(bridge)
+            XCTFail("Expected gateway rejection")
+        } catch let failure as BridgeFailure {
+            XCTAssertEqual(failure.code, "quota_exceeded")
+            XCTAssertEqual(failure.message, problem.detail)
+            let metadata = try XCTUnwrap(failure.error?.userInfo)
+            XCTAssertEqual(metadata["requestID"] as? String, problem.requestID)
+            XCTAssertEqual(metadata["retryAfter"] as? String, "2026-09-14T00:00:00Z")
+            XCTAssertEqual(metadata["feature"] as? String, "chat")
+            XCTAssertEqual(metadata["title"] as? String, "Quota exceeded")
+            XCTAssertEqual(metadata["instance"] as? String, problem.instance)
+            XCTAssertEqual(metadata["supportedProtocolVersions"] as? [Int], [1, 2, 3])
+            XCTAssertEqual(metadata["validationErrors"] as? [[String: String]],
+                [["path": "quota.total_tokens", "message": "The weekly user limit is exhausted."]])
+        }
+        await store.invalidate()
+    }
+
+    func testInvalidHTTPResponsePreservesHeaderCorrelationAcrossBridge() async throws {
+        let native = RecordingNativeClient(failure: LatchwayHTTPResponseError(statusCode: 502, requestID: "req_12345678"))
+        let store = LatchwayBridgeStore()
+        try await store.register(clientID: "rn-ios-conformance", context: native)
+        do {
+            try await refresh(LatchwayNativeBridge(store: store))
+            XCTFail("Expected invalid response rejection")
+        } catch let failure as BridgeFailure {
+            XCTAssertEqual(failure.code, "response_invalid")
+            XCTAssertEqual(failure.error?.userInfo["requestID"] as? String, "req_12345678")
+            XCTAssertEqual(failure.error?.userInfo["status"] as? Int, 502)
+        }
+        await store.invalidate()
+    }
+
     func testCallerCannotSelectAppleEvidenceEnvironmentThroughTheNativeBridge() async throws {
         let store = LatchwayBridgeStore()
         for key in ["appAttestEnvironment", "environment", "allowTestingResponses", "isTestingResponse"] {
@@ -293,6 +338,9 @@ private actor RecordingNativeClient: NativeClientOperating {
 
     static let responseMetadata = #"{"responseID":"rsp_fixture","status":200,"statusText":"","headers":[]}"#
     private var recordedEvents: [Event] = []
+    private let failure: (any Error)?
+
+    init(failure: (any Error)? = nil) { self.failure = failure }
 
     func events() -> [Event] { recordedEvents }
     func startCount() -> Int { recordedEvents.filter { if case .start = $0 { true } else { false } }.count }
@@ -313,6 +361,7 @@ private actor RecordingNativeClient: NativeClientOperating {
 
     func refresh() async throws {
         recordedEvents.append(.refresh)
+        if let failure { throw failure }
     }
 
     func prepareComponents(encoded _: String) async throws -> String { "{}" }

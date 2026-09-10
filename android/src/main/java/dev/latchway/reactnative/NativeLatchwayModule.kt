@@ -6,6 +6,7 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableMap
+import com.facebook.react.bridge.WritableArray
 import com.facebook.react.module.annotations.ReactModule
 import dev.latchway.core.KeyPolicy
 import dev.latchway.core.LatchwayIdentityConfiguration
@@ -143,11 +144,12 @@ private class ProductionNativeClientOperations(
 @ReactModule(name = NativeLatchwayModule.NAME)
 public class NativeLatchwayModule internal constructor(
     reactContext: ReactApplicationContext,
+    private val userInfoArrayFactory: () -> WritableArray = { Arguments.createArray() },
     private val userInfoFactory: () -> WritableMap,
 ) : NativeLatchwaySpec(reactContext) {
     public constructor(reactContext: ReactApplicationContext) : this(
         reactContext,
-        { Arguments.createMap() },
+        userInfoFactory = { Arguments.createMap() },
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -510,13 +512,13 @@ public class NativeLatchwayModule internal constructor(
                 runtime.active { }
                 promise.resolve(result)
             } catch (failure: Throwable) {
-                promise.rejectSafe(failure, userInfoFactory)
+                promise.rejectSafe(failure, userInfoFactory, userInfoArrayFactory)
             } finally {
                 jobs.remove(key)
             }
         }
         val registered = try { runtime.active { jobs.putIfAbsent(key, job) == null } }
-        catch (failure: Throwable) { job.cancel(); promise.rejectSafe(failure, userInfoFactory); return }
+        catch (failure: Throwable) { job.cancel(); promise.rejectSafe(failure, userInfoFactory, userInfoArrayFactory); return }
         if (!registered) {
             job.cancel()
             promise.reject("request_invalid", "Latchway operation identifier is already active.")
@@ -539,11 +541,11 @@ public class NativeLatchwayModule internal constructor(
                 runtime.active { }
                 promise.resolve(result)
             }
-            catch (failure: Throwable) { promise.rejectSafe(failure, userInfoFactory) }
+            catch (failure: Throwable) { promise.rejectSafe(failure, userInfoFactory, userInfoArrayFactory) }
             finally { jobs.remove(key) }
         }
         val registered = try { runtime.active { jobs.putIfAbsent(key, job) == null } }
-        catch (failure: Throwable) { job.cancel(); promise.rejectSafe(failure, userInfoFactory); return }
+        catch (failure: Throwable) { job.cancel(); promise.rejectSafe(failure, userInfoFactory, userInfoArrayFactory); return }
         if (!registered) {
             job.cancel()
             promise.reject("request_invalid", "Latchway operation identifier is already active.")
@@ -944,7 +946,7 @@ private fun JSONObject.putNullable(name: String, value: Any?): JSONObject =
 
 private fun operationKey(clientID: String, operationID: String): String = "$clientID|$operationID"
 
-private fun Promise.rejectSafe(failure: Throwable, userInfoFactory: () -> WritableMap) {
+private fun Promise.rejectSafe(failure: Throwable, userInfoFactory: () -> WritableMap, userInfoArrayFactory: () -> WritableArray) {
     val code: String
     val message: String
     val requestID: String?
@@ -967,7 +969,9 @@ private fun Promise.rejectSafe(failure: Throwable, userInfoFactory: () -> Writab
         }
         is LatchwayException -> {
             code = failure.code.wireValue
-            message = safeNativeErrorMessage(code)
+            message = if (failure.httpStatus != null && failure.requestId != null) {
+                failure.message ?: safeNativeErrorMessage(code)
+            } else safeNativeErrorMessage(code)
             requestID = failure.requestId
             operationID = failure.operationId
             status = failure.httpStatus
@@ -989,6 +993,27 @@ private fun Promise.rejectSafe(failure: Throwable, userInfoFactory: () -> Writab
         operationID?.let { putString("operationID", it) }
         status?.let { putInt("status", it) }
         putBoolean("retryable", retryable)
+        if (failure is LatchwayException) {
+            failure.retryAfter?.let { putString("retryAfter", it) }
+            failure.feature?.let { putString("feature", it) }
+            failure.instance?.let { putString("instance", it) }
+            failure.title?.let { putString("title", it) }
+            if (failure.errors.isNotEmpty()) {
+                putArray("validationErrors", userInfoArrayFactory().apply {
+                    failure.errors.forEach { error ->
+                        pushMap(userInfoFactory().apply {
+                            putString("path", error.path)
+                            putString("message", error.message)
+                        })
+                    }
+                })
+            }
+            if (failure.supportedProtocolVersions.isNotEmpty()) {
+                putArray("supportedProtocolVersions", userInfoArrayFactory().apply {
+                    failure.supportedProtocolVersions.forEach { pushInt(it) }
+                })
+            }
+        }
     }
     reject(code, message, userInfo)
 }

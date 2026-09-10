@@ -5,6 +5,7 @@ import { encodeIOSComponentDescriptor, encodeIOSComponentDescriptors } from "./c
 import type { NativeLease } from "./coordinator.js";
 import { parseComponentDiagnostics } from "./component-client.js";
 import { abortError, fromNativeError, LatchwayLifecycleError } from "./errors.js";
+import { isCanonicalRequestID } from "./request-id.js";
 import { assertNoCredentialFields } from "./native-output.js";
 import { responseWithNativeBody } from "./response.js";
 import type {
@@ -235,7 +236,7 @@ export class DefaultLatchwayClient implements LatchwayClient {
 
     const hasBody = request.method.toUpperCase() !== "HEAD" &&
       metadata.status !== 204 && metadata.status !== 205 && metadata.status !== 304;
-    const body = hasBody ? nativeResponseBody(lease, metadata.responseID, signal) : null;
+    const body = hasBody ? nativeResponseBody(lease, metadata, signal) : null;
     if (!hasBody) await ignoreFailure(lease.module.closeResponse(lease.clientID, metadata.responseID));
     return responseWithNativeBody(body, {
       status: metadata.status,
@@ -627,7 +628,10 @@ async function readWithAbort(
   finally { if (listener !== undefined) signal.removeEventListener("abort", listener); }
 }
 
-function nativeResponseBody(lease: NativeLease, responseID: string, signal: AbortSignal): ReadableStream<Uint8Array> {
+function nativeResponseBody(lease: NativeLease, metadata: NativeResponseMetadata, signal: AbortSignal): ReadableStream<Uint8Array> {
+  const responseID = metadata.responseID;
+  const rawRequestID = metadata.headers.find(([name]) => name === "x-latchway-request-id")?.[1];
+  const requestID = isCanonicalRequestID(rawRequestID) ? rawRequestID : undefined;
   let finished = false;
   let nativeClosed = false;
   let activeOperationID: string | undefined;
@@ -689,7 +693,21 @@ function nativeResponseBody(lease: NativeLease, responseID: string, signal: Abor
       } catch (cause) {
         if (!finished) {
           finish();
-          controller.error(isAbort(cause) ? abortError() : cause);
+          // Once headers/output exist, a failed read is not safe to replay. Keep
+          // its correlation even when the native transport error has no HTTP body.
+          const failure = cause instanceof LatchwayError
+            ? new LatchwayError(cause.code, cause.message, {
+                requestID: cause.requestID ?? requestID,
+                status: cause.status ?? metadata.status, retryable: false, cause,
+                retryAfter: cause.retryAfter, operationID: cause.operationID,
+                feature: cause.feature, validationErrors: cause.validationErrors,
+                supportedProtocolVersions: cause.supportedProtocolVersions,
+                instance: cause.instance, title: cause.title,
+              })
+            : new LatchwayError("network_error", "The response stream was interrupted before completion.", {
+                requestID, status: metadata.status, retryable: false, cause,
+              });
+          controller.error(isAbort(cause) ? abortError() : cause instanceof LatchwayLifecycleError ? cause : failure);
         }
         await closeNative();
       } finally {
