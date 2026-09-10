@@ -31,8 +31,10 @@ locked, without a source overlay. Its typecheck, 14 tests, offline LangChain
 adapter checks, registry/autolinking checks and Android ARM64 Debug APK build
 passed with public Maven 1.2.1. Both production Metro bundles passed. Normal
 CocoaPods resolution installed Latchway/AppAttest 2.0.0 and the npm 2.0.0
-bridge, with no local native SDK override. These are build and fixture results,
-not a new physical-device or live-account attestation receipt.
+bridge, with no local native SDK override. The RN 0.82 / React 19.1 standalone
+example also completed an unsigned ARM64 iOS simulator build using those actual
+registry packages. These are build and fixture results, not a new physical-device
+or live-account attestation receipt.
 
 The existing example dependency tree reports nine moderate advisory nodes in
 React Native CLI/XML parsing and development-server request parsing, with no
